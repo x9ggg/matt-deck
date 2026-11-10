@@ -1,0 +1,12 @@
+{
+  "name": "matt-deck",
+  "version": "0.1.0",
+  "description": "A task pane beside the conversation for projects run with Matt skills",
+  "types": "./types/index.d.ts",
+  "mcpServers": {
+    "deck": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/main.ts"]
+    }
+  }
+}
