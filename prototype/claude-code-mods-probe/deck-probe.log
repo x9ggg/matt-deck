@@ -1,0 +1,40 @@
++0.0s turn.start 1c54059e
++9.1s turn.complete 1c54059e（answer）
++361.9s 空闲直发：$.command.run(ask-matt) 调用
++362.0s $.command.run 返回（text: 无）
++362.0s turn.start 1c77c4f7（推荐请求；文本含标记：true）
++374.4s 工具回报已收到
++377.1s turn.complete 1c77c4f7（answer）← 推荐请求的回合
++393.4s turn.start f73d754a
++402.6s 宿主忙：请求由面板持有
++478.1s turn.complete f73d754a（answer）
++478.3s 空闲后发出：$.command.run(ask-matt) 调用
++478.4s $.command.run 返回（text: 无）
++478.4s turn.start 836ea81c（推荐请求；文本含标记：true）
++482.9s 工具回报已收到
++496.8s turn.complete 836ea81c（answer）← 推荐请求的回合
++571.1s turn.start ec7d0742
++581.1s 宿主忙：请求由面板持有
++586.3s 已取消面板持有的请求
++589.7s turn.complete ec7d0742（answer）
++624.2s turn.start b0ba4daa
++627.9s 直接交给宿主：$.command.run(ask-matt) 调用
++689.2s turn.complete b0ba4daa（answer）
++689.3s $.command.run 返回（text: 无）
++689.3s turn.start d1e8eeca（推荐请求；文本含标记：true）
++694.0s 工具回报已收到
++719.0s turn.complete d1e8eeca（answer）← 推荐请求的回合
++719.1s 加载：会话 c7258a78，面板 已放置，/ask-matt 存在
++753.3s turn.start d5c3195a
++872.4s turn.complete d5c3195a（answer）
++1054.9s turn.start 828b5ab6
++1087.3s turn.complete 828b5ab6（answer）
++1094.2s turn.start cb520466
++1280.2s turn.complete cb520466（answer）
++1488.3s turn.start 4cf00598
++1522.5s turn.complete 4cf00598（answer）
++1573.0s turn.start c8937220
++1757.6s turn.complete c8937220（answer）
++1832.5s turn.start 1ab6e5db
++1858.0s turn.complete 1ab6e5db（answer）
++1945.5s turn.start 0ada73f8

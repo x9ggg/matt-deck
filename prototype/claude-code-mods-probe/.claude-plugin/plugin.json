@@ -1,0 +1,6 @@
+{
+  "name": "matt-deck-probe",
+  "version": "0.1.0",
+  "description": "PROTOTYPE (throwaway): pane button -> /ask-matt -> hold while busy / cancel -> structured answer back in the pane",
+  "types": "./types/index.d.ts"
+}
