@@ -144,7 +144,7 @@ test('the deck command closes an open pane and opens a closed one', async ($, on
   expect(seen.opened).toEqual([PANE, PANE])
 })
 
-test('without a project config the deck command opens no pane and says what is missing', async ($, on) => {
+test('without a project config the deck command opens no pane and points at the configure skill', async ($, on) => {
   const seen = engine(on, {
     structuredContent: { configured: false, workspace: WORKSPACE },
     isError: false,
@@ -156,6 +156,7 @@ test('without a project config the deck command opens no pane and says what is m
   expect(seen.opened).toEqual([])
   expect(answer.text).toMatch(/未配置/)
   expect(answer.text).toContain('/work/shop/.matt-deck/config.json')
+  expect(answer.text).toContain('/matt-deck:configure')
 })
 
 test('with the Deck service out of reach the pane stays closed and the deck command says why', async ($, on) => {

@@ -54,7 +54,7 @@ export const register: Register = on => {
     const { config } = await read($, view)
     if (config.status === 'unconfigured') {
       return {
-        text: `Matt Deck 未配置：${config.workspace}/.matt-deck/config.json 不存在。写好它之后新开一个 Session，Pane 会自动出现。`,
+        text: `Matt Deck 未配置：${config.workspace}/.matt-deck/config.json 不存在。运行 /matt-deck:configure 配置之后新开一个 Session，Pane 会自动出现。`,
       }
     }
     if (config.status === 'unreachable') {

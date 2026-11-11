@@ -4,10 +4,12 @@
 // a caller.
 // Runs on plain Node with no installed packages, so MCP is spoken by hand.
 import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 
-import { readProjectConfig } from '../kernel/config.ts'
+import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
+import { surveySetup } from '../kernel/setup.ts'
 
 // The Workspace is the checkout the service was started in: the nearest
 // directory at or above the working directory that holds `.git`. Outside a
@@ -44,6 +46,46 @@ const tools = {
       }
     },
   },
+  deck_setup_survey: {
+    description:
+      'For the configure skill: the existing project config, the Task Source prefilled from the Matt issue tracker doc, and the Matt skills found on this machine.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    run: async (): Promise<ToolResult> => {
+      const result = await surveySetup(workspace, homedir())
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result) }],
+        structuredContent: result,
+        isError: false,
+      }
+    },
+  },
+  deck_write_config: {
+    description:
+      'For the configure skill: write the project config (.matt-deck/config.json) of this workspace. Refuses to overwrite an existing config unless replace is true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        config: {
+          type: 'object',
+          description:
+            '{ "taskSource": { "type": "github-issues" }, "skillSource": { "type": "directory", "path": "..." } | { "type": "plugin", "name": "..." } }',
+        },
+        replace: { type: 'boolean', description: 'Overwrite an existing config; only after the user agreed.' },
+      },
+      required: ['config'],
+      additionalProperties: false,
+    },
+    run: async ({ config, replace }: any): Promise<ToolResult> => {
+      const written = await writeProjectConfig(workspace, config, replace === true)
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(written) }],
+        structuredContent: written,
+        isError: false,
+      }
+    },
+  },
 }
 
 const handle = async (method: string, params: any): Promise<object> => {
@@ -69,17 +111,20 @@ const handle = async (method: string, params: any): Promise<object> => {
       if (tool === undefined) {
         throw Object.assign(new Error(`Unknown tool: ${params?.name}`), { code: -32602 })
       }
-      // No tool takes arguments yet; in particular none takes a workspace path.
-      if (Object.keys(params?.arguments ?? {}).length > 0) {
+      // Only the arguments a tool declares are accepted; in particular none
+      // takes a workspace path.
+      const args = params?.arguments ?? {}
+      const unknown = Object.keys(args).filter(key => !(key in tool.inputSchema.properties))
+      if (unknown.length > 0) {
         return {
-          content: [{ type: 'text', text: `${params.name} takes no arguments` }],
+          content: [{ type: 'text', text: `${params.name} does not take: ${unknown.join(', ')}` }],
           isError: true,
         }
       }
 
       // A failing tool answers as a tool error the caller can show, not a
       // protocol error.
-      return tool.run().catch(
+      return tool.run(args).catch(
         (error: Error): ToolResult => ({
           content: [{ type: 'text', text: error.message }],
           isError: true,
