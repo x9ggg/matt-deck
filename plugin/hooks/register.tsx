@@ -16,7 +16,7 @@ const view = atom({ plugin: 'matt-deck', key: 'view' } as const, { sessionId: ''
 const loadConfig = async ($: EngineInterface): Promise<ConfigView> => {
   const deck = await $.mcp.connect('deck')
   if (!deck.isConnected) {
-    return { status: 'error', message: `Deck 服务未连接：${deck.message}` }
+    return { status: 'unreachable', message: deck.message }
   }
   const answer = await $.mcp.call(deck.server, 'deck_config', {})
   if (answer.isError) {
@@ -30,8 +30,6 @@ const loadConfig = async ($: EngineInterface): Promise<ConfigView> => {
     : { status: 'unconfigured', workspace: result.workspace }
 }
 
-const projectName = (workspace: string) => workspace.slice(workspace.lastIndexOf('/') + 1)
-
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -41,8 +39,9 @@ export const register: Register = on => {
     const config = await loadConfig($)
     await update($, view, () => ({ sessionId, config }))
 
-    // An unconfigured project gets no pane; a malformed config does, to say why.
-    if (config.status !== 'unconfigured') {
+    // The Pane opens only where a project config exists; a malformed one
+    // opens it to say why.
+    if (config.status === 'configured' || config.status === 'error') {
       await $.ui.open({ id: PANE, title: TITLE })
     }
 
@@ -50,6 +49,18 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: COMMAND }, async $ => {
+    // The Pane appears only where a project config exists: elsewhere the
+    // command answers in text.
+    const { config } = await read($, view)
+    if (config.status === 'unconfigured') {
+      return {
+        text: `Matt Deck 未配置：${config.workspace}/.matt-deck/config.json 不存在。写好它之后新开一个 Session，Pane 会自动出现。`,
+      }
+    }
+    if (config.status === 'unreachable') {
+      return { text: `Matt Deck 不可用，Deck 服务未连接：${config.message}` }
+    }
+
     // A pane opened unasked on a narrow terminal is open but undrawn: the
     // command draws it rather than closing it.
     const isDrawn = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isPlaced)
@@ -71,14 +82,9 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {config.status === 'loading' && <Text dimColor>正在读取项目配置…</Text>}
         {config.status === 'error' && <Text color="red">{config.message}</Text>}
-        {config.status === 'unconfigured' && (
-          <Text>
-            项目 {projectName(config.workspace)} 未配置：仓库里没有 .matt-deck/config.json。
-          </Text>
-        )}
         {config.status === 'configured' && (
           <Box flexDirection="column">
-            <Text bold>项目 {projectName(config.workspace)}</Text>
+            <Text bold>项目 {config.workspace.slice(config.workspace.lastIndexOf('/') + 1)}</Text>
             <Text dimColor>Session {sessionId.slice(0, 8)}</Text>
             <Text>Task Source：{{ 'github-issues': 'GitHub Issues' }[config.config.taskSource.type]}</Text>
             <Text>

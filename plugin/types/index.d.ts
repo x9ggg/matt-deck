@@ -12,10 +12,11 @@ export type DeckConfigAnswer =
   | { configured: false; workspace: string }
   | { configured: true; workspace: string; config: ProjectConfig }
 
-// What the Mod knows of the project config: still asking, the service's
-// answer, or why it could not be read.
+// What the Mod knows of the project config: still asking, the Deck service
+// out of reach, the service's answer, or why the config could not be read.
 export type ConfigView =
   | { status: 'loading' }
+  | { status: 'unreachable'; message: string }
   | { status: 'unconfigured'; workspace: string }
   | { status: 'configured'; workspace: string; config: ProjectConfig }
   | { status: 'error'; message: string }

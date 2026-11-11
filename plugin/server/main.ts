@@ -1,12 +1,27 @@
 // The Deck service: an MCP server over stdio that exposes the task kernel as
-// `deck_*` tools. The host starts it on demand; its workspace is the working
-// directory it was started in (ADR-0005), never a path passed by a caller.
+// `deck_*` tools. The host starts it on demand; its Workspace comes from the
+// working directory it was started in (ADR-0005), never from a path passed by
+// a caller.
 // Runs on plain Node with no installed packages, so MCP is spoken by hand.
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 import { readProjectConfig } from '../kernel/config.ts'
 
-const workspace = process.cwd()
+// The Workspace is the checkout the service was started in: the nearest
+// directory at or above the working directory that holds `.git`. Outside a
+// repository it is the working directory itself.
+let workspace = process.cwd()
+for (let dir = workspace; ; dir = dirname(dir)) {
+  if (existsSync(join(dir, '.git'))) {
+    workspace = dir
+    break
+  }
+  if (dir === dirname(dir)) {
+    break
+  }
+}
 
 type ToolResult = {
   content: { type: 'text'; text: string }[]

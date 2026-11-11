@@ -17,12 +17,13 @@ const CONFIGURED = {
   },
 }
 
-// A fake engine: the Deck service answering `deck_config` with `answer`, and
-// a pane list kept the way the engine keeps it. On a narrow terminal the
-// first, unasked open leaves the pane open but undrawn. Returns what the Mod did.
+// A fake engine: the Deck service answering `deck_config` with `answer`, or
+// out of reach when there is none, and a pane list kept the way the engine
+// keeps it. On a narrow terminal the first, unasked open leaves the pane open
+// but undrawn. Returns what the Mod did.
 const engine = (
   on: On,
-  answer: { structuredContent?: unknown; isError: boolean; text?: string },
+  answer: { structuredContent?: unknown; isError: boolean; text?: string } | undefined,
   terminal: { isNarrow: boolean } = { isNarrow: false },
 ) => {
   const seen = { opened: [] as string[], closed: [] as string[], calls: [] as unknown[] }
@@ -31,15 +32,20 @@ const engine = (
   on('session.id', () => ({ value: 'a1b2c3d4-session' }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
-  on('mcp.connect', () => ({ value: { isConnected: true, server: SERVER } }))
+  on('mcp.connect', () => ({
+    value:
+      answer === undefined
+        ? { isConnected: false, reason: 'failed', message: 'The deck server failed to start.' }
+        : { isConnected: true, server: SERVER },
+  }))
   on('mcp.call', (_, e) => {
     seen.calls.push(e)
 
     return {
       value: {
         // As the host relays it: the result as text, no structuredContent.
-        content: [{ type: 'text', text: answer.text ?? JSON.stringify(answer.structuredContent) }],
-        isError: answer.isError,
+        content: [{ type: 'text', text: answer!.text ?? JSON.stringify(answer!.structuredContent) }],
+        isError: answer!.isError,
       },
     }
   })
@@ -138,19 +144,28 @@ test('the deck command closes an open pane and opens a closed one', async ($, on
   expect(seen.opened).toEqual([PANE, PANE])
 })
 
-test('the deck command opens the pane where it did not open by itself, on a narrow terminal', async ($, on) => {
+test('without a project config the deck command opens no pane and says what is missing', async ($, on) => {
   const seen = engine(on, {
     structuredContent: { configured: false, workspace: WORKSPACE },
     isError: false,
   })
   await start($)
 
-  await $.command.run(DECK_COMMAND)
+  const answer = await $.command.run(DECK_COMMAND)
 
-  expect(seen.opened).toEqual([PANE])
-  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /未配置/ })).toBeDefined()
-  await ui.unmount()
+  expect(seen.opened).toEqual([])
+  expect(answer.text).toMatch(/未配置/)
+  expect(answer.text).toContain('/work/shop/.matt-deck/config.json')
+})
+
+test('with the Deck service out of reach the pane stays closed and the deck command says why', async ($, on) => {
+  const seen = engine(on, undefined)
+  await start($)
+
+  const answer = await $.command.run(DECK_COMMAND)
+
+  expect(seen.opened).toEqual([])
+  expect(answer.text).toContain('The deck server failed to start.')
 })
 
 test('the deck command draws a pane a narrow terminal left undrawn in a Configured Project', async ($, on) => {

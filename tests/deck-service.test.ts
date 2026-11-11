@@ -86,6 +86,31 @@ test('deck_config says not configured when the workspace has no config', async t
   assert.deepEqual(result.structuredContent, { configured: false, workspace: dir })
 })
 
+test('deck_config started in a subdirectory reads the config at the repository root', async t => {
+  const dir = await workspace(
+    JSON.stringify({
+      taskSource: { type: 'github-issues' },
+      skillSource: { type: 'plugin', name: 'mattpocock-skills' },
+    }),
+  )
+  await mkdir(join(dir, '.git'))
+  await mkdir(join(dir, 'packages', 'app'), { recursive: true })
+  const deck = startDeck(join(dir, 'packages', 'app'))
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_config')
+
+  assert.equal(result.isError, false)
+  assert.deepEqual(result.structuredContent, {
+    configured: true,
+    workspace: dir,
+    config: {
+      taskSource: { type: 'github-issues' },
+      skillSource: { type: 'plugin', name: 'mattpocock-skills' },
+    },
+  })
+})
+
 test('deck_config reports an error when the config is malformed', async t => {
   const malformed = [
     '{ not json',

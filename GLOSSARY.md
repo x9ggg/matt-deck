@@ -36,6 +36,10 @@ _Avoid_: 绑定会话、当前会话
 **Skill Source（技能来源）**:
 一个项目使用的那一份 Matt skills 所在的位置，首次配置时选定，之后固定。
 
+**Workspace（工作区）**:
+一个项目在本机的一份检出目录。同一个项目可以有多个 Workspace，它们共用同一个 Task Source。
+_Avoid_: 工作副本、工作树、工作目录（Session 启动时所在的目录，可以是 Workspace 里的子目录）
+
 ### 任务
 
 **Task Source（任务来源）**:
