@@ -20,16 +20,21 @@ const ifExists = async <T>(read: () => Promise<T>): Promise<T | undefined> => {
 }
 
 // The tracker named by the Matt issue tracker doc, as its heading writes it
-// (`# Issue tracker: GitHub`), and the Task Source type it maps to. `type` is
-// null when this milestone has no Task Source for that tracker.
-type TaskSourcePrefill = { doc: string; tracker: string; type: 'github-issues' | null }
+// (`# Issue tracker: GitHub`), and the Task Source type it maps to. `tracker`
+// is null when the doc exists but its heading names none; `type` is null when
+// there is no Task Source to prefill.
+type TaskSourcePrefill = {
+  doc: string
+  tracker: string | null
+  type: ProjectConfig['taskSource']['type'] | null
+}
 
 const readTaskSourcePrefill = async (workspace: string): Promise<TaskSourcePrefill | null> => {
   const text = await ifExists(() => readFile(join(workspace, ISSUE_TRACKER_DOC), 'utf8'))
-  const tracker = text?.match(/^#\s*Issue tracker:\s*(.+?)\s*$/m)?.[1]
-  if (tracker === undefined) {
+  if (text === undefined) {
     return null
   }
+  const tracker = text.match(/^#\s*Issue tracker:\s*(.+?)\s*$/m)?.[1] ?? null
 
   return { doc: ISSUE_TRACKER_DOC, tracker, type: tracker === 'GitHub' ? 'github-issues' : null }
 }

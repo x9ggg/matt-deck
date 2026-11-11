@@ -206,6 +206,21 @@ test('deck_setup_survey names a tracker this milestone has no Task Source for', 
   assert.equal(b.structuredContent.taskSource, null)
 })
 
+test('deck_setup_survey tells a doc whose tracker it cannot read from no doc at all', async t => {
+  const dir = await workspace()
+  await issueTrackerDoc(dir, '# Issue tracker')
+  const deck = startDeck(dir, { HOME: await home() })
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_setup_survey')
+
+  assert.deepEqual(result.structuredContent.taskSource, {
+    doc: 'docs/agents/issue-tracker.md',
+    tracker: null,
+    type: null,
+  })
+})
+
 test('deck_setup_survey shows the existing config of a Configured Project', async t => {
   const config = {
     taskSource: { type: 'github-issues' },
