@@ -1,0 +1,11 @@
+{
+  "name": "matt-deck",
+  "owner": { "name": "x9ggg" },
+  "plugins": [
+    {
+      "name": "matt-deck",
+      "source": "./plugin",
+      "description": "A task pane beside the conversation for projects run with Matt skills"
+    }
+  ]
+}
