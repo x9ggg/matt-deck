@@ -10,6 +10,8 @@ import { createInterface } from 'node:readline'
 
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
 import { surveySetup } from '../kernel/setup.ts'
+import { githubIssues, listTasks, TaskSourceError } from '../kernel/tasks.ts'
+import type { TaskList, TaskListFailure } from '../kernel/tasks.ts'
 
 // The Workspace is the checkout the service was started in: the nearest
 // directory at or above the working directory that holds `.git`. Outside a
@@ -24,6 +26,11 @@ for (let dir = workspace; ; dir = dirname(dir)) {
     break
   }
 }
+
+// The last read of the Task Source, answered again for this long so that a
+// burst of reads (a turn's end, a deck tool, the Pane's timer) runs `gh` once.
+const TASKS_CACHE_MS = 15_000
+let cachedTasks: TaskList | undefined
 
 type ToolResult = {
   content: { type: 'text'; text: string }[]
@@ -44,6 +51,36 @@ const tools = {
         structuredContent: result,
         isError: false,
       }
+    },
+  },
+  deck_tasks: {
+    description:
+      'List the Tasks of this project from its Task Source, grouped as ready, inProgress, blocked and done. Reads are cached for a short while; refresh reads the Task Source again.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        refresh: { type: 'boolean', description: 'Read the Task Source again instead of answering from the cache.' },
+      },
+      additionalProperties: false,
+    },
+    run: async ({ refresh }: any): Promise<ToolResult> => {
+      const now = Date.now()
+      if (refresh === true || cachedTasks === undefined || now - cachedTasks.fetchedAt >= TASKS_CACHE_MS) {
+        try {
+          cachedTasks = await listTasks(githubIssues(workspace), now)
+        } catch (error: any) {
+          if (!(error instanceof TaskSourceError)) {
+            throw error
+          }
+          // A Task Source that cannot be read is an answer, not a broken
+          // tool: the caller shows why.
+          const failed: TaskListFailure = { ok: false, failure: { kind: error.kind, message: error.message } }
+
+          return { content: [{ type: 'text', text: JSON.stringify(failed) }], structuredContent: failed, isError: false }
+        }
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(cachedTasks) }], structuredContent: cachedTasks, isError: false }
     },
   },
   deck_setup_survey: {

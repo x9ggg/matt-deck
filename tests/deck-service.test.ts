@@ -1,7 +1,7 @@
 // The Deck service's tool interface, called the way the agent or the Pane
 // calls it: a real child process speaking MCP over stdio.
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -351,4 +351,270 @@ test('deck_write_config writes nothing when the config is malformed', async t =>
   const read = await deck.callTool('deck_config')
 
   assert.deepEqual(read.structuredContent, { configured: false, workspace: dir })
+})
+
+// A `gh` on the Deck service's PATH that answers with prepared JSON (see
+// fake-gh.ts). `answer` sets what every later call gets; `calls` lists the
+// calls made so far.
+const fakeGh = async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'deck-gh-')))
+  const script = join(import.meta.dirname, 'fake-gh.ts')
+  await writeFile(join(dir, 'gh'), `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 })
+  await writeFile(join(dir, 'calls.log'), '')
+  const answer = (value: { stdout?: unknown; stderr?: string; exitCode?: number }) =>
+    writeFile(join(dir, 'answer.json'), JSON.stringify(value))
+
+  return {
+    env: { PATH: dir, FAKE_GH_DIR: dir },
+    answer,
+    // The issues GitHub's GraphQL API answers, as `gh api graphql --paginate
+    // --slurp` prints them: one page.
+    issues: (nodes: object[]) =>
+      answer({
+        stdout: [{ data: { repository: { issues: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } }],
+      }),
+    calls: async (): Promise<{ args: string[]; cwd: string }[]> =>
+      (await readFile(join(dir, 'calls.log'), 'utf8'))
+        .split('\n')
+        .filter(line => line !== '')
+        .map(line => JSON.parse(line)),
+  }
+}
+
+// One issue as the GraphQL query reads it.
+const issue = ({
+  number,
+  title = `Task ${number}`,
+  state = 'OPEN',
+  closedAt = null,
+  labels = [],
+  body = '',
+  parent = null,
+  blockedBy = [],
+}: {
+  number: number
+  title?: string
+  state?: 'OPEN' | 'CLOSED'
+  closedAt?: string | null
+  labels?: string[]
+  body?: string
+  parent?: number | null
+  blockedBy?: number[]
+}) => ({
+  number,
+  title,
+  state,
+  closedAt,
+  body,
+  labels: { nodes: labels.map(name => ({ name })) },
+  parent: parent === null ? null : { number: parent },
+  blockedBy: { nodes: blockedBy.map(number => ({ number })) },
+})
+
+const configured = () =>
+  workspace(
+    JSON.stringify({
+      taskSource: { type: 'github-issues' },
+      skillSource: { type: 'plugin', name: 'mattpocock-skills' },
+    }),
+  )
+
+// What deck_tasks says of each Task, without the fields a test does not look at.
+const numbers = (tasks: { number: number }[]) => tasks.map(task => task.number)
+
+test('deck_tasks groups the Tasks of the Task Source', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 3, labels: ['ready-for-human'] }),
+    issue({ number: 5, labels: ['ready-for-agent'], blockedBy: [3] }),
+    issue({ number: 7, blockedBy: [2] }),
+    issue({ number: 8, labels: ['needs-triage'] }),
+    issue({ number: 9, labels: ['needs-info'] }),
+    issue({ number: 2, state: 'CLOSED', closedAt: '2026-11-11T05:40:00Z' }),
+    issue({ number: 15, state: 'CLOSED', closedAt: '2026-11-11T14:07:00Z', blockedBy: [3] }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_tasks')
+
+  assert.equal(result.isError, false)
+  const { ok, groups } = result.structuredContent
+  assert.equal(ok, true)
+  assert.deepEqual(numbers(groups.ready), [3, 7])
+  // Occupancy comes later (#10): nothing is in progress yet.
+  assert.deepEqual(groups.inProgress, [])
+  assert.deepEqual(numbers(groups.blocked), [5, 8, 9])
+  // The latest closed first.
+  assert.deepEqual(numbers(groups.done), [15, 2])
+  assert.deepEqual(groups.blocked[0], {
+    number: 5,
+    title: 'Task 5',
+    isOpen: true,
+    labels: ['ready-for-agent'],
+    parent: null,
+    blockers: [3],
+    closedAt: null,
+  })
+  assert.deepEqual(groups.done[0].blockers, [])
+})
+
+test('deck_tasks reads Blocking Edges from the body when GitHub has no native dependency', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 3 }),
+    issue({ number: 4, state: 'CLOSED', closedAt: '2026-11-11T05:40:00Z' }),
+    issue({ number: 9 }),
+    // A `Blocked by` section, as /to-tickets writes it.
+    issue({ number: 5, body: '## Parent\n\n#1\n\n## Blocked by\n\n- #3\n- #4\n\n## What to build\n\nSee #9.\n' }),
+    // A `Blocked by` line at the top, as the issue tracker doc writes it.
+    issue({ number: 6, body: 'Blocked by: #9, #3\n\nThe rest of the body.\n' }),
+    // Native dependencies win over the body.
+    issue({ number: 7, blockedBy: [4], body: 'Blocked by: #3\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(numbers(groups.ready), [3, 7, 9])
+  assert.deepEqual(
+    groups.blocked.map(({ number, blockers }: { number: number; blockers: number[] }) => ({ number, blockers })),
+    [
+      { number: 5, blockers: [3] },
+      { number: 6, blockers: [3, 9] },
+    ],
+  )
+})
+
+test('deck_tasks lists Specs and Maps apart from the groups, each with its Child Tasks', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    // A Spec whose Child Tasks are GitHub sub-issues.
+    issue({ number: 1, title: '规格：里程碑一', labels: ['ready-for-agent'] }),
+    issue({ number: 2, parent: 1, state: 'CLOSED', closedAt: '2026-11-11T05:40:00Z' }),
+    issue({ number: 3, parent: 1 }),
+    // A sub-issue wins over what the body says.
+    issue({ number: 13, parent: 1, body: 'Part of #10\n' }),
+    // A Map whose Child Tasks say so in the body.
+    issue({ number: 10, title: 'Codex 适配走哪条路', labels: ['wayfinder:map'] }),
+    issue({ number: 11, body: '## Parent\n\n#10\n\n## What to build\n\nLike #3.\n' }),
+    issue({ number: 12, body: 'Part of #10\n\nThe rest.\n' }),
+    // A Parent section wins over a `Part of` line.
+    issue({ number: 14, body: 'Part of #1\n\n## Parent\n\n#10\n' }),
+    // A Map with no Child Task yet is still a Map.
+    issue({ number: 20, labels: ['wayfinder:map'] }),
+    // A closed Spec is still a Spec.
+    issue({ number: 30, state: 'CLOSED', closedAt: '2026-11-12T08:00:00Z' }),
+    issue({ number: 31, parent: 30, state: 'CLOSED', closedAt: '2026-11-12T07:00:00Z' }),
+    // A parent that is no issue makes no Spec.
+    issue({ number: 40, body: 'Part of #99\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { containers, groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(
+    containers.map(({ kind, number, isOpen, children, progress }: any) => ({ kind, number, isOpen, children, progress })),
+    [
+      { kind: 'spec', number: 1, isOpen: true, children: [2, 3, 13], progress: { closed: 1, inProgress: 0, total: 3 } },
+      { kind: 'map', number: 10, isOpen: true, children: [11, 12, 14], progress: { closed: 0, inProgress: 0, total: 3 } },
+      { kind: 'map', number: 20, isOpen: true, children: [], progress: { closed: 0, inProgress: 0, total: 0 } },
+      { kind: 'spec', number: 30, isOpen: false, children: [31], progress: { closed: 1, inProgress: 0, total: 1 } },
+    ],
+  )
+  assert.equal(containers[0].title, '规格：里程碑一')
+  assert.equal(containers[0].group, 'ready')
+  assert.deepEqual(containers[0].labels, ['ready-for-agent'])
+  // Specs and Maps are in no group.
+  assert.deepEqual(numbers(groups.ready), [3, 11, 12, 13, 14, 40])
+  assert.deepEqual(numbers(groups.done), [31, 2])
+  assert.equal(groups.ready.find((task: any) => task.number === 12).parent, 10)
+  assert.equal(groups.ready.find((task: any) => task.number === 40).parent, null)
+})
+
+test('deck_tasks says why the Task Source cannot be read', async t => {
+  const cases = [
+    {
+      answer: { exitCode: 4, stderr: 'To get started with GitHub CLI, please run:  gh auth login\n' },
+      kind: 'unauthenticated',
+    },
+    {
+      answer: { exitCode: 1, stderr: 'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n' },
+      kind: 'offline',
+    },
+    {
+      answer: { exitCode: 1, stderr: 'none of the git remotes configured for this repository point to a known GitHub host.\n' },
+      kind: 'no-repository',
+    },
+    { answer: { exitCode: 1, stderr: 'HTTP 502: Bad Gateway\n' }, kind: 'failed' },
+  ]
+  for (const { answer, kind } of cases) {
+    const gh = await fakeGh()
+    await gh.answer(answer)
+    const deck = startDeck(await configured(), gh.env)
+    t.after(deck.stop)
+
+    const result = await deck.callTool('deck_tasks')
+
+    assert.equal(result.isError, false, kind)
+    assert.equal(result.structuredContent.ok, false, kind)
+    assert.equal(result.structuredContent.failure.kind, kind)
+    assert.equal(result.structuredContent.failure.message, answer.stderr.trim())
+  }
+})
+
+test('deck_tasks says so when gh is not installed', async t => {
+  const empty = await realpath(await mkdtemp(join(tmpdir(), 'deck-path-')))
+  const deck = startDeck(await configured(), { PATH: empty })
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_tasks')
+
+  assert.equal(result.structuredContent.ok, false)
+  assert.equal(result.structuredContent.failure.kind, 'gh-missing')
+})
+
+test('deck_tasks reads the Task Source once for a burst of reads, and again when told to refresh', async t => {
+  const dir = await configured()
+  await mkdir(join(dir, '.git'))
+  await mkdir(join(dir, 'app'))
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(join(dir, 'app'), gh.env)
+  t.after(deck.stop)
+
+  const first = await deck.callTool('deck_tasks')
+  await gh.issues([issue({ number: 3, state: 'CLOSED', closedAt: '2026-11-12T09:00:00Z' })])
+  const cached = await deck.callTool('deck_tasks')
+  const refreshed = await deck.callTool('deck_tasks', { refresh: true })
+
+  assert.deepEqual(numbers(first.structuredContent.groups.ready), [3])
+  assert.deepEqual(cached.structuredContent, first.structuredContent)
+  assert.deepEqual(numbers(refreshed.structuredContent.groups.done), [3])
+  assert.ok(refreshed.structuredContent.fetchedAt >= first.structuredContent.fetchedAt)
+  const calls = await gh.calls()
+  assert.equal(calls.length, 2)
+  // gh runs in the Workspace, where it finds the repository.
+  assert.deepEqual(
+    calls.map(call => call.cwd),
+    [dir, dir],
+  )
+  assert.deepEqual(calls[0]!.args.slice(0, 2), ['api', 'graphql'])
+})
+
+test('deck_tasks reads every page of issues', async t => {
+  const gh = await fakeGh()
+  const page = (nodes: object[], hasNextPage: boolean) => ({
+    data: { repository: { issues: { nodes, pageInfo: { hasNextPage, endCursor: hasNextPage ? 'next' : null } } } },
+  })
+  await gh.answer({ stdout: [page([issue({ number: 1 })], true), page([issue({ number: 2 })], false)] })
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(numbers(groups.ready), [1, 2])
+  assert.ok((await gh.calls())[0]!.args.includes('--paginate'))
 })
