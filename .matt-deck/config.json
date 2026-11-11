@@ -1,0 +1,9 @@
+{
+  "taskSource": {
+    "type": "github-issues"
+  },
+  "skillSource": {
+    "type": "directory",
+    "path": "~/.claude/skills"
+  }
+}
