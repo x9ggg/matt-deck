@@ -756,6 +756,40 @@ test('deck_task reads a Task whose body has no acceptance criteria', async t => 
   assert.deepEqual(blank.acceptance, [])
 })
 
+test('deck_task leaves a code block of the body as it is', async t => {
+  const gh = await fakeGh()
+  await gh.answer({
+    stdout: viewed({
+      number: 17,
+      body: ['正文写成这样：', '', '```md', '## Parent', '- [ ] 示例', '```', '', '之后的话。', '', '- [x] 真的一项', ''].join('\n'),
+    }),
+  })
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { task } = (await deck.callTool('deck_task', { number: 17 })).structuredContent
+
+  // Neither a heading nor a checklist item in a code block is one.
+  assert.equal(task.description, '正文写成这样：\n\n```md\n## Parent\n- [ ] 示例\n```\n\n之后的话。')
+  assert.deepEqual(task.acceptance, [{ text: '真的一项', isChecked: true }])
+})
+
+test('deck_task drops a `Part of` or `Blocked by:` line only at the top of the body', async t => {
+  const gh = await fakeGh()
+  await gh.answer({
+    stdout: viewed({
+      number: 18,
+      body: 'Part of #1\nBlocked by: #3, #4\n\n登录的一部分。\n\nPart of #2 的做法不适用。\nBlocked by: 上游还没定。\n',
+    }),
+  })
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { task } = (await deck.callTool('deck_task', { number: 18 })).structuredContent
+
+  assert.equal(task.description, '登录的一部分。\n\nPart of #2 的做法不适用。\nBlocked by: 上游还没定。')
+})
+
 test('deck_task says why the Task cannot be read, and takes only a Task number', async t => {
   const gh = await fakeGh()
   await gh.answer({ exitCode: 1, stderr: 'GraphQL: Could not resolve to an issue or pull request with the number of 999.\n' })

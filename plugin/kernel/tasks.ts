@@ -150,19 +150,38 @@ const DRAWN_ELSEWHERE = /^\s*#{1,6}\s*\**\s*(parent|blocked by|acceptance criter
 
 export const readTask = async (source: TaskSource, number: number): Promise<TaskDetail> => {
   const { body, ...task } = await source.readOne(number)
-  const lines = body.split(/\r?\n/)
-  const acceptance = lines.flatMap(line => {
-    const item = line.match(CHECKLIST_ITEM)
-
-    return item === null ? [] : [{ text: item[2]!.trim(), isChecked: item[1] !== ' ' }]
-  })
+  const acceptance: TaskDetail['acceptance'] = []
   const kept: string[] = []
   let isDropping = false
-  for (const line of lines) {
-    if (/^\s*#{1,6}\s/.test(line)) {
-      isDropping = DRAWN_ELSEWHERE.test(line)
+  // The fence that opened the code block a line is in.
+  let fence: string | undefined
+  for (const line of body.split(/\r?\n/)) {
+    const marker = line.match(/^\s*(`{3,}|~{3,})(.*)$/)
+    // A code block is taken as it stands: a heading or a checklist item in
+    // it is neither.
+    const isCode = fence !== undefined || marker !== null
+    if (fence === undefined) {
+      fence = marker?.[1]
+    } else if (marker !== null && marker[1]!.startsWith(fence) && marker[2]!.trim() === '') {
+      fence = undefined
     }
-    if (isDropping || CHECKLIST_ITEM.test(line) || /^\s*(part of #\d+|blocked by:)/i.test(line)) {
+    if (!isCode) {
+      if (/^\s*#{1,6}\s/.test(line)) {
+        isDropping = DRAWN_ELSEWHERE.test(line)
+      }
+      const item = line.match(CHECKLIST_ITEM)
+      if (item !== null) {
+        acceptance.push({ text: item[2]!.trim(), isChecked: item[1] !== ' ' })
+        continue
+      }
+      // `Part of #n` and `Blocked by:` say what the Task belongs to and what
+      // blocks it only at the top of the body, where the issue tracker doc
+      // puts them.
+      if (kept.every(line => line.trim() === '') && /^\s*(part of #\d+|blocked by:)/i.test(line)) {
+        continue
+      }
+    }
+    if (isDropping) {
       continue
     }
     kept.push(line)
