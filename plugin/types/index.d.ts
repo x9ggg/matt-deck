@@ -135,6 +135,9 @@ export type View = {
   skillTexts: Record<string, SkillTextView>
   // When the Tasks were last asked for: how old they are is told from it.
   checkedAt: number
+  // A read of the project config or the Tasks has gone unanswered for a
+  // while, and still is.
+  isUnanswered: boolean
 }
 
 export type Tab = 'next' | 'tasks' | 'map' | 'skills'

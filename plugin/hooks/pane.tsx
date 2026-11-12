@@ -192,8 +192,17 @@ export const drawPane = (
   const isInline = props.placement === 'inline'
   const { config, tasks } = view
 
+  // In place of a read that has gone unanswered for a while: what it may be
+  // waiting on, and how to stop it waiting. Two rows of the docked width.
+  const unanswered = (
+    <Box flexDirection="column">
+      <Text color="warning">Deck 服务还没应答，可能在等权限批准。</Text>
+      <Text color="warning">运行 /matt-deck:configure 允许它的工具。</Text>
+    </Box>
+  )
+
   if (config.status === 'loading') {
-    return <Text dimColor>正在读取项目配置…</Text>
+    return view.isUnanswered ? unanswered : <Text dimColor>正在读取项目配置…</Text>
   }
   if (config.status !== 'configured') {
     return <Text color="error">{'message' in config ? config.message : ''}</Text>
@@ -314,6 +323,9 @@ export const drawPane = (
 
     return reason
   }
+
+  // In place of the Tasks while they are first read.
+  const readingTasks = view.isUnanswered ? unanswered : <Text color="inactive">正在读取 Task…</Text>
 
   const failureBox = (failure: TaskFailure) =>
     isInline ? (
@@ -571,7 +583,7 @@ export const drawPane = (
   // under the fixed rows.
   const dockedTasks = () => {
     if (list === undefined || shown === undefined) {
-      return tasks.status === 'failed' ? failureBox(tasks.failure) : <Text color="inactive">正在读取 Task…</Text>
+      return tasks.status === 'failed' ? failureBox(tasks.failure) : readingTasks
     }
     const failure = tasks.status === 'failed' ? failureBox(tasks.failure) : undefined
     const head = (
@@ -710,7 +722,9 @@ export const drawPane = (
       return failureBox(tasks.failure)
     }
     if (list === undefined) {
-      return (
+      return view.isUnanswered ? (
+        unanswered
+      ) : (
         <Box flexDirection="column">
           <Text color="inactive">正在读取 Task…</Text>
           <Text> </Text>
@@ -899,7 +913,7 @@ export const drawPane = (
   // the card is one row and the bar under it.
   const mapView = () => {
     if (list === undefined) {
-      return tasks.status === 'failed' ? failureBox(tasks.failure) : <Text color="inactive">正在读取 Task…</Text>
+      return tasks.status === 'failed' ? failureBox(tasks.failure) : readingTasks
     }
     const failure = tasks.status === 'failed' ? failureBox(tasks.failure) : undefined
     if (mapped === undefined) {

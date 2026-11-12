@@ -49,13 +49,36 @@ const view = atom(
     skills: { status: 'loading' },
     skillTexts: {},
     checkedAt: 0,
+    isUnanswered: false,
   } as View,
-  { shape: 'view-4' },
+  { shape: 'view-5' },
 )
 
 const nav = atom({ plugin: 'matt-deck', key: 'nav' } as const, { tab: 'tasks', filter: 'all', page: 0 } as Nav, {
   shape: 'nav-2',
 })
+
+// How long a read may go unanswered before the Pane says what it may be
+// waiting on.
+const UNANSWERED_MS = 10_000
+
+// Calls a tool of the Deck service to read the project config or the Tasks.
+// The host puts a call no permission rule allows through the Session's
+// permission hooks first, and a hook waiting for the person keeps the call
+// waiting with it: the Pane is told of a call not answered after
+// UNANSWERED_MS, until it answers.
+const callWatched = async ($: EngineInterface, server: string, tool: string, args: Record<string, unknown>) => {
+  const overdue = $.clock.after(
+    UNANSWERED_MS,
+    () => void update($, view, current => ({ ...current, isUnanswered: true })),
+  )
+  try {
+    return await $.mcp.call(server, tool, args)
+  } finally {
+    overdue.cancel()
+    await update($, view, current => (current.isUnanswered ? { ...current, isUnanswered: false } : current))
+  }
+}
 
 const textOf = (answer: { content: { text?: string }[] }) => answer.content.map(block => block.text ?? '').join('\n')
 
@@ -64,7 +87,7 @@ const loadConfig = async ($: EngineInterface): Promise<ConfigView> => {
   if (!deck.isConnected) {
     return { status: 'unreachable', message: deck.message }
   }
-  const answer = await $.mcp.call(deck.server, 'deck_config', {})
+  const answer = await callWatched($, deck.server, 'deck_config', {})
   if (answer.isError) {
     return { status: 'error', message: textOf(answer) }
   }
@@ -84,7 +107,7 @@ const loadTasks = async ($: EngineInterface, refresh: boolean) => {
   if (!deck.isConnected) {
     answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
   } else {
-    const result = await $.mcp.call(deck.server, 'deck_tasks', refresh ? { refresh: true } : {})
+    const result = await callWatched($, deck.server, 'deck_tasks', refresh ? { refresh: true } : {})
     answer = result.isError
       ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
       : JSON.parse(result.content[0]!.text!)

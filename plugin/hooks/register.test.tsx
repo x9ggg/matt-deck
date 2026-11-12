@@ -177,6 +177,7 @@ const engine = (
     skillText = name => skillTextOf(skills(), name),
     draft = '',
     canFill = true,
+    waitFor = () => undefined,
   }: {
     config: Answer | undefined
     tasks?: () => Answer
@@ -187,6 +188,9 @@ const engine = (
     // What the prompt box holds, and whether the host lets it be filled.
     draft?: string
     canFill?: boolean
+    // What a call of a tool waits on before it answers, as a call does that
+    // a permission hook keeps waiting.
+    waitFor?: (tool: string) => Promise<void> | undefined
   },
 ) => {
   const seen = {
@@ -212,8 +216,9 @@ const engine = (
         ? { isConnected: false, reason: 'failed', message: 'The deck server failed to start.' }
         : { isConnected: true, server: SERVER },
   }))
-  on('mcp.call', (_, e) => {
+  on('mcp.call', async (_, e) => {
     seen.calls.push(e)
+    await waitFor(e.tool)
     const answer =
       e.tool === 'deck_tasks'
         ? tasks()
@@ -346,6 +351,72 @@ test('a malformed config opens the pane with the reason', async ($, on) => {
 
   const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /config\.json is malformed/ })).toBeDefined()
+  await ui.unmount()
+})
+
+// What a call waits on until the test lets it go.
+const gate = () => {
+  let release = () => {}
+  const waiting = new Promise<void>(resolve => {
+    release = resolve
+  })
+
+  return { waiting, release }
+}
+
+const UNANSWERED = ['Deck 服务还没应答，可能在等权限批准。', '运行 /matt-deck:configure 允许它的工具。']
+
+test('a read of the project config not answered after ten seconds says what it may be waiting on and how to allow it', async ($, on) => {
+  const { waiting, release } = gate()
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => (tool === 'deck_config' ? waiting : undefined),
+  })
+  const starting = start($)
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await seen.clock.advance(9_000)
+  expect(await texts(ui)).toEqual(['正在读取项目配置…'])
+
+  await seen.clock.advance(1_000)
+  expect(await texts(ui)).toEqual(UNANSWERED)
+
+  release()
+  await starting
+  await seen.clock.settle()
+  const lines = await texts(ui)
+  expect(lines).toContain('shop')
+  expect(lines).not.toContain(UNANSWERED[0])
+  await ui.unmount()
+})
+
+test('a read of the Tasks not answered after ten seconds says the same in place of the notice, in both placements', async ($, on) => {
+  const { waiting, release } = gate()
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => (tool === 'deck_tasks' ? waiting : undefined),
+  })
+  await start($)
+  const docked = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await seen.clock.advance(9_000)
+  expect(await texts(docked)).toContain('正在读取 Task…')
+
+  await seen.clock.advance(1_000)
+  await docked.unmount()
+  for (const target of [PANE_TARGET, INLINE]) {
+    const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+    const lines = await texts(ui)
+    expect(lines.slice(lines.indexOf(UNANSWERED[0]!))).toEqual(UNANSWERED)
+    expect(lines).not.toContain('正在读取 Task…')
+    await ui.unmount()
+  }
+
+  release()
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  expect(await texts(ui)).not.toContain(UNANSWERED[0])
+  expect(await ui.find({ type: 'Text', text: /Pane 布局设计/ })).toBeDefined()
   await ui.unmount()
 })
 
