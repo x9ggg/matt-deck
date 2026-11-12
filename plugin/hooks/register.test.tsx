@@ -1555,6 +1555,8 @@ test('n while the Session is idle runs /ask-matt with the request at once, and t
   ])
   expect(await texts(ui)).toContain('已交给 Session，等这一回合开始。')
   expect((await ui.find({ type: 'Text', text: '已发出' }))?.props).toEqual(expect.objectContaining({ bold: true }))
+  // Sent at once, it was never held: that stage is not one gone through.
+  expect((await ui.find({ type: 'Text', text: '持有中' }))?.props).toEqual(expect.objectContaining({ dimColor: true }))
 
   await turnStart($, 't1', '/mattpocock-skills:ask-matt Matt Deck Recommendation Request request-1. 快照 1')
   expect(await texts(ui)).toContain('/ask-matt 运行中，已附带 Task Snapshot。')
@@ -1616,6 +1618,7 @@ test('n while the Session is busy holds the request, which goes once the turn ha
   ])
   expect(await texts(ui)).toContain('已交给 Session，等这一回合开始。')
   expect(await ui.find({ key: 'cancel' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: '持有中' }))?.props).toEqual(expect.objectContaining({ color: 'suggestion' }))
 
   expect(await ui.find({ key: 'ask' })).toBeUndefined()
   await turnStart($, 't2', '/mattpocock-skills:ask-matt Matt Deck Recommendation Request request-1. 快照 1')
@@ -1645,6 +1648,45 @@ test('a held request can be cancelled, and is not sent when the turn ends', asyn
   // Asked again, it goes.
   await ui.press({ key: 'ask' })
   expect(seen.ran).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('a held request cancelled just as it is about to go is not sent', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  // The write that sends the request says it is on its way, then waits for
+  // the one that cancels it, and so comes too late: it is made again, of a
+  // request now cancelled.
+  let sending = () => undefined as void
+  const isSending = new Promise<void>(go => (sending = go))
+  let cancelled = () => undefined as void
+  const isCancelled = new Promise<void>(go => (cancelled = go))
+  on('state.set', { plugin: 'matt-deck', key: 'ask' }, async (_, e, next) => {
+    if (e.value.value.status === 'sent') {
+      sending()
+      await isCancelled
+    }
+    const set = await next(e)
+    if (e.value.value.status === 'cancelled') {
+      cancelled()
+    }
+
+    return set
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+  await turnStart($, 't1')
+  await ui.press({ key: 'ask' })
+  await turnEnd($, 't1')
+
+  const advanced = seen.clock.advance(100)
+  await isSending
+  await Promise.all([advanced, ui.press({ key: 'cancel' })])
+
+  expect(seen.calls.filter(call => call.tool === 'deck_ask')).toEqual([])
+  expect(seen.ran).toEqual([])
+  expect(await texts(ui)).toContain('已取消。请求没有发出。')
   await ui.unmount()
 })
 
@@ -1732,6 +1774,82 @@ test('a turn begun while the request is being made holds it, to be made anew whe
   await turnEnd($, 't1')
   await seen.clock.advance(100)
   expect(seen.ran.map(run => run.args)).toEqual(['Matt Deck Recommendation Request request-2. 快照 2'])
+  expect((await ui.find({ type: 'Text', text: '持有中' }))?.props).toEqual(expect.objectContaining({ color: 'suggestion' }))
+  await ui.unmount()
+})
+
+test('n pressed twice before the Pane is drawn again makes one request', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+
+  await Promise.all([ui.press({ key: 'ask' }), ui.press({ key: 'ask' })])
+
+  expect(seen.calls.filter(call => call.tool === 'deck_ask')).toHaveLength(1)
+  expect(seen.ran.map(run => run.args)).toEqual(['Matt Deck Recommendation Request request-1. 快照 1'])
+  expect(await texts(ui)).toContain('已交给 Session，等这一回合开始。')
+  await ui.unmount()
+})
+
+test('n pressed twice while the Session is busy holds one request, sent once when the turn has ended', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+  await turnStart($, 't1')
+
+  await Promise.all([ui.press({ key: 'ask' }), ui.press({ key: 'ask' })])
+
+  expect(await texts(ui)).toContain('Session 忙碌，空闲后自动发出。')
+  expect(seen.ran).toEqual([])
+  await turnEnd($, 't1')
+  await seen.clock.advance(1_000)
+  expect(seen.ran.map(run => run.args)).toEqual(['Matt Deck Recommendation Request request-1. 快照 1'])
+  await ui.unmount()
+})
+
+test('n that reaches the Mod once the request is running makes no new request', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  // The second press of n waits until the test lets it through: a press on a
+  // Pane drawn before the request it then finds.
+  let letThrough = () => undefined as void
+  const isLetThrough = new Promise<void>(go => (letThrough = go))
+  let presses = 0
+  on('ui.press', async (_, e, next) => {
+    if (e.element === 'ask' && ++presses === 2) {
+      await isLetThrough
+    }
+
+    return next(e)
+  })
+  // The first press settles only with the second, so the test waits on the
+  // request it sends.
+  let sent = () => undefined as void
+  const isSent = new Promise<void>(go => (sent = go))
+  on('state.set', { plugin: 'matt-deck', key: 'ask' }, (_, e, next) => {
+    if (e.value.value.requestId !== undefined) {
+      sent()
+    }
+
+    return next(e)
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+
+  const pressed = [ui.press({ key: 'ask' }), ui.press({ key: 'ask' })]
+  await isSent
+  await turnStart($, 't1', '/mattpocock-skills:ask-matt Matt Deck Recommendation Request request-1. 快照 1')
+  letThrough()
+  await Promise.all(pressed)
+
+  expect(await texts(ui)).toContain('/ask-matt 运行中，已附带 Task Snapshot。')
+  expect(seen.calls.filter(call => call.tool === 'deck_ask')).toHaveLength(1)
+  expect(seen.ran.map(run => run.args)).toEqual(['Matt Deck Recommendation Request request-1. 快照 1'])
   await ui.unmount()
 })
 

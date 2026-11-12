@@ -113,10 +113,12 @@ export type RequestStatus = 'none' | 'held' | 'sent' | 'running' | 'answered' | 
 // The Session's one Recommendation Request, and whether a turn of its main
 // loop is running. `requestId` is the request's once it is sent, `turnId`
 // its turn once it runs; `answer` what its turn left: the Recommendation, or
-// the turn's answer where none was reported.
+// the turn's answer where none was reported. `wasHeld` says the Pane held it
+// before it was sent.
 export type Ask = {
   isBusy: boolean
   status: RequestStatus
+  wasHeld?: boolean
   requestId?: string
   turnId?: string
   answer?: { recommendation: Recommendation } | { text: string }

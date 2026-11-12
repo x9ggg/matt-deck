@@ -1425,15 +1425,16 @@ export const drawPane = (
       </Box>
     )
   // The stages gone through, the one the request is at in bold, and those
-  // to come.
+  // to come. A request sent at once was never held: that stage is drawn as
+  // one it did not get to.
   const stageBar = () => {
     const at = STAGES.findIndex(([status]) => status === ask.status)
 
     return (
       <Box flexDirection="row">
-        {STAGES.flatMap(([, label], index) => [
+        {STAGES.flatMap(([status, label], index) => [
           ...(index > 0 ? [<Text dimColor={index > at}> › </Text>] : []),
-          index < at ? (
+          index < at && (status !== 'held' || ask.wasHeld === true) ? (
             <Text color="suggestion">{label}</Text>
           ) : index === at ? (
             <Text bold>{label}</Text>

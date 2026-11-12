@@ -242,7 +242,7 @@ const sendRequest = async ($: EngineInterface) => {
   }
   const { requestId, command, args } = answer
   const now = await update($, ask, current =>
-    current.isBusy ? { ...current, status: 'held' as const } : { ...current, requestId },
+    current.isBusy ? { ...current, status: 'held' as const, wasHeld: true } : { ...current, requestId },
   )
   if (now.status === 'held') {
     return
@@ -259,12 +259,18 @@ const sendRequest = async ($: EngineInterface) => {
 const askNow = async ($: EngineInterface) => {
   let isNew = false
   const after = await update($, ask, current => {
-    if (current.status === 'held' || current.status === 'sent' || current.status === 'running') {
+    // `update` runs this again when another write got in first: a second
+    // press then finds the first one's request, and is not a new one.
+    isNew = current.status !== 'held' && current.status !== 'sent' && current.status !== 'running'
+    if (!isNew) {
       return current
     }
-    isNew = true
 
-    return { isBusy: current.isBusy, status: current.isBusy ? ('held' as const) : ('sent' as const) }
+    return {
+      isBusy: current.isBusy,
+      status: current.isBusy ? ('held' as const) : ('sent' as const),
+      wasHeld: current.isBusy,
+    }
   })
   if (isNew && after.status === 'sent') {
     await sendRequest($)
@@ -351,12 +357,10 @@ export const register: Register = on => {
         void (async () => {
           let isSent = false
           await update($, ask, current => {
-            if (current.status !== 'held' || current.isBusy) {
-              return current
-            }
-            isSent = true
+            // As in `askNow`: run again, this may find the request cancelled.
+            isSent = current.status === 'held' && !current.isBusy
 
-            return { ...current, status: 'sent' as const }
+            return isSent ? { ...current, status: 'sent' as const } : current
           })
           if (isSent) {
             await sendRequest($)
