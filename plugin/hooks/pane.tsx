@@ -4,7 +4,21 @@
 // goes to one of the `actions`.
 import type { Elements, RenderChildren, RenderPropsOf, RenderSurface } from 'claude-code'
 
-import type { Container, DetailView, Filter, Group, Nav, Tab, Task, TaskFailure, TaskList, View } from '../types'
+import type {
+  Container,
+  DetailView,
+  Filter,
+  Group,
+  Nav,
+  Skill,
+  SkillFailure,
+  SkillTextView,
+  Tab,
+  Task,
+  TaskFailure,
+  TaskList,
+  View,
+} from '../types'
 
 type El = Elements[RenderSurface]
 
@@ -25,6 +39,11 @@ export type Actions = {
   // one shown, `current`; and goes back to the Map View without switching.
   openSwitch: (current: number) => void
   closeSwitch: () => void
+  // Drills into a skill's text from its row, and goes back to the list.
+  openSkill: (name: string) => void
+  closeSkill: () => void
+  // Puts `text` in the prompt box for the person to send.
+  prefill: (text: string) => void
 }
 
 // Columns a text takes in the terminal: wide East Asian characters take two,
@@ -97,6 +116,16 @@ const FAILURE: Record<TaskFailure['kind'], (message: string) => string> = {
   failed: message => `gh 出错：${message}。按 r 重试。`,
   unreachable: message => `Deck 服务未连接：${message}`,
 }
+
+const SKILL_FAILURE: Record<SkillFailure['kind'], (message: string) => string> = {
+  missing: () => 'Skill Source 不存在。运行 /matt-deck:configure 重新选定。',
+  'unknown-skill': () => 'Skill Source 里已经没有这个技能。按 r 重新读取。',
+  failed: message => `Deck 服务出错：${message}。按 r 重试。`,
+  unreachable: message => `Deck 服务未连接：${message}`,
+}
+
+// The skill every Recommendation runs (ADR-0003), listed apart.
+const ENTRY_SKILL = 'ask-matt'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
@@ -624,6 +653,56 @@ export const drawPane = (
     )
   }
 
+  // A list laid out in one row above the prompt, as many items as fit in
+  // `room` columns, in pages by width: each keeps room for the way back and
+  // the way on, which move the focus onto the item before or after the page.
+  type InlineItem = { key: string; label: string; draw: RenderChildren; isLanding: boolean; onPress: () => void }
+  const inlineRow = (items: InlineItem[], room: number, at: number) => {
+    const moreWidth = width(`还有 ${items.length} 个`) + 3
+    const starts = [0]
+    for (let index = 0, used = 0; index < items.length; index++) {
+      const start = starts.at(-1)!
+      const backWidth = start > 0 ? width(`前面 ${start} 个`) + 3 : 0
+      const itemWidth = width(items[index]!.label) + (index === start ? 0 : 3)
+      const onWidth = index < items.length - 1 ? moreWidth : 0
+      if (index > start && backWidth + used + itemWidth + onWidth > room) {
+        starts.push(index)
+        used = width(items[index]!.label)
+      } else {
+        used += itemWidth
+      }
+    }
+    const pageIndex = Math.min(at, starts.length - 1)
+    const start = starts[pageIndex]!
+    const end = starts[pageIndex + 1] ?? items.length
+
+    return (
+      <Box flexDirection="row">
+        {pageIndex > 0 && (
+          <Button key="page:prev" plain onPress={() => actions.turnPage(pageIndex - 1, items[start - 1]!.key)}>
+            <Text color="inactive">前面 {start} 个</Text>
+          </Button>
+        )}
+        {items.slice(start, end).map((item, index) => (
+          <Box flexDirection="row">
+            {(index > 0 || pageIndex > 0) && <Text>{'   '}</Text>}
+            <Button key={item.key} plain autoFocus={item.isLanding ? true : undefined} onPress={item.onPress}>
+              {item.draw}
+            </Button>
+          </Box>
+        ))}
+        {end < items.length && (
+          <Box flexDirection="row">
+            <Text>{'   '}</Text>
+            <Button key="page:next" plain onPress={() => actions.turnPage(pageIndex + 1, items[end]!.key)}>
+              <Text color="inactive">还有 {items.length - end} 个</Text>
+            </Button>
+          </Box>
+        )}
+      </Box>
+    )
+  }
+
   // The inline tasks tab: the action bar on the third row, the list laid out
   // in one row on the fourth, as many items as fit, the filter at its end.
   const inlineTasks = () => {
@@ -658,60 +737,25 @@ export const drawPane = (
       'container' in row
         ? `${GLYPH[row.container.group]} ${row.container.kind === 'spec' ? 'Spec' : 'Map'} #${row.container.number} ${progressText(row.container)}`
         : `${GLYPH[row.group]} #${row.task.number} ${cut(row.task.title, 28)}`
-    // Pages by width: each keeps room for the way back and the way on.
-    const room = columns - filterWidth - 2
-    const moreWidth = width(`还有 ${rows.length} 个`) + 3
-    const starts = [0]
-    for (let at = 0, used = 0; at < rows.length; at++) {
-      const start = starts.at(-1)!
-      const backWidth = start > 0 ? width(`前面 ${start} 个`) + 3 : 0
-      const itemWidth = width(labelOf(rows[at]!)) + (at === start ? 0 : 3)
-      const onWidth = at < rows.length - 1 ? moreWidth : 0
-      if (at > start && backWidth + used + itemWidth + onWidth > room) {
-        starts.push(at)
-        used = width(labelOf(rows[at]!))
-      } else {
-        used += itemWidth
-      }
-    }
-    const pageIndex = Math.min(nav.page, starts.length - 1)
-    const start = starts[pageIndex]!
-    const end = starts[pageIndex + 1] ?? rows.length
-    const pageRows = rows.slice(start, end)
 
     return (
       <Box flexDirection="column">
         {inlineActionBar(focused!)}
         <Box flexDirection="row" justifyContent="space-between">
-          <Box flexDirection="row">
-            {pageIndex > 0 && (
-              <Button key="page:prev" plain onPress={() => actions.turnPage(pageIndex - 1, rows[start - 1]!.key)}>
-                <Text color="inactive">前面 {start} 个</Text>
-              </Button>
-            )}
-            {pageRows.map((row, index) => (
-              <Box flexDirection="row">
-                {(index > 0 || pageIndex > 0) && <Text>{'   '}</Text>}
-                <Button
-                  key={row.key}
-                  plain
-                  autoFocus={row === landing ? true : undefined}
-                  onPress={() => actions.openTask(numberOf(row))}
-                >
-                  {'container' in row ? glyph(row.container.group) : glyph(row.group, row.group === 'blocked')}
-                  <Text dimColor={'group' in row && row.group === 'blocked'}>{labelOf(row).slice(1)}</Text>
-                </Button>
-              </Box>
-            ))}
-            {end < rows.length && (
-              <Box flexDirection="row">
-                <Text>{'   '}</Text>
-                <Button key="page:next" plain onPress={() => actions.turnPage(pageIndex + 1, rows[end]!.key)}>
-                  <Text color="inactive">还有 {rows.length - end} 个</Text>
-                </Button>
-              </Box>
-            )}
-          </Box>
+          {inlineRow(
+            rows.map(row => ({
+              key: row.key,
+              label: labelOf(row),
+              draw: [
+                'container' in row ? glyph(row.container.group) : glyph(row.group, row.group === 'blocked'),
+                <Text dimColor={'group' in row && row.group === 'blocked'}>{labelOf(row).slice(1)}</Text>,
+              ],
+              isLanding: row === landing,
+              onPress: () => actions.openTask(numberOf(row)),
+            })),
+            columns - filterWidth - 2,
+            nav.page,
+          )}
           {filterButton(nav.filter)}
         </Box>
       </Box>
@@ -1112,6 +1156,219 @@ export const drawPane = (
     config.config.skillSource.type === 'plugin'
       ? `插件 ${config.config.skillSource.name}`
       : `目录 ${config.config.skillSource.path}`
+  const sourceLine = (gap: string) => (
+    <Text>
+      Skill Source{gap}
+      <Text color="inactive">{skillSource}</Text>
+    </Text>
+  )
+
+  // The skills, /ask-matt first and the rest in the Skill Source's order,
+  // and the one the action bar is about: the last one the focus was on.
+  const skills = view.skills.status === 'loaded' ? view.skills.skills : []
+  const entrySkills = skills.filter(skill => skill.name === ENTRY_SKILL)
+  const otherSkills = skills.filter(skill => skill.name !== ENTRY_SKILL)
+  const orderedSkills = [...entrySkills, ...otherSkills]
+  const skillKey = (skill: Skill) => `skill:${skill.name}`
+  const focusedSkill = orderedSkills.find(skill => skillKey(skill) === nav.focus) ?? orderedSkills[0]
+
+  const skillActions = (skill: Skill) => (
+    <Box flexDirection="row">
+      <Button key="prefill" plain hotkey="e" label="预填" onPress={() => actions.prefill(skill.call)} />
+      <Text>{'  '}</Text>
+      <Button key="open" plain hotkey="o" label="原文" onPress={() => actions.openSkill(skill.name)} />
+    </Box>
+  )
+  const skillActionsWidth = 2 + width('e: 预填  o: 原文')
+
+  // Why the skills are not listed, as a title and a line saying why, or
+  // undefined while they are.
+  const skillsNotice = (): [RenderChildren, RenderChildren] | undefined => {
+    if (view.skills.status === 'loading') {
+      return [<Text color="inactive">正在读取技能…</Text>, <Text> </Text>]
+    }
+    if (view.skills.status === 'failed') {
+      const { kind, message } = view.skills.failure
+
+      return [<Text color="error">✕ 读取技能失败</Text>, <Text wrap="truncate-end">{SKILL_FAILURE[kind](message)}</Text>]
+    }
+    if (orderedSkills.length === 0) {
+      return [
+        <Text>Skill Source 里没有技能。</Text>,
+        <Text color="inactive" wrap="truncate-end">
+          确认它是 Matt skills 所在的位置，或运行 /matt-deck:configure 重新选定。
+        </Text>,
+      ]
+    }
+
+    return undefined
+  }
+
+  // The docked skills tab: the Skill Source, the action bar, /ask-matt apart
+  // and the rest, in pages that fit under the fixed rows.
+  const dockedSkills = () => {
+    const notice = skillsNotice()
+    if (notice !== undefined) {
+      return (
+        <Box flexDirection="column">
+          {sourceLine('  ')}
+          <Text> </Text>
+          {notice}
+        </Box>
+      )
+    }
+    // A row: the command name, its description at the right end, cut to fit.
+    const skillRow = (skill: Skill) => {
+      const call = cut(skill.call, columns)
+      const room = columns - width(call) - 1
+      const description = cut(skill.description, room)
+
+      return (
+        <Button
+          key={skillKey(skill)}
+          plain
+          autoFocus={skill === orderedSkills[0] ? true : undefined}
+          onPress={() => actions.openSkill(skill.name)}
+        >
+          <Text color="suggestion">{call}</Text>
+          <Text color="inactive">
+            {spaces(room - width(description) + 1)}
+            {description}
+          </Text>
+        </Button>
+      )
+    }
+    const units: Unit[] = []
+    for (const [title, group] of [
+      ['通用入口', entrySkills],
+      [`技能 ${otherSkills.length}`, otherSkills],
+    ] as const) {
+      if (group.length === 0) {
+        continue
+      }
+      units.push({
+        lines: [
+          ...(units.length > 0 ? [<Text> </Text>] : []),
+          <Text color="inactive">{title}</Text>,
+          skillRow(group[0]!),
+        ],
+        keys: [skillKey(group[0]!)],
+        blankFirst: units.length > 0,
+      })
+      units.push(...group.slice(1).map(skill => ({ lines: [skillRow(skill)], keys: [skillKey(skill)], blankFirst: false })))
+    }
+    // Room under the fixed rows: top four, the Skill Source, the action bar
+    // and the blank line under it.
+    const room = Math.max(3, props.scroll.bodyRows - 7)
+
+    return (
+      <Box flexDirection="column">
+        {sourceLine('  ')}
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text color="suggestion">{cut(focusedSkill!.call, columns - skillActionsWidth)}</Text>
+          {skillActions(focusedSkill!)}
+        </Box>
+        <Text> </Text>
+        {paged(units, room, nav.skillsPage ?? 0)}
+      </Box>
+    )
+  }
+
+  // The inline skills tab: the action bar with the description on the third
+  // row, the command names in one row on the fourth, the Skill Source at its
+  // end.
+  const inlineSkills = () => {
+    const notice = skillsNotice()
+    if (notice !== undefined) {
+      return (
+        <Box flexDirection="column">
+          {notice[0]}
+          <Box flexDirection="row" justifyContent="space-between">
+            {notice[1]}
+            {sourceLine(' ')}
+          </Box>
+        </Box>
+      )
+    }
+    const skill = focusedSkill!
+    const room = columns - width(skill.call) - 2 - skillActionsWidth
+
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text>
+            <Text color="suggestion">{skill.call}</Text>
+            {'  '}
+            {cut(skill.description, room)}
+          </Text>
+          {skillActions(skill)}
+        </Box>
+        <Box flexDirection="row" justifyContent="space-between">
+          {inlineRow(
+            orderedSkills.map(skill => {
+              const label = cut(skill.call, 28)
+
+              return {
+                key: skillKey(skill),
+                label,
+                draw: <Text color="suggestion">{label}</Text>,
+                isLanding: skill === orderedSkills[0],
+                onPress: () => actions.openSkill(skill.name),
+              }
+            }),
+            columns - width(`Skill Source ${skillSource}`) - 2,
+            nav.skillsPage ?? 0,
+          )}
+          {sourceLine(' ')}
+        </Box>
+      </Box>
+    )
+  }
+
+  // A skill drilled into: the way back, then its command name, its file and
+  // its text as written.
+  const skillView = (name: string) => {
+    const listed = skills.find(skill => skill.name === name)
+    const shown: SkillTextView = view.skillTexts[name] ?? { status: 'loading' }
+    // The call as read, else as listed: a skill no longer listed has no call
+    // to prefill until its text is read.
+    const call = shown.status === 'loaded' ? shown.skill.call : listed?.call
+    const title = call ?? name
+    const body =
+      shown.status === 'loading'
+        ? [<Text color="inactive">正在读取 {title}…</Text>]
+        : shown.status === 'failed'
+          ? [
+              <Text color="error">✕ 读取 {title} 失败</Text>,
+              <Text>{SKILL_FAILURE[shown.failure.kind](shown.failure.message)}</Text>,
+            ]
+          : [
+              <Text color="suggestion" bold>
+                {call}
+              </Text>,
+              <Text color="inactive">{shown.skill.path}</Text>,
+              <Text> </Text>,
+              <Markdown text={shown.skill.text} />,
+            ]
+
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between">
+          <Box flexDirection="row">
+            <Button key="back" plain hotkey="b" label="返回" onPress={actions.closeSkill} />
+            <Text>
+              {'  '}
+              {cut(`技能 / ${title}`, columns - width('b: 返回  ') - 2 - width('e: 预填'))}
+            </Text>
+          </Box>
+          {call !== undefined && <Button key="prefill" plain hotkey="e" label="预填" onPress={() => actions.prefill(call)} />}
+        </Box>
+        <Text color="subtle">{'─'.repeat(columns)}</Text>
+        {body}
+      </Box>
+    )
+  }
+  const skillShown = nav.tab === 'skills' ? nav.skill : undefined
 
   if (isInline) {
     // The top and the counts in one row, giving up what does not fit: the
@@ -1167,17 +1424,14 @@ export const drawPane = (
         {tabRow}
         {detail !== undefined ? (
           detailView(detail)
+        ) : skillShown !== undefined ? (
+          skillView(skillShown)
         ) : nav.tab === 'tasks' ? (
           inlineTasks()
         ) : nav.tab === 'map' ? (
           mapView()
         ) : nav.tab === 'skills' ? (
-          <Box flexDirection="column">
-            <Text>
-              Skill Source <Text color="inactive">{skillSource}</Text>
-            </Text>
-            <Text> </Text>
-          </Box>
+          inlineSkills()
         ) : (
           <Box flexDirection="column">
             <Text> </Text>
@@ -1208,11 +1462,7 @@ export const drawPane = (
       {detail !== undefined && detailView(detail)}
       {detail === undefined && nav.tab === 'tasks' && dockedTasks()}
       {detail === undefined && nav.tab === 'map' && mapView()}
-      {detail === undefined && nav.tab === 'skills' && (
-        <Text>
-          Skill Source <Text color="inactive">{skillSource}</Text>
-        </Text>
-      )}
+      {detail === undefined && nav.tab === 'skills' && (skillShown === undefined ? dockedSkills() : skillView(skillShown))}
     </Box>
   )
 }

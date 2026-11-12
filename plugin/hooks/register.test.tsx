@@ -123,6 +123,44 @@ const detailOf = (number: number): Answer => ({
   },
 })
 
+// The skills of the examples in `docs/pane-layout.md`, in a directory Skill
+// Source.
+const SKILL = (name: string, description: string) => ({
+  name,
+  call: `/${name}`,
+  description,
+  path: `~/.claude/skills/${name}/SKILL.md`,
+})
+const SKILLS: Answer = {
+  isError: false,
+  structuredContent: {
+    ok: true,
+    source: { type: 'directory', path: '~/.claude/skills' },
+    skills: [
+      SKILL('implement', '开始做一个 Task。'),
+      SKILL('ask-matt', '问下一步该做什么。'),
+      SKILL('tdd', '先写测试，再写实现。'),
+      SKILL('wayfinder', '为不清晰的大工作建立 Map。'),
+    ],
+  },
+}
+const DIRECTORY = {
+  ...CONFIGURED,
+  config: { ...CONFIGURED.config, skillSource: { type: 'directory', path: '~/.claude/skills' } },
+}
+
+// A skill as `deck_skill` reads it, from what `deck_skills` lists.
+const skillTextOf = (skills: Answer, name: string): Answer => ({
+  isError: false,
+  structuredContent: {
+    ok: true,
+    skill: {
+      ...(skills.structuredContent as { skills: { name: string }[] }).skills.find(skill => skill.name === name),
+      text: `# ${name}\n\n原文。\n`,
+    },
+  },
+})
+
 // A fake engine: the Deck service answering `deck_config` with `config`, or
 // out of reach when there is none, and `deck_tasks` with what `tasks` gives
 // at each call; a clock that moves only when the test moves it; and a pane
@@ -135,7 +173,21 @@ const engine = (
     tasks = () => PROJECT,
     detail = number => detailOf(number),
     isNarrow = false,
-  }: { config: Answer | undefined; tasks?: () => Answer; detail?: (number: number) => Answer; isNarrow?: boolean },
+    skills = () => SKILLS,
+    skillText = name => skillTextOf(skills(), name),
+    draft = '',
+    canFill = true,
+  }: {
+    config: Answer | undefined
+    tasks?: () => Answer
+    detail?: (number: number) => Answer
+    isNarrow?: boolean
+    skills?: () => Answer
+    skillText?: (name: string) => Answer
+    // What the prompt box holds, and whether the host lets it be filled.
+    draft?: string
+    canFill?: boolean
+  },
 ) => {
   const seen = {
     opened: [] as string[],
@@ -144,6 +196,9 @@ const engine = (
     closed: [] as string[],
     calls: [] as { server: string; tool: string; args?: Record<string, unknown> }[],
     clock: undefined as unknown as MockClock,
+    filled: [] as { text: string; mode: string }[],
+    copied: [] as string[],
+    toasts: [] as string[],
   }
   let panes: { id: string; isPlaced: boolean }[] = []
 
@@ -160,7 +215,15 @@ const engine = (
   on('mcp.call', (_, e) => {
     seen.calls.push(e)
     const answer =
-      e.tool === 'deck_tasks' ? tasks() : e.tool === 'deck_task' ? detail(e.args!.number as number) : config!
+      e.tool === 'deck_tasks'
+        ? tasks()
+        : e.tool === 'deck_task'
+          ? detail(e.args!.number as number)
+          : e.tool === 'deck_skills'
+            ? skills()
+            : e.tool === 'deck_skill'
+              ? skillText(e.args!.name as string)
+              : config!
 
     return {
       value: {
@@ -188,6 +251,25 @@ const engine = (
     value: panes.map(({ id, isPlaced }) => ({ id, title: id, isShown: isPlaced, isFocused: false, isPlaced })),
   }))
   on('ui.focus', () => ({}))
+  on('prompt.read', () => ({ value: { text: draft, cursor: draft.length } }))
+  on('prompt.fill', (_, e) => {
+    if (!canFill) {
+      return { isFilled: false, refusal: 'no_composer' }
+    }
+    seen.filled.push({ text: e.text, mode: e.mode })
+
+    return { isFilled: true }
+  })
+  on('ui.copy', (_, e) => {
+    seen.copied.push(e.text)
+
+    return { value: { isCopied: true } }
+  })
+  on('ui.toast', (_, e) => {
+    seen.toasts.push(e.text)
+
+    return { value: undefined }
+  })
   on('turn.complete', () => ({ text: '' }))
   on('tool.call', () => ({ result: {} }))
 
@@ -727,9 +809,8 @@ test('the tabs switch the content under the top, which stays', async ($, on) => 
   ])
   expect(await ui.find({ key: 'refresh' })).toBeDefined()
 
-  // The skills tab names the Skill Source until it lists the skills (#8).
   await ui.press({ key: 'tab:skills' })
-  expect(await texts(ui)).toContain('Skill Source 插件 mattpocock-skills')
+  expect(await texts(ui)).toContain('Skill Source  插件 mattpocock-skills')
 
   await ui.press({ key: 'tab:tasks' })
   expect(await ui.find({ key: 'filter' })).toBeDefined()
@@ -814,7 +895,7 @@ test('a tab left from a detail shows its list when it is shown again', async ($,
   await seen.clock.settle()
   await ui.press({ key: 'tab:skills' })
   expect(await ui.find({ key: 'back' })).toBeUndefined()
-  expect(await texts(ui)).toContain('Skill Source 插件 mattpocock-skills')
+  expect(await texts(ui)).toContain('Skill Source  插件 mattpocock-skills')
   await ui.press({ key: 'tab:tasks' })
 
   expect(await ui.find({ key: 'back' })).toBeUndefined()
@@ -1122,5 +1203,215 @@ test('a tree taller than the pane turns pages under the card', async ($, on) => 
   // The tasks tab keeps its own page.
   await ui.press({ key: 'tab:tasks' })
   expect(await ui.find({ key: 'page:prev' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the skills tab names the Skill Source and lists /ask-matt apart, then the rest, each with its description', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: DIRECTORY, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await ui.press({ key: 'tab:skills' })
+
+  expect(seen.calls.filter(call => call.tool === 'deck_skills')).toEqual([{ server: SERVER, tool: 'deck_skills', args: {} }])
+  const lines = await texts(ui)
+  expect(lines).toContain('Skill Source  目录 ~/.claude/skills')
+  expect(lines).toContain('通用入口')
+  expect(lines).toContain('技能 3')
+  expect((await ui.findAll({ type: 'Button', text: /^\// })).map(row => [row.key, row.text])).toEqual([
+    ['skill:ask-matt', '/ask-matt               问下一步该做什么。'],
+    ['skill:implement', '/implement               开始做一个 Task。'],
+    ['skill:tdd', '/tdd                  先写测试，再写实现。'],
+    ['skill:wayfinder', '/wayfinder      为不清晰的大工作建立 Map。'],
+  ])
+  // The command name in the colour of commands; the focus lands on the first.
+  expect((await ui.find({ type: 'Text', text: '/implement' }))?.props.color).toBe('suggestion')
+  expect((await ui.find({ key: 'skill:ask-matt' }))?.props.autoFocus).toBe(true)
+  // The action bar is about /ask-matt.
+  expect(await texts(ui, 'Box')).toContain('/ask-matt预填  原文')
+  await ui.unmount()
+})
+
+test('o shows a skill\'s file as written under the way back, and b goes back to its row', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: DIRECTORY, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:skills' })
+  await focus($, 'skill:tdd')
+
+  await ui.press({ key: 'open' })
+  await seen.clock.settle()
+
+  expect(seen.calls.at(-1)).toEqual({ server: SERVER, tool: 'deck_skill', args: { name: 'tdd' } })
+  expect(await ui.find({ key: 'skill:tdd' })).toBeUndefined()
+  expect(await ui.find({ key: 'tab:skills' })).toBeDefined()
+  expect(await texts(ui, 'Box')).toContain('返回  技能 / /tdd预填')
+  // The command name bold, in the colour of commands.
+  const title = (await ui.findAll({ type: 'Text', text: '/tdd' })).find(found => found.text === '/tdd' && found.props.bold)
+  expect(title?.props.color).toBe('suggestion')
+  expect(await texts(ui)).toContain('~/.claude/skills/tdd/SKILL.md')
+  expect((await ui.find({ type: 'Markdown' }))?.props.text).toBe('# tdd\n\n原文。\n')
+
+  await ui.press({ key: 'back' })
+
+  expect(await ui.find({ key: 'back' })).toBeUndefined()
+  expect(await ui.find({ key: 'skill:tdd' })).toBeDefined()
+  expect(await texts(ui, 'Box')).toContain('/tdd预填  原文')
+  await ui.unmount()
+})
+
+test('above the prompt the skills tab is four rows, and a skill\'s text grows the pane and gives the rows back', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: DIRECTORY, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  await ui.press({ key: 'tab:skills' })
+
+  const boxes = await texts(ui, 'Box')
+  expect(boxes).toContain('/ask-matt  问下一步该做什么。预填  原文')
+  expect(boxes).toContain('/ask-matt   /implement   /tdd   /wayfinderSkill Source 目录 ~/.claude/skills')
+  expect(seen.openedRows).toEqual([4])
+
+  await focus($, 'skill:implement')
+  await ui.press({ key: 'open' })
+  await seen.clock.settle()
+  expect(seen.openedRows).toEqual([4, undefined])
+  expect(await texts(ui, 'Box')).toContain('返回  技能 / /implement预填')
+
+  await ui.press({ key: 'back' })
+  expect(seen.openedRows).toEqual([4, undefined, 4])
+  expect(await texts(ui, 'Box')).toContain('/implement  开始做一个 Task。预填  原文')
+  await ui.unmount()
+})
+
+// A plugin Skill Source: its skills are called with the plugin's prefix.
+const PLUGIN_SKILLS: Answer = {
+  isError: false,
+  structuredContent: {
+    ok: true,
+    source: { type: 'plugin', name: 'mattpocock-skills' },
+    skills: [
+      { ...SKILL('tdd', '先写测试，再写实现。'), call: '/mattpocock-skills:tdd' },
+      { ...SKILL('ask-matt', '问下一步该做什么。'), call: '/mattpocock-skills:ask-matt' },
+    ],
+  },
+}
+
+test('e puts the skill\'s call in an empty prompt box for the person to send', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, skills: () => PLUGIN_SKILLS })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:skills' })
+
+  // From the list, on the row the action bar is about.
+  await focus($, 'skill:tdd')
+  await ui.press({ key: 'prefill' })
+  await seen.clock.settle()
+  // And from a skill's text.
+  await ui.press({ key: 'skill:ask-matt' })
+  await seen.clock.settle()
+  await ui.press({ key: 'prefill' })
+  await seen.clock.settle()
+
+  expect(seen.filled).toEqual([
+    { text: '/mattpocock-skills:tdd ', mode: 'replace' },
+    { text: '/mattpocock-skills:ask-matt ', mode: 'replace' },
+  ])
+  expect(seen.toasts).toEqual([])
+  await ui.unmount()
+})
+
+test('e leaves a draft in the prompt box as it is and says so', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: DIRECTORY, isError: false }, draft: '先看一下 #7 的' })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:skills' })
+
+  await ui.press({ key: 'prefill' })
+  await seen.clock.settle()
+
+  expect(seen.filled).toEqual([])
+  expect(seen.copied).toEqual([])
+  expect(seen.toasts).toEqual(['输入框里已有草稿，没有覆盖。清空后再按 e：/ask-matt'])
+  await ui.unmount()
+})
+
+test('where the host cannot fill the prompt box, e copies the call to the clipboard and says so', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: DIRECTORY, isError: false }, canFill: false })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:skills' })
+
+  await ui.press({ key: 'prefill' })
+  await seen.clock.settle()
+
+  expect(seen.copied).toEqual(['/ask-matt'])
+  expect(seen.toasts).toEqual(['不能预填输入框，已复制到剪贴板：/ask-matt'])
+  await ui.unmount()
+})
+
+test('a Skill Source that is not there, or holds no skill, says why in place of the list', async ($, on) => {
+  const answers: Answer[] = [
+    {
+      isError: false,
+      structuredContent: { ok: false, failure: { kind: 'missing', message: 'the directory ~/.claude/skills does not exist' } },
+    },
+    { isError: false, structuredContent: { ok: true, source: { type: 'directory', path: '~/.claude/skills' }, skills: [] } },
+  ]
+  let answer = answers[0]!
+  const seen = engine(on, { config: { structuredContent: DIRECTORY, isError: false }, skills: () => answer })
+  await start($)
+  await seen.clock.settle()
+
+  for (const target of [PANE_TARGET, INLINE]) {
+    const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+    await ui.press({ key: 'tab:skills' })
+    expect(await texts(ui)).toContain('✕ 读取技能失败')
+    expect(await texts(ui)).toContain('Skill Source 不存在。运行 /matt-deck:configure 重新选定。')
+    expect(await ui.find({ key: 'prefill' })).toBeUndefined()
+    await ui.unmount()
+  }
+
+  // r reads the skills again.
+  answer = answers[1]!
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'refresh' })
+  await seen.clock.settle()
+  expect(await texts(ui)).toContain('Skill Source  目录 ~/.claude/skills')
+  expect(await texts(ui)).toContain('Skill Source 里没有技能。')
+  await ui.unmount()
+})
+
+test('skills more than the pane holds turn pages of their own, apart from the tasks tab\'s', async ($, on) => {
+  const many: Answer = {
+    isError: false,
+    structuredContent: {
+      ok: true,
+      source: { type: 'directory', path: '~/.claude/skills' },
+      skills: [SKILL('ask-matt', '问下一步该做什么。'), ...Array.from({ length: 12 }, (_, i) => SKILL(`skill-${i + 10}`, `第 ${i + 10} 个。`))],
+    },
+  }
+  const seen = engine(on, { config: { structuredContent: DIRECTORY, isError: false }, skills: () => many })
+  await start($)
+  await seen.clock.settle()
+  const short = { ...PANE_TARGET, props: { ...PANE_TARGET.props, scroll: { offset: 0, bodyRows: 14 } } }
+  const ui = await $.ui.mount({ ...short, surface: 'terminal' })
+  await ui.press({ key: 'tab:skills' })
+
+  const rowsShown = async () => (await ui.findAll({ type: 'Button', text: /^\// })).map(row => row.key)
+  expect(await rowsShown()).toEqual(['skill:ask-matt', 'skill:skill-10', 'skill:skill-11'])
+  await ui.press({ key: 'page:next' })
+  expect((await rowsShown())[0]).toBe('skill:skill-12')
+  expect(await texts(ui, 'Box')).toContain('/skill-12预填  原文')
+
+  await ui.press({ key: 'tab:tasks' })
+  expect(await ui.find({ key: 'page:prev' })).toBeUndefined()
+  await ui.press({ key: 'tab:skills' })
+  expect(await ui.find({ key: 'page:prev' })).toBeDefined()
   await ui.unmount()
 })

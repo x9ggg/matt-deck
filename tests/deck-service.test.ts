@@ -843,3 +843,135 @@ test('deck_task says why the Task cannot be read, and takes only a Task number',
   // Only the one read reached gh.
   assert.equal((await gh.calls()).length, 1)
 })
+
+// A skill file with the frontmatter Matt skills carry, and a body.
+const skillFile = async (dir: string, name: string, description: string, body = `# ${name}\n`) => {
+  await mkdir(join(dir, name), { recursive: true })
+  await writeFile(join(dir, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}`)
+}
+
+// A workspace configured with `skillSource`, and a home to hold it.
+const withSkillSource = async (skillSource: object) => {
+  const user = await home()
+  const dir = await workspace(JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource }))
+
+  return { dir, user }
+}
+
+test('deck_skills lists the skills of a directory Skill Source, each with its call and description', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  const skills = join(user, '.claude', 'skills')
+  await skillFile(skills, 'tdd', '先写测试，再写实现。')
+  await skillFile(skills, 'ask-matt', '问下一步该做什么。')
+  await skillFile(skills, 'implement', '"开始做一个 Task。"')
+  // A directory holding no skill file is no skill.
+  await mkdir(join(skills, 'notes'))
+  const deck = startDeck(dir, { HOME: user })
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_skills')
+
+  assert.equal(result.isError, false)
+  assert.deepEqual(result.structuredContent, {
+    ok: true,
+    source: { type: 'directory', path: '~/.claude/skills' },
+    skills: [
+      { name: 'ask-matt', call: '/ask-matt', description: '问下一步该做什么。', path: '~/.claude/skills/ask-matt/SKILL.md' },
+      { name: 'implement', call: '/implement', description: '开始做一个 Task。', path: '~/.claude/skills/implement/SKILL.md' },
+      { name: 'tdd', call: '/tdd', description: '先写测试，再写实现。', path: '~/.claude/skills/tdd/SKILL.md' },
+    ],
+  })
+})
+
+test('deck_skills calls the skills of a plugin Skill Source with the plugin prefix, from every folder of it', async t => {
+  const { dir, user } = await withSkillSource({ type: 'plugin', name: 'mattpocock-skills' })
+  const matt = join(user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
+  await skillFile(join(matt, 'skills', 'engineering'), 'tdd', '先写测试，再写实现。')
+  await skillFile(join(matt, 'skills', 'productivity'), 'ask-matt', '问下一步该做什么。')
+  // The same plugin installed for another project only is not the one used.
+  const elsewhere = join(user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '0.9.0')
+  await skillFile(join(elsewhere, 'skills'), 'old', '旧版。')
+  await installedPlugins(user, {
+    'mattpocock-skills@official': [
+      { scope: 'project', projectPath: '/somewhere/else', installPath: elsewhere },
+      { scope: 'user', installPath: matt },
+    ],
+  })
+  const deck = startDeck(dir, { HOME: user })
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_skills')
+
+  const base = '~/.claude/plugins/cache/official/mattpocock-skills/1.3.1/skills'
+  assert.deepEqual(result.structuredContent, {
+    ok: true,
+    source: { type: 'plugin', name: 'mattpocock-skills' },
+    skills: [
+      { name: 'tdd', call: '/mattpocock-skills:tdd', description: '先写测试，再写实现。', path: `${base}/engineering/tdd/SKILL.md` },
+      {
+        name: 'ask-matt',
+        call: '/mattpocock-skills:ask-matt',
+        description: '问下一步该做什么。',
+        path: `${base}/productivity/ask-matt/SKILL.md`,
+      },
+    ],
+  })
+})
+
+test('deck_skills says why when the Skill Source is not there, and lists none when it is empty', async t => {
+  const missingDir = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  const missingPlugin = await withSkillSource({ type: 'plugin', name: 'mattpocock-skills' })
+  const empty = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  await mkdir(join(empty.user, '.claude', 'skills'), { recursive: true })
+  const decks = [missingDir, missingPlugin, empty].map(({ dir, user }) => startDeck(dir, { HOME: user }))
+  for (const deck of decks) {
+    t.after(deck.stop)
+  }
+
+  const [a, b, c] = await Promise.all(decks.map(deck => deck.callTool('deck_skills')))
+
+  assert.deepEqual(a.structuredContent, {
+    ok: false,
+    failure: { kind: 'missing', message: 'the directory ~/.claude/skills does not exist' },
+  })
+  assert.deepEqual(b.structuredContent, {
+    ok: false,
+    failure: { kind: 'missing', message: 'the plugin mattpocock-skills is not installed' },
+  })
+  assert.deepEqual(c.structuredContent, { ok: true, source: { type: 'directory', path: '~/.claude/skills' }, skills: [] })
+})
+
+test('deck_skill reads one skill\'s file under its frontmatter, and says so of a name it does not hold', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  const skills = join(user, '.claude', 'skills')
+  const body = '# 问 Matt\n\n读当前的 Task，给出下一步。\n\n```sh\ngh issue list\n```\n'
+  await skillFile(skills, 'ask-matt', '问下一步该做什么。', body)
+  const before = await readFile(join(skills, 'ask-matt', 'SKILL.md'), 'utf8')
+  const deck = startDeck(dir, { HOME: user })
+  t.after(deck.stop)
+
+  const found = await deck.callTool('deck_skill', { name: 'ask-matt' })
+  const unknown = await deck.callTool('deck_skill', { name: 'wayfinder' })
+  const malformed = await Promise.all([{}, { name: '' }, { name: 3 }].map(args => deck.callTool('deck_skill', args)))
+
+  assert.deepEqual(found.structuredContent, {
+    ok: true,
+    skill: {
+      name: 'ask-matt',
+      call: '/ask-matt',
+      description: '问下一步该做什么。',
+      path: '~/.claude/skills/ask-matt/SKILL.md',
+      text: body,
+    },
+  })
+  assert.deepEqual(unknown.structuredContent, {
+    ok: false,
+    failure: { kind: 'unknown-skill', message: 'the Skill Source has no skill named wayfinder' },
+  })
+  assert.deepEqual(
+    malformed.map(result => result.isError),
+    [true, true, true],
+  )
+  // Reading changes no skill file.
+  assert.equal(await readFile(join(skills, 'ask-matt', 'SKILL.md'), 'utf8'), before)
+})

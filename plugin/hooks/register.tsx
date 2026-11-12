@@ -1,16 +1,20 @@
 // The Claude Code host adapter: the Pane and its command. It holds no task
 // logic; everything about the project comes from the Deck service.
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
 import type {
   ConfigView,
   DeckConfigAnswer,
+  DeckSkillAnswer,
+  DeckSkillsAnswer,
   DeckTaskAnswer,
   DeckTasksAnswer,
   DetailView,
   Filter,
   Nav,
+  SkillsView,
+  SkillTextView,
   Tab,
   TasksView,
   View,
@@ -37,8 +41,16 @@ const FILTERS: Filter[] = ['all', 'ready', 'inProgress', 'blocked', 'done']
 
 const view = atom(
   { plugin: 'matt-deck', key: 'view' } as const,
-  { sessionId: '', config: { status: 'loading' }, tasks: { status: 'loading' }, details: {}, checkedAt: 0 } as View,
-  { shape: 'view-3' },
+  {
+    sessionId: '',
+    config: { status: 'loading' },
+    tasks: { status: 'loading' },
+    details: {},
+    skills: { status: 'loading' },
+    skillTexts: {},
+    checkedAt: 0,
+  } as View,
+  { shape: 'view-4' },
 )
 
 const nav = atom({ plugin: 'matt-deck', key: 'nav' } as const, { tab: 'tasks', filter: 'all', page: 0 } as Nav, {
@@ -114,6 +126,63 @@ const loadTask = async ($: EngineInterface, number: number) => {
   await update($, view, current => ({ ...current, details: { ...current.details, [number]: detail } }))
 }
 
+// Reads the skills of the Skill Source from the Deck service.
+const loadSkills = async ($: EngineInterface) => {
+  const deck = await $.mcp.connect('deck')
+  let answer: DeckSkillsAnswer
+  if (!deck.isConnected) {
+    answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
+  } else {
+    const result = await $.mcp.call(deck.server, 'deck_skills', {})
+    answer = result.isError
+      ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
+      : JSON.parse(result.content[0]!.text!)
+  }
+  const skills: SkillsView = answer.ok
+    ? { status: 'loaded', skills: answer.skills }
+    : { status: 'failed', failure: answer.failure }
+  await update($, view, current => ({ ...current, skills }))
+}
+
+// Reads one skill's text from the Deck service. A text read before stays in
+// sight until the new read answers.
+const loadSkillText = async ($: EngineInterface, name: string) => {
+  await update($, view, current =>
+    current.skillTexts[name] === undefined
+      ? { ...current, skillTexts: { ...current.skillTexts, [name]: { status: 'loading' } as SkillTextView } }
+      : current,
+  )
+  const deck = await $.mcp.connect('deck')
+  let answer: DeckSkillAnswer
+  if (!deck.isConnected) {
+    answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
+  } else {
+    const result = await $.mcp.call(deck.server, 'deck_skill', { name })
+    answer = result.isError
+      ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
+      : JSON.parse(result.content[0]!.text!)
+  }
+  const text: SkillTextView = answer.ok
+    ? { status: 'loaded', skill: answer.skill }
+    : { status: 'failed', failure: answer.failure }
+  await update($, view, current => ({ ...current, skillTexts: { ...current.skillTexts, [name]: text } }))
+}
+
+// Puts `text` in the prompt box for the person to send. A draft there is
+// never overwritten: the person is told instead. Where the host cannot fill
+// the box, the text goes on the clipboard.
+const prefill = async ($: EngineInterface, text: string, surface: RenderSurface) => {
+  if ((await $.prompt.read()).text.trim() !== '') {
+    $.ui.toast(`输入框里已有草稿，没有覆盖。清空后再按 e：${text}`)
+    return
+  }
+  if ((await $.prompt.fill({ text: `${text} ` })).isFilled) {
+    return
+  }
+  const copied = await $.ui.copy({ text, surface })
+  $.ui.toast(copied.isCopied ? `不能预填输入框，已复制到剪贴板：${text}` : `不能预填输入框，也没能复制：${text}`)
+}
+
 const isConfigured = async ($: EngineInterface) => (await read($, view)).config.status === 'configured'
 
 export const register: Register = on => {
@@ -133,6 +202,7 @@ export const register: Register = on => {
     // The Tasks are read off the session's start, so it does not wait on gh.
     if (config.status === 'configured') {
       $.clock.after(0, () => void loadTasks($, false))
+      $.clock.after(0, () => void loadSkills($))
       $.clock.every(POLL_MS, () => void loadTasks($, false))
     }
 
@@ -190,7 +260,7 @@ export const register: Register = on => {
   // while the focus is elsewhere.
   on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     const moved = await next(e)
-    if (moved.deny === undefined && e.element?.startsWith('task:')) {
+    if (moved.deny === undefined && (e.element?.startsWith('task:') || e.element?.startsWith('skill:'))) {
       await update($, nav, current => ({ ...current, focus: e.element }))
     }
 
@@ -221,21 +291,25 @@ export const register: Register = on => {
         ...current,
         tab,
         detail: undefined,
+        skill: undefined,
         switching: false,
         mapPage: 0,
       }))
       // Above the prompt the map tab is as tall as a detail.
-      const wasTall = before.detail !== undefined || before.tab === 'map'
+      const wasTall = before.detail !== undefined || before.skill !== undefined || before.tab === 'map'
       if (isInline && wasTall !== (tab === 'map')) {
         await $.ui.open(tab === 'map' ? DETAIL_OPEN : LIST_OPEN)
       }
-      if (before.detail !== undefined && tab === before.detail.from) {
+      if ((before.detail !== undefined && tab === before.detail.from) || (before.skill !== undefined && tab === 'skills')) {
         await moveFocus(left.focus)
       }
     }
 
     return drawPane($.ui.resolve(e), e.props, await read($, view), await read($, nav), {
-      refresh: () => void loadTasks($, true),
+      refresh: () => {
+        void loadTasks($, true)
+        void loadSkills($)
+      },
       showTab: tab => void showTab(tab),
       // Drills into a Task: from the list's row, which the focus goes back
       // to, or on from the detail shown.
@@ -263,6 +337,21 @@ export const register: Register = on => {
             await toList(after.tab, after.focus)
           }
         })(),
+      // Drills into a skill's text from its row, which the focus goes back to.
+      openSkill: name =>
+        void (async () => {
+          await update($, nav, current => ({ ...current, focus: `skill:${name}`, skill: name }))
+          if (isInline) {
+            await $.ui.open(DETAIL_OPEN)
+          }
+          await loadSkillText($, name)
+        })(),
+      closeSkill: () =>
+        void (async () => {
+          const after = await update($, nav, current => ({ ...current, skill: undefined }))
+          await toList('skills', after.focus)
+        })(),
+      prefill: text => void prefill($, text, e.surface),
       cycleFilter: () =>
         void update($, nav, current => ({
           ...current,
@@ -278,7 +367,7 @@ export const register: Register = on => {
         void (async () => {
           await update($, nav, current => ({
             ...current,
-            ...(current.tab === 'map' ? { mapPage: page } : { page }),
+            ...(current.tab === 'map' ? { mapPage: page } : current.tab === 'skills' ? { skillsPage: page } : { page }),
             ...(key === undefined || key.startsWith('switch:') ? {} : { focus: key }),
           }))
           await moveFocus(key)

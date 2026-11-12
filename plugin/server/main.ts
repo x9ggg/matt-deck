@@ -10,7 +10,9 @@ import { createInterface } from 'node:readline'
 
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
 import { surveySetup } from '../kernel/setup.ts'
+import { listSkills, readSkill, SkillSourceError } from '../kernel/skills.ts'
 import { githubIssues, listTasks, readTask, TaskSourceError } from '../kernel/tasks.ts'
+import type { ProjectConfig } from '../kernel/config.ts'
 import type { TaskList, TaskListFailure } from '../kernel/tasks.ts'
 
 // The Workspace is the checkout the service was started in: the nearest
@@ -38,6 +40,26 @@ type ToolResult = {
   content: { type: 'text'; text: string }[]
   structuredContent?: object
   isError: boolean
+}
+
+// Answers from the Skill Source of the project config. A Skill Source that
+// cannot be read is an answer the caller shows, not a broken tool.
+const skillAnswer = async (read: (source: ProjectConfig['skillSource']) => Promise<object>): Promise<ToolResult> => {
+  const project = await readProjectConfig(workspace)
+  if (!project.configured) {
+    throw new Error('This workspace is not a Configured Project: .matt-deck/config.json does not exist')
+  }
+  let answer: object
+  try {
+    answer = { ok: true, ...(await read(project.config.skillSource)) }
+  } catch (error: any) {
+    if (!(error instanceof SkillSourceError)) {
+      throw error
+    }
+    answer = { ok: false, failure: { kind: error.kind, message: error.message } }
+  }
+
+  return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
 }
 
 const tools = {
@@ -110,6 +132,29 @@ const tools = {
       }
 
       return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
+    },
+  },
+  deck_skills: {
+    description:
+      'List the skills of this project\'s Skill Source: each one\'s name, how this Session calls it, its description and its file. Reads only; no skill file is changed.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    run: async (): Promise<ToolResult> => {
+      return skillAnswer(async source => ({ source, skills: await listSkills(source, workspace, homedir()) }))
+    },
+  },
+  deck_skill: {
+    description: 'Read one skill of this project\'s Skill Source by its name: its call, its file and the text of the file under its frontmatter.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string', minLength: 1, description: 'The skill\'s name, as deck_skills lists it.' } },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    run: async ({ name }: any): Promise<ToolResult> => {
+      if (typeof name !== 'string' || name === '') {
+        return { content: [{ type: 'text', text: 'deck_skill takes the name of a skill' }], isError: true }
+      }
+      return skillAnswer(async source => ({ skill: await readSkill(source, workspace, homedir(), name) }))
     },
   },
   deck_setup_survey: {

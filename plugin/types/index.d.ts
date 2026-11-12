@@ -71,6 +71,37 @@ export type TaskDetail = {
 // What `deck_task` answers.
 export type DeckTaskAnswer = { ok: true; task: TaskDetail } | { ok: false; failure: TaskFailure }
 
+// A skill of the Skill Source as `deck_skills` lists it: `call` is how this
+// Session invokes it, `path` its file.
+export type Skill = { name: string; call: string; description: string; path: string }
+
+// Why the skills could not be read: the kernel's reasons, or the Deck
+// service itself failing.
+export type SkillFailure = {
+  kind: 'missing' | 'unknown-skill' | 'failed' | 'unreachable'
+  message: string
+}
+
+// What `deck_skills` answers.
+export type DeckSkillsAnswer = { ok: true; source: SkillSource; skills: Skill[] } | { ok: false; failure: SkillFailure }
+
+// A skill with the text of its file, as `deck_skill` reads it.
+export type SkillText = Skill & { text: string }
+
+// What `deck_skill` answers.
+export type DeckSkillAnswer = { ok: true; skill: SkillText } | { ok: false; failure: SkillFailure }
+
+// The skills as last read, and one skill's text as last read.
+export type SkillsView =
+  | { status: 'loading' }
+  | { status: 'loaded'; skills: Skill[] }
+  | { status: 'failed'; failure: SkillFailure }
+
+export type SkillTextView =
+  | { status: 'loading' }
+  | { status: 'loaded'; skill: SkillText }
+  | { status: 'failed'; failure: SkillFailure }
+
 // One Task's detail as last read: still asking, read, or why not.
 export type DetailView =
   | { status: 'loading' }
@@ -99,6 +130,9 @@ export type View = {
   tasks: TasksView
   // Each Task's detail as last read, by number.
   details: Record<number, DetailView>
+  skills: SkillsView
+  // Each skill's text as last read, by name.
+  skillTexts: Record<string, SkillTextView>
   // When the Tasks were last asked for: how old they are is told from it.
   checkedAt: number
 }
@@ -112,7 +146,8 @@ export type Filter = 'all' | Group
 // `from` drilled into, after the Tasks drilled through on the way, the last
 // one shown. `page` is the tasks tab's page; `map` the Spec or Map the map
 // tab shows, `switching` whether it lists them to switch, `mapPage` the page
-// of what it shows.
+// of what it shows. `skill` is the skill the skills tab drilled into, and
+// `skillsPage` that tab's page.
 export type Nav = {
   tab: Tab
   filter: Filter
@@ -122,6 +157,8 @@ export type Nav = {
   map?: number
   switching?: boolean
   mapPage?: number
+  skill?: string
+  skillsPage?: number
 }
 
 declare module 'claude-code' {
