@@ -27,8 +27,10 @@ for (let dir = workspace; ; dir = dirname(dir)) {
   }
 }
 
-// The last read of the Task Source, answered again for this long so that a
-// burst of reads (a turn's end, a deck tool, the Pane's timer) runs `gh` once.
+// The last read of the Task Source, answered again for this long to a read
+// that does not ask for a fresh one. A read that fails empties it: the read
+// after it reaches the Task Source again instead of answering with what was
+// read before the failure.
 const TASKS_CACHE_MS = 15_000
 let cachedTasks: TaskList | undefined
 
@@ -72,6 +74,7 @@ const tools = {
           if (!(error instanceof TaskSourceError)) {
             throw error
           }
+          cachedTasks = undefined
           // A Task Source that cannot be read is an answer, not a broken
           // tool: the caller shows why.
           const failed: TaskListFailure = { ok: false, failure: { kind: error.kind, message: error.message } }

@@ -604,6 +604,22 @@ test('deck_tasks reads the Task Source once for a burst of reads, and again when
   assert.deepEqual(calls[0]!.args.slice(0, 2), ['api', 'graphql'])
 })
 
+test('deck_tasks does not answer from its cache after a read that failed', async t => {
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  await deck.callTool('deck_tasks')
+  await gh.answer({ exitCode: 1, stderr: 'error connecting to api.github.com\n' })
+  const refreshed = await deck.callTool('deck_tasks', { refresh: true })
+  const after = await deck.callTool('deck_tasks')
+
+  assert.equal(refreshed.structuredContent.ok, false)
+  assert.equal(after.structuredContent.ok, false)
+  assert.equal(after.structuredContent.failure.kind, 'offline')
+})
+
 test('deck_tasks reads every page of issues', async t => {
   const gh = await fakeGh()
   const page = (nodes: object[], hasNextPage: boolean) => ({

@@ -257,6 +257,23 @@ export const drawPane = (
     </Button>
   )
 
+  // The reason of a failed read in rows of the docked box's inner width,
+  // broken at spaces here and not by the engine, so that the pages under the
+  // box know its height. A word wider than the box is cut where it is drawn.
+  const reasonRows = (failure: TaskFailure) => {
+    const reason: string[] = []
+    for (const word of FAILURE[failure.kind](failure.message).split(/\s+/)) {
+      const row = reason.at(-1)
+      if (row !== undefined && width(row) + 1 + width(word) <= columns - 2) {
+        reason[reason.length - 1] = `${row} ${word}`
+      } else {
+        reason.push(word)
+      }
+    }
+
+    return reason
+  }
+
   const failureBox = (failure: TaskFailure) =>
     isInline ? (
       <Box flexDirection="column">
@@ -266,7 +283,9 @@ export const drawPane = (
     ) : (
       <Box borderStyle="single" borderColor="error" flexDirection="column">
         <Text color="error">✕ 读取 Task 失败</Text>
-        <Text>{FAILURE[failure.kind](failure.message)}</Text>
+        {reasonRows(failure).map(row => (
+          <Text wrap="truncate-end">{row}</Text>
+        ))}
       </Box>
     )
 
@@ -280,6 +299,15 @@ export const drawPane = (
   // is listed.
   const focused = rows.find(row => row.key === nav.focus) ?? landing
 
+  // A Spec's or Map's Child Tasks by group, as the action bar writes them
+  // where a Task has its triage label.
+  const childCountItems = (container: Container) =>
+    childCounts(list!, container).flatMap(({ group, count }, index) => [
+      ...(index > 0 ? [<Text>{'  '}</Text>] : []),
+      glyph(group),
+      <Text> {count}</Text>,
+    ])
+
   // What the action bar says of a row before its actions: a Task's triage
   // label, a Spec's or Map's Child Tasks by group.
   const actionBar = (row: Row) => {
@@ -287,11 +315,7 @@ export const drawPane = (
       return (
         <Box flexDirection="row">
           <Text>{numbered(row.container.number)}</Text>
-          {childCounts(list!, row.container).flatMap(({ group, count }, index) => [
-            ...(index > 0 ? [<Text>{'  '}</Text>] : []),
-            glyph(group),
-            <Text> {count}</Text>,
-          ])}
+          {childCountItems(row.container)}
         </Box>
       )
     }
@@ -305,16 +329,16 @@ export const drawPane = (
   }
 
   // Inline, the action bar names the row as well: glyph, number, title,
-  // status, then what the docked one says.
+  // status, then what the docked one says after the number.
   const inlineActionBar = (row: Row) => {
     if ('container' in row) {
       const { container } = row
       const head = `${container.kind === 'spec' ? 'Spec' : 'Map'} #${container.number} `
       const tail = `   ${progressText(container)}   `
       const countsWidth = width(
-        `${numbered(container.number)}${childCounts(list!, container)
+        childCounts(list!, container)
           .map(({ group, count }) => `${GLYPH[group]} ${count}`)
-          .join('  ')}`,
+          .join('  '),
       )
 
       return (
@@ -326,7 +350,7 @@ export const drawPane = (
             {cut(container.title, columns - 2 - width(head) - width(tail) - countsWidth)}
             {tail}
           </Text>
-          {actionBar(row)}
+          {childCountItems(container)}
         </Box>
       )
     }
@@ -490,8 +514,10 @@ export const drawPane = (
       }
     }
     // Room under the fixed rows: top two, tabs, rule, filter, action bar and
-    // the blank line under it.
-    const room = Math.max(3, props.scroll.bodyRows - 7)
+    // the blank line under it; and under the reason of a failed read, which
+    // is its rows, its title and its border.
+    const failureRows = tasks.status === 'failed' ? reasonRows(tasks.failure).length + 3 : 0
+    const room = Math.max(3, props.scroll.bodyRows - 7 - failureRows)
     const heightOf = (unit: Unit, isFirst: boolean) => unit.lines.length - (isFirst && unit.blankFirst ? 1 : 0)
     const pages: Unit[][] = [[]]
     const allHeight = units.reduce((sum, unit, index) => sum + heightOf(unit, index === 0), 0)
@@ -553,7 +579,12 @@ export const drawPane = (
       return failureBox(tasks.failure)
     }
     if (list === undefined) {
-      return <Text color="inactive">正在读取 Task…</Text>
+      return (
+        <Box flexDirection="column">
+          <Text color="inactive">正在读取 Task…</Text>
+          <Text> </Text>
+        </Box>
+      )
     }
     const filterWidth = 3 + (nav.filter === 'all' ? width(`全部 ${total}`) : 2 + String(counts[nav.filter]).length)
     if (rows.length === 0) {
@@ -637,10 +668,12 @@ export const drawPane = (
 
   if (isInline) {
     // The top and the counts in one row, giving up what does not fit: the
-    // words after the counts, the Session, the freshness.
+    // words after the counts, the Session, the freshness. A failed read
+    // leaves the row without counts, with a list read before it or not.
+    const hasCounts = list !== undefined && tasks.status !== 'failed'
     const right = width(freshness.text) + 2 + 7
     const countsText = (words: boolean) =>
-      list === undefined
+      !hasCounts
         ? ''
         : `   ${GROUPS.slice(0, 3)
             .map(group => `${GLYPH[group]} ${counts[group]}${words ? ` ${GROUP_TITLE[group]}` : ''}`)
@@ -665,7 +698,7 @@ export const drawPane = (
               {project}
             </Text>
             {withSession && <Text> · {session}</Text>}
-            {list !== undefined &&
+            {hasCounts &&
               GROUPS.map(group => (
                 <Box flexDirection="row">
                   <Text>{group === 'ready' ? '   ' : '  '}</Text>

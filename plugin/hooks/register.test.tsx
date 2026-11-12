@@ -430,26 +430,28 @@ test('the pane reads the Tasks again on its timer, after a turn, after a deck to
   expect(reads()).toEqual([{}, {}])
   expect(await ui.find({ type: 'Button', text: /^◆ #3 / })).toBeDefined()
 
-  // The end of one of this Session's turns.
+  // The end of one of this Session's turns: the turn may have changed the
+  // Tasks a moment ago, so the read goes past the Deck service's cache.
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
   await seen.clock.settle()
-  expect(reads()).toEqual([{}, {}, {}])
+  expect(reads()).toEqual([{}, {}, { refresh: true }])
   // A subagent's turn is not this Session's.
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer', agentId: 'a1' })
   await seen.clock.settle()
-  expect(reads()).toEqual([{}, {}, {}])
+  expect(reads()).toEqual([{}, {}, { refresh: true }])
 
-  // A deck tool the agent called; another tool is not one.
+  // A deck tool the agent called, past the cache as well; another tool is
+  // not one.
   await $.tool.call({ tool: 'mcp__plugin_matt-deck_deck__deck_config' })
   await seen.clock.settle()
-  expect(reads()).toEqual([{}, {}, {}, {}])
+  expect(reads()).toEqual([{}, {}, { refresh: true }, { refresh: true }])
   await $.tool.call({ tool: 'mcp__github__issue_read' })
   await seen.clock.settle()
-  expect(reads()).toEqual([{}, {}, {}, {}])
+  expect(reads()).toEqual([{}, {}, { refresh: true }, { refresh: true }])
 
   // r reads past the Deck service's cache.
   await ui.press({ key: 'refresh' })
-  expect(reads()).toEqual([{}, {}, {}, {}, { refresh: true }])
+  expect(reads()).toEqual([{}, {}, { refresh: true }, { refresh: true }, { refresh: true }])
   await ui.unmount()
 })
 
@@ -491,7 +493,8 @@ for (const { answer, says } of FAILURES) {
       const ui = await $.ui.mount({ ...target, surface: 'terminal' })
       const lines = await texts(ui)
       expect(lines).toContain('✕ 读取 Task 失败')
-      expect(lines).toContain(says)
+      // Docked, the reason is broken at spaces into rows of the box's width.
+      expect(lines.join(' ')).toContain(says)
       expect(lines).toContain('读取失败')
       expect(lines).not.toContain('Task Source 里还没有 Task。')
       await ui.unmount()
@@ -511,6 +514,76 @@ test('a failed read keeps the list read before it, under the reason', async ($, 
 
   expect(await texts(ui)).toContain('连不上 GitHub。检查网络后按 r 重试。')
   expect(await ui.find({ type: 'Button', text: /^◇ #3 / })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the reason of a failed read takes its rows from the list under it, which turns pages sooner', async ($, on) => {
+  let answer: Answer = manyBlocked(11)
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  // Thirteen rows under the fixed seven: the eleven blocked Tasks fit.
+  const ui = await $.ui.mount({
+    ...PANE_TARGET,
+    props: { ...PANE_TARGET.props, scroll: { offset: 0, bodyRows: 20 } },
+    surface: 'terminal',
+  })
+  await ui.press({ key: 'filter' })
+  await ui.press({ key: 'filter' })
+  await ui.press({ key: 'filter' })
+  const rows = async () => (await ui.findAll({ type: 'Button', text: /^□ / })).length
+  expect(await rows()).toBe(11)
+  expect(await ui.find({ key: 'page:next' })).toBeUndefined()
+
+  // The reason is two rows in a box 40 columns wide inside, five with its
+  // title and border: eight are left, one of them for the way on.
+  answer = failed('unauthenticated')
+  await ui.press({ key: 'refresh' })
+
+  const lines = await texts(ui)
+  expect(lines).toContain('gh 未登录。运行 gh auth login 后按 r')
+  expect(lines).toContain('重试。')
+  expect(await rows()).toBe(7)
+  expect((await ui.find({ key: 'page:next' }))?.text).toBe('  还有 4 个')
+  await ui.unmount()
+})
+
+test('above the prompt a failed read leaves the first row without counts, even with a list read before', async ($, on) => {
+  let answer: Answer = PROJECT
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+
+  answer = failed('offline', 'error connecting to api.github.com')
+  await ui.press({ key: 'refresh' })
+
+  expect(await texts(ui, 'Box')).toContain('shop · a1b2c3d4读取失败  刷新')
+  await ui.unmount()
+})
+
+test('above the prompt the pane is four rows while the Tasks are being read', async ($, on) => {
+  engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+
+  // Under the top and the tabs: the notice, then a blank row.
+  const lines = await texts(ui)
+  expect(lines.slice(lines.indexOf('正在读取 Task…'))).toEqual(['正在读取 Task…', ' '])
+  await ui.unmount()
+})
+
+test('above the prompt the action bar names a Spec once, then its progress and its Child Tasks by group', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+
+  await focus($, 'task:1')
+
+  expect(await texts(ui, 'Box')).toContain(
+    '◇ Spec #1 规格：里程碑一，Claude Code 上的 Matt Deck 闭环   1/4   ◇ 1  ▶ 0  □ 2  ◆ 1',
+  )
   await ui.unmount()
 })
 

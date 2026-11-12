@@ -100,11 +100,12 @@ export const register: Register = on => {
   })
 
   // The end of a turn of this Session, and every call of a Deck tool, may
-  // have changed the Tasks: read them again, off the event.
+  // have changed the Tasks a moment ago: read them again, off the event and
+  // past the Deck service's cache.
   on('turn.complete', async ($, e, next) => {
     const completed = await next(e)
     if (e.agentId === undefined && (await isConfigured($))) {
-      $.clock.after(0, () => void loadTasks($, false))
+      $.clock.after(0, () => void loadTasks($, true))
     }
 
     return completed
@@ -113,7 +114,7 @@ export const register: Register = on => {
   on('tool.call', { tool: DECK_TOOL }, async ($, e, next) => {
     const called = await next(e)
     if (await isConfigured($)) {
-      $.clock.after(0, () => void loadTasks($, false))
+      $.clock.after(0, () => void loadTasks($, true))
     }
 
     return called
