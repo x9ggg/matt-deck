@@ -558,7 +558,7 @@ Pending Closeout：卡片换成 `warning` 色的虚线框，给主按钮“收�
 
 ### 技能
 
-顶上写明实际使用的 Skill Source，下面是动作栏。`/ask-matt` 单独放在“通用入口”，其余按 Skill Source 里的顺序。命令名按 Skill Source 的实际写法，插件提供的带插件前缀。
+顶上写明实际使用的 Skill Source，下面是动作栏。`/ask-matt` 单独放在“通用入口”，其余按名字排。命令名按 Skill Source 的实际写法，插件提供的带插件前缀。
 
 ```text
 matt-deck · 5e1b7a02               r: 刷新
@@ -573,8 +573,8 @@ Skill Source  目录 ~/.claude/skills
 
 技能 3
 /implement               开始做一个 Task。
-/wayfinder      为不清晰的大工作建立 Map。
 /tdd                  先写测试，再写实现。
+/wayfinder      为不清晰的大工作建立 Map。
 ```
 
 每个技能一行：命令名在左，说明在右，说明取技能文件里的原话，放不下就截断。
@@ -587,7 +587,7 @@ b: 返回  技能 / /ask-matt          e: 预填
 /ask-matt                                   ◀ 加粗，suggestion 色
 ~/.claude/skills/ask-matt/SKILL.md          ◀ 技能文件在 Skill Source 里的路径
 
-（技能文件的原文，不改写）                  ◀ Markdown
+（技能文件 frontmatter 以下的正文，不改写） ◀ Markdown
 ```
 
 ## 输入框上方的画面
@@ -814,7 +814,7 @@ Child Task 已全部解锁，Spec 还没关闭。                               
 matt-deck · 5e1b7a02  ▶ #16   ◇ 1 可执行  ▶ 3 进行中  □ 11 阻塞  ◆ 2/17        3 分钟前  r: 刷新
 1:下一步  2:任务  3:地图  4:技能                                            [ 我现在该做什么 ] n  ◀ 选中“技能”
 /ask-matt  问下一步该做什么。                                                   e: 预填  o: 原文  ◀ 动作栏
-/ask-matt   /implement   /wayfinder   /tdd                    Skill Source 目录 ~/.claude/skills  ◀ 焦点在 /ask-matt
+/ask-matt   /implement   /tdd   /wayfinder                    Skill Source 目录 ~/.claude/skills  ◀ 焦点在 /ask-matt
 ```
 
 技能原文和 Task 详情一样：按 `o` 之后 Pane 长高，前两行不变，下面是返回栏（`b: 返回  技能 / /ask-matt`，右端 `e: 预填`）、技能文件的路径和原文。

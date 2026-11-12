@@ -23,14 +23,20 @@ export class SkillSourceError extends Error {
 
 const isMissing = (error: any) => error.code === 'ENOENT' || error.code === 'ENOTDIR'
 
-// The frontmatter's one-line `key: value` fields, and the body under it.
+// The frontmatter's `key: value` fields, and the body under it. A value
+// written as a block (`>` or `|`, then indented lines) is read as one line:
+// the Pane lists a description on one.
 const parse = (text: string) => {
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
   const fields: Record<string, string> = {}
+  let block: string | undefined
   for (const line of match?.[1]?.split(/\r?\n/) ?? []) {
     const field = line.match(/^([\w-]+):\s*(.*?)\s*$/)
     if (field !== null) {
-      fields[field[1]!] = field[2]!.replace(/^(["'])(.*)\1$/, '$2')
+      block = /^[>|][+-]?$/.test(field[2]!) ? field[1]! : undefined
+      fields[field[1]!] = block === undefined ? field[2]!.replace(/^(["'])(.*)\1$/, '$2') : ''
+    } else if (block !== undefined && line.trim() !== '') {
+      fields[block] = `${fields[block]} ${line.trim()}`.trimStart()
     }
   }
 
@@ -101,11 +107,12 @@ const locate = async (source: SkillSource, workspace: string, home: string) => {
   }
 }
 
-// Every skill of the Skill Source with its text, in the order of its files.
+// Every skill of the Skill Source with its text, by name: a Skill Source has
+// no order of its own, and a plugin's folders are not shown.
 const readAll = async (source: SkillSource, workspace: string, home: string) => {
   const { root, shown, prefix, files } = await locate(source, workspace, home)
   const skills: (Skill & { text: string })[] = []
-  for (const file of [...files].sort()) {
+  for (const file of files) {
     let text: string
     try {
       text = await readFile(join(root, file), 'utf8')
@@ -120,7 +127,7 @@ const readAll = async (source: SkillSource, workspace: string, home: string) => 
     skills.push({ name, call: `${prefix}${name}`, description: fields.description ?? '', path: shown(file), text: body })
   }
 
-  return skills
+  return skills.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }
 
 export const listSkills = async (source: SkillSource, workspace: string, home: string): Promise<Skill[]> =>

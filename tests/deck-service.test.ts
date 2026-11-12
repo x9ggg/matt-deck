@@ -883,6 +883,25 @@ test('deck_skills lists the skills of a directory Skill Source, each with its ca
   })
 })
 
+test('deck_skills reads a description written as a block over several lines as one line', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  const skills = join(user, '.claude', 'skills')
+  await skillFile(skills, 'folded', '>\n  先让它能用，\n  再把它做对。')
+  await skillFile(skills, 'kept', '|-\n  第一行\n\n  第二行')
+  const deck = startDeck(dir, { HOME: user })
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_skills')
+
+  assert.deepEqual(
+    result.structuredContent.skills.map(({ name, description }: any) => [name, description]),
+    [
+      ['folded', '先让它能用， 再把它做对。'],
+      ['kept', '第一行 第二行'],
+    ],
+  )
+})
+
 test('deck_skills calls the skills of a plugin Skill Source with the plugin prefix, from every folder of it', async t => {
   const { dir, user } = await withSkillSource({ type: 'plugin', name: 'mattpocock-skills' })
   const matt = join(user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
@@ -906,14 +925,15 @@ test('deck_skills calls the skills of a plugin Skill Source with the plugin pref
   assert.deepEqual(result.structuredContent, {
     ok: true,
     source: { type: 'plugin', name: 'mattpocock-skills' },
+    // By name, whichever folder each lies in.
     skills: [
-      { name: 'tdd', call: '/mattpocock-skills:tdd', description: '先写测试，再写实现。', path: `${base}/engineering/tdd/SKILL.md` },
       {
         name: 'ask-matt',
         call: '/mattpocock-skills:ask-matt',
         description: '问下一步该做什么。',
         path: `${base}/productivity/ask-matt/SKILL.md`,
       },
+      { name: 'tdd', call: '/mattpocock-skills:tdd', description: '先写测试，再写实现。', path: `${base}/engineering/tdd/SKILL.md` },
     ],
   })
 })

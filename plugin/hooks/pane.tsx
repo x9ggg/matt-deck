@@ -1163,7 +1163,7 @@ export const drawPane = (
     </Text>
   )
 
-  // The skills, /ask-matt first and the rest in the Skill Source's order,
+  // The skills, /ask-matt first and the rest by name, as the kernel lists them,
   // and the one the action bar is about: the last one the focus was on.
   const skills = view.skills.status === 'loaded' ? view.skills.skills : []
   const entrySkills = skills.filter(skill => skill.name === ENTRY_SKILL)
