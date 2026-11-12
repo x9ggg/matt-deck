@@ -1072,3 +1072,165 @@ test('deck_skill reads one skill\'s file under its frontmatter, and says so of a
   // Reading changes no skill file.
   assert.equal(await readFile(join(skills, 'ask-matt', 'SKILL.md'), 'utf8'), before)
 })
+
+// A Recommendation Request's arguments, as deck_ask writes them for the
+// request `id` and the Task Snapshot `snapshot`.
+const askArgs = (id: string, snapshot: string) =>
+  `Matt Deck Recommendation Request ${id}.\n\n` +
+  `Task Snapshot, read from the Task Source as this request was sent:\n${snapshot}\n\n` +
+  'Recommend only: do not start the work, change no file and run no other skill. ' +
+  `Once you have decided, call the tool deck_recommend with requestId "${id}", ` +
+  'task (the number of the Task to do next, or null), nextStep, skill (the skill to use, as it is called), ' +
+  'reason and blockers. Then answer in a sentence or two.'
+
+test('deck_ask makes a Recommendation Request for /ask-matt with the Task Snapshot read as it is sent', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  const skills = join(user, '.claude', 'skills')
+  await skillFile(skills, 'ask-matt', '问下一步该做什么。')
+  const before = await readFile(join(skills, 'ask-matt', 'SKILL.md'), 'utf8')
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 1, title: '规格：里程碑一' }),
+    issue({ number: 3, title: 'Pane 布局设计', labels: ['ready-for-human'], parent: 1 }),
+    issue({ number: 5, title: '任务列表', labels: ['ready-for-agent'], parent: 1, blockedBy: [3] }),
+    issue({ number: 2, title: '骨架', state: 'CLOSED', closedAt: '2026-11-11T05:40:00Z', parent: 1 }),
+  ])
+  const deck = startDeck(dir, { ...gh.env, HOME: user })
+  t.after(deck.stop)
+
+  const first = (await deck.callTool('deck_ask')).structuredContent
+  // A Task closed while the request was held is in the snapshot of the
+  // request sent after it.
+  await gh.issues([
+    issue({ number: 1, title: '规格：里程碑一' }),
+    issue({ number: 3, title: 'Pane 布局设计', state: 'CLOSED', closedAt: '2026-11-13T09:00:00Z', parent: 1 }),
+    issue({ number: 5, title: '任务列表', labels: ['ready-for-agent'], parent: 1, blockedBy: [3] }),
+    issue({ number: 2, title: '骨架', state: 'CLOSED', closedAt: '2026-11-11T05:40:00Z', parent: 1 }),
+  ])
+  const second = (await deck.callTool('deck_ask')).structuredContent
+
+  assert.equal(first.ok, true)
+  assert.equal(first.command, 'ask-matt')
+  assert.match(first.requestId, /^[0-9a-f-]{36}$/)
+  assert.equal(
+    first.args,
+    askArgs(
+      first.requestId,
+      [
+        'Specs and Maps:',
+        '- #1 规格：里程碑一 (spec, 1 of 3 Child Tasks closed)',
+        'Ready:',
+        '- #3 Pane 布局设计 [ready-for-human] (in #1)',
+        'In progress: none',
+        'Blocked:',
+        '- #5 任务列表 [ready-for-agent] (in #1), blocked by #3',
+        'Done: 1 Task closed',
+      ].join('\n'),
+    ),
+  )
+  assert.notEqual(second.requestId, first.requestId)
+  assert.equal(
+    second.args,
+    askArgs(
+      second.requestId,
+      [
+        'Specs and Maps:',
+        '- #1 规格：里程碑一 (spec, 2 of 3 Child Tasks closed)',
+        'Ready:',
+        '- #5 任务列表 [ready-for-agent] (in #1)',
+        'In progress: none',
+        'Blocked: none',
+        'Done: 2 Tasks closed',
+      ].join('\n'),
+    ),
+  )
+  // Each request reached the Task Source, past the cache.
+  assert.equal((await gh.calls()).length, 2)
+  // The skill file is left as it is.
+  assert.equal(await readFile(join(skills, 'ask-matt', 'SKILL.md'), 'utf8'), before)
+})
+
+test('deck_ask runs a plugin\'s /ask-matt with the plugin prefix, and says why when it cannot make the request', async t => {
+  const { dir, user } = await withSkillSource({ type: 'plugin', name: 'mattpocock-skills' })
+  const matt = join(user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
+  await installedPlugins(user, { 'mattpocock-skills@official': [{ scope: 'user', installPath: matt }] })
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(dir, { ...gh.env, HOME: user })
+  t.after(deck.stop)
+
+  // The plugin holds no /ask-matt yet.
+  await skillFile(join(matt, 'skills', 'engineering'), 'tdd', '先写测试，再写实现。')
+  const noSkill = await deck.callTool('deck_ask')
+  await skillFile(join(matt, 'skills', 'productivity'), 'ask-matt', '问下一步该做什么。')
+  const asked = await deck.callTool('deck_ask')
+  await gh.answer({ stderr: 'error connecting to api.github.com', exitCode: 1 })
+  const offline = await deck.callTool('deck_ask')
+
+  assert.deepEqual(noSkill.structuredContent, {
+    ok: false,
+    failure: { kind: 'unknown-skill', message: 'the Skill Source has no skill named ask-matt' },
+  })
+  assert.equal(asked.structuredContent.command, 'mattpocock-skills:ask-matt')
+  assert.equal(offline.isError, false)
+  assert.equal(offline.structuredContent.ok, false)
+  assert.equal(offline.structuredContent.failure.kind, 'offline')
+})
+
+test('deck_recommend keeps a Recommendation by its request, which deck_recommendation reads, from any Deck service', async t => {
+  const dir = await configured()
+  const user = await home()
+  const agent = startDeck(dir, { HOME: user })
+  t.after(agent.stop)
+  const pane = startDeck(dir, { HOME: user })
+  t.after(pane.stop)
+  const recommendation = {
+    task: 3,
+    nextStep: '先画停靠在侧边的线框图，再画输入框上方的。',
+    skill: '/prototype',
+    reason: '它挡着 #5、#7、#8，放开 10 个 Task。',
+    blockers: '',
+  }
+
+  const reported = await agent.callTool('deck_recommend', { requestId: 'request-1', ...recommendation })
+  // Nothing to do is a Recommendation too.
+  await agent.callTool('deck_recommend', {
+    requestId: 'request-2',
+    task: null,
+    nextStep: '等 #3 的评审。',
+    skill: '',
+    reason: '没有可执行的 Task。',
+    blockers: '#3 在等人评审',
+  })
+  const read = await pane.callTool('deck_recommendation', { requestId: 'request-1' })
+  const nothing = await pane.callTool('deck_recommendation', { requestId: 'request-9' })
+  const none = await pane.callTool('deck_recommendation', { requestId: 'request-2' })
+
+  assert.equal(reported.isError, false)
+  assert.deepEqual(read.structuredContent, { found: true, recommendation })
+  assert.deepEqual(nothing.structuredContent, { found: false })
+  assert.equal(none.structuredContent.recommendation.task, null)
+})
+
+test('deck_recommend takes the request\'s id, a Task number or null, and the four texts', async t => {
+  const deck = startDeck(await configured(), { HOME: await home() })
+  t.after(deck.stop)
+  const valid = { requestId: 'request-1', task: 3, nextStep: '画线框图', skill: '/prototype', reason: '挡着三个', blockers: '' }
+
+  const malformed = await Promise.all(
+    [
+      { ...valid, requestId: '' },
+      { ...valid, task: '#3' },
+      { ...valid, task: 0 },
+      { ...valid, reason: undefined },
+      { ...valid, blockers: ['#3'] },
+    ].map(args => deck.callTool('deck_recommend', args)),
+  )
+  const read = await deck.callTool('deck_recommendation', { requestId: 'request-1' })
+
+  assert.deepEqual(
+    malformed.map(result => result.isError),
+    [true, true, true, true, true],
+  )
+  assert.deepEqual(read.structuredContent, { found: false })
+})

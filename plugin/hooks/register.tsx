@@ -4,8 +4,11 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
 import type {
+  Ask,
   ConfigView,
+  DeckAskAnswer,
   DeckConfigAnswer,
+  DeckRecommendationAnswer,
   DeckSkillAnswer,
   DeckSkillsAnswer,
   DeckTaskAnswer,
@@ -57,6 +60,15 @@ const view = atom(
 const nav = atom({ plugin: 'matt-deck', key: 'nav' } as const, { tab: 'tasks', filter: 'all', page: 0 } as Nav, {
   shape: 'nav-2',
 })
+
+const ask = atom({ plugin: 'matt-deck', key: 'ask' } as const, { isBusy: false, status: 'none' } as Ask, {
+  shape: 'ask-1',
+})
+
+// How long after the end of a turn a held request is sent. The engine refuses
+// a command run from the hook of a turn's end, so the request goes after it
+// (sent 0.1 s on, it ran 0.2 s after the turn in the prototype).
+const HELD_SEND_MS = 100
 
 // How long a read may go unanswered before the Pane says what it may be
 // waiting on.
@@ -206,6 +218,81 @@ const prefill = async ($: EngineInterface, text: string, surface: RenderSurface)
   $.ui.toast(copied.isCopied ? `不能预填输入框，已复制到剪贴板：${text}` : `不能预填输入框，也没能复制：${text}`)
 }
 
+// Sends the Recommendation Request the Pane marked as sent: the Deck service
+// makes it now, with the Task Snapshot as it is now, and the Session runs it.
+// A turn begun while it was being made holds it again, to be made anew.
+const sendRequest = async ($: EngineInterface) => {
+  const deck = await $.mcp.connect('deck')
+  let answer: DeckAskAnswer
+  if (!deck.isConnected) {
+    answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
+  } else {
+    const result = await $.mcp.call(deck.server, 'deck_ask', {})
+    answer = result.isError
+      ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
+      : JSON.parse(result.content[0]!.text!)
+  }
+  const notSent = async (message: string) => {
+    await update($, ask, current => ({ ...current, status: 'none' as const }))
+    $.ui.toast(`“我现在该做什么”没有发出：${message}`)
+  }
+  if (!answer.ok) {
+    await notSent(answer.failure.message)
+    return
+  }
+  const { requestId, command, args } = answer
+  const now = await update($, ask, current =>
+    current.isBusy ? { ...current, status: 'held' as const } : { ...current, requestId },
+  )
+  if (now.status === 'held') {
+    return
+  }
+  try {
+    await $.command.run({ command, args })
+  } catch (error) {
+    await notSent(String(error))
+  }
+}
+
+// The press of n: a request, unless one is held, sent or running. While the
+// Session is busy the Pane holds it, rather than the host queueing it.
+const askNow = async ($: EngineInterface) => {
+  let isNew = false
+  const after = await update($, ask, current => {
+    if (current.status === 'held' || current.status === 'sent' || current.status === 'running') {
+      return current
+    }
+    isNew = true
+
+    return { isBusy: current.isBusy, status: current.isBusy ? ('held' as const) : ('sent' as const) }
+  })
+  if (isNew && after.status === 'sent') {
+    await sendRequest($)
+  }
+}
+
+// The end of the request's turn: the Recommendation the agent reported for
+// it, or else the turn's answer.
+const answerRequest = async ($: EngineInterface, requestId: string, text: string) => {
+  const deck = await $.mcp.connect('deck')
+  let answer: DeckRecommendationAnswer = { found: false }
+  if (deck.isConnected) {
+    const result = await $.mcp.call(deck.server, 'deck_recommendation', { requestId })
+    if (!result.isError) {
+      answer = JSON.parse(result.content[0]!.text!)
+    }
+  }
+  await update($, ask, current =>
+    current.requestId === requestId
+      ? {
+          ...current,
+          status: 'answered' as const,
+          answer: answer.found ? { recommendation: answer.recommendation } : { text },
+        }
+      : current,
+  )
+}
+
 const isConfigured = async ($: EngineInterface) => (await read($, view)).config.status === 'configured'
 
 export const register: Register = on => {
@@ -232,16 +319,65 @@ export const register: Register = on => {
     return started
   })
 
-  // The end of a turn of this Session, and every call of a Deck tool, may
-  // have changed the Tasks a moment ago: read them again, off the event and
-  // past the Deck service's cache.
+  // A turn of this Session's main loop: the Session is busy, and the turn of
+  // a request sent is the one whose prompt carries the request.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      await update($, ask, current =>
+        current.status === 'sent' && current.requestId !== undefined && e.text.includes(current.requestId)
+          ? { ...current, isBusy: true, status: 'running' as const, turnId: e.turnId }
+          : { ...current, isBusy: true },
+      )
+    }
+
+    return next(e)
+  })
+
+  // The end of a turn of this Session's main loop: the Session is idle, the
+  // request's turn has its answer, and a held request goes. The turn, and
+  // every call of a Deck tool, may also have changed the Tasks a moment ago:
+  // they are read again, off the event and past the Deck service's cache.
   on('turn.complete', async ($, e, next) => {
     const completed = await next(e)
-    if (e.agentId === undefined && (await isConfigured($))) {
+    if (e.agentId !== undefined) {
+      return completed
+    }
+    const ended = await update($, ask, current => ({ ...current, isBusy: false }))
+    if (ended.status === 'running' && ended.turnId === e.turnId) {
+      $.clock.after(0, () => void answerRequest($, ended.requestId!, e.answer))
+    }
+    if (ended.status === 'held') {
+      $.clock.after(HELD_SEND_MS, () =>
+        void (async () => {
+          let isSent = false
+          await update($, ask, current => {
+            if (current.status !== 'held' || current.isBusy) {
+              return current
+            }
+            isSent = true
+
+            return { ...current, status: 'sent' as const }
+          })
+          if (isSent) {
+            await sendRequest($)
+          }
+        })(),
+      )
+    }
+    if (await isConfigured($)) {
       $.clock.after(0, () => void loadTasks($, true))
     }
 
     return completed
+  })
+
+  // A /clear ends the conversation the held request was for: it is dropped.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') {
+      await update($, ask, current => (current.status === 'held' ? { ...current, status: 'none' as const } : current))
+    }
+
+    return next(e)
   })
 
   on('tool.call', { tool: DECK_TOOL }, async ($, e, next) => {
@@ -317,9 +453,11 @@ export const register: Register = on => {
         skill: undefined,
         switching: false,
         mapPage: 0,
+        isAnswerShown: false,
       }))
       // Above the prompt the map tab is as tall as a detail.
-      const wasTall = before.detail !== undefined || before.skill !== undefined || before.tab === 'map'
+      const wasTall =
+        before.detail !== undefined || before.skill !== undefined || before.tab === 'map' || before.isAnswerShown === true
       if (isInline && wasTall !== (tab === 'map')) {
         await $.ui.open(tab === 'map' ? DETAIL_OPEN : LIST_OPEN)
       }
@@ -328,7 +466,25 @@ export const register: Register = on => {
       }
     }
 
-    return drawPane($.ui.resolve(e), e.props, await read($, view), await read($, nav), {
+    return drawPane($.ui.resolve(e), e.props, await read($, view), await read($, nav), await read($, ask), {
+      // A new request leaves the whole answer shown before it.
+      ask: () =>
+        void (async () => {
+          if ((await read($, nav)).isAnswerShown === true) {
+            await update($, nav, current => ({ ...current, isAnswerShown: false }))
+            await $.ui.open(LIST_OPEN)
+          }
+          await askNow($)
+        })(),
+      cancelAsk: () =>
+        void update($, ask, current => (current.status === 'held' ? { ...current, status: 'cancelled' as const } : current)),
+      // Above the prompt: the whole answer grows the pane, and b gives back
+      // the four rows.
+      showAnswer: isShown =>
+        void (async () => {
+          await update($, nav, current => ({ ...current, isAnswerShown: isShown }))
+          await $.ui.open(isShown ? DETAIL_OPEN : LIST_OPEN)
+        })(),
       refresh: () => {
         void loadTasks($, true)
         void loadSkills($)

@@ -161,6 +161,38 @@ const skillTextOf = (skills: Answer, name: string): Answer => ({
   },
 })
 
+// What `deck_ask` answers for the `count`th Recommendation Request.
+const asked = (count: number): Answer => ({
+  isError: false,
+  structuredContent: {
+    ok: true,
+    requestId: `request-${count}`,
+    command: 'mattpocock-skills:ask-matt',
+    args: `Matt Deck Recommendation Request request-${count}. 快照 ${count}`,
+  },
+})
+
+// The Recommendation of the examples in `docs/pane-layout.md`, as
+// `deck_recommendation` reads it.
+const RECOMMENDED: Answer = {
+  isError: false,
+  structuredContent: {
+    found: true,
+    recommendation: {
+      task: 3,
+      nextStep: '先画停靠在侧边的线框图，再画输入框上方的。',
+      skill: '/prototype',
+      reason: '它挡着 #5、#7、#8，放开 10 个 Task。',
+      blockers: '',
+    },
+  },
+}
+
+// A turn of the main loop starting with `text`, and ending with `answer`.
+const turnStart = ($: Engine, turnId: string, text = '你好') => $.turn.start({ text, turnId })
+const turnEnd = ($: Engine, turnId: string, answer = '') =>
+  $.turn.complete({ answer, durationMs: 1, isAborted: false, turnId, reason: 'answer' })
+
 // A fake engine: the Deck service answering `deck_config` with `config`, or
 // out of reach when there is none, and `deck_tasks` with what `tasks` gives
 // at each call; a clock that moves only when the test moves it; and a pane
@@ -178,6 +210,8 @@ const engine = (
     draft = '',
     canFill = true,
     waitFor = () => undefined,
+    ask = asked,
+    recommendation = () => ({ isError: false, structuredContent: { found: false } }),
   }: {
     config: Answer | undefined
     tasks?: () => Answer
@@ -191,6 +225,10 @@ const engine = (
     // What a call of a tool waits on before it answers, as a call does that
     // a permission hook keeps waiting.
     waitFor?: (tool: string) => Promise<void> | undefined
+    // What `deck_ask` answers at its `count`th call, and `deck_recommendation`
+    // for a request.
+    ask?: (count: number) => Answer
+    recommendation?: (requestId: string) => Answer
   },
 ) => {
   const seen = {
@@ -203,7 +241,10 @@ const engine = (
     filled: [] as { text: string; mode: string }[],
     copied: [] as string[],
     toasts: [] as string[],
+    // The commands the Mod ran, as the person typing them.
+    ran: [] as { command: string; args: string }[],
   }
+  let asks = 0
   let panes: { id: string; isPlaced: boolean }[] = []
 
   seen.clock = mock.clock(on, { now: NOW })
@@ -228,7 +269,11 @@ const engine = (
             ? skills()
             : e.tool === 'deck_skill'
               ? skillText(e.args!.name as string)
-              : config!
+              : e.tool === 'deck_ask'
+                ? ask(++asks)
+                : e.tool === 'deck_recommendation'
+                  ? recommendation(e.args!.requestId as string)
+                  : config!
 
     return {
       value: {
@@ -275,8 +320,15 @@ const engine = (
 
     return { value: undefined }
   })
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
   on('tool.call', () => ({ result: {} }))
+  on('command.run', (_, e) => {
+    seen.ran.push({ command: e.command, args: e.args })
+
+    return { text: '' }
+  })
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
 
   return seen
 }
@@ -826,12 +878,13 @@ test('above the prompt the pane is four rows: top with counts, tabs, action bar,
   const boxes = await texts(ui, 'Box')
 
   expect(boxes).toContain('shop · a1b2c3d4   ◇ 1 可执行  ▶ 0 进行中  □ 2 阻塞  ◆ 2/5刚刚  刷新')
-  expect(boxes).toContain('下一步  任务  地图  技能')
+  // The tabs, and at their right end the primary button, in every tab.
+  expect(boxes).toContain('下一步  任务  地图  技能我现在该做什么 n')
   expect(boxes).toContain('◇ #3  Pane 布局设计   可执行   ready-for-human')
   // The list's row: Specs and Maps first, then the groups in order, as many
   // as fit, and the chosen filter at its end.
   const items = (await ui.findAll({ type: 'Button' })).map(button => button.text)
-  expect(items.slice(5)).toEqual(['详情', '◇ Spec #1 1/4', '◇ #3 Pane 布局设计', '□ #5 任务列表：按分组展示 Task', '还有 3 个', '全部 5'])
+  expect(items.slice(5)).toEqual(['我现在该做什么', '详情', '◇ Spec #1 1/4', '◇ #3 Pane 布局设计', '□ #5 任务列表：按分组展示 Task', '还有 3 个', '全部 5'])
   await ui.unmount()
 
   // Narrower, the top gives up the words after the counts, then the Session
@@ -1484,5 +1537,251 @@ test('skills more than the pane holds turn pages of their own, apart from the ta
   expect(await ui.find({ key: 'page:prev' })).toBeUndefined()
   await ui.press({ key: 'tab:skills' })
   expect(await ui.find({ key: 'page:prev' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('n while the Session is idle runs /ask-matt with the request at once, and the stages follow its turn to the Recommendation', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, recommendation: () => RECOMMENDED })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+  expect(await texts(ui)).toContain('在本 Session 运行 /ask-matt。')
+
+  await ui.press({ key: 'ask' })
+
+  expect(seen.ran).toEqual([
+    { command: 'mattpocock-skills:ask-matt', args: 'Matt Deck Recommendation Request request-1. 快照 1' },
+  ])
+  expect(await texts(ui)).toContain('已交给 Session，等这一回合开始。')
+  expect((await ui.find({ type: 'Text', text: '已发出' }))?.props).toEqual(expect.objectContaining({ bold: true }))
+
+  await turnStart($, 't1', '/mattpocock-skills:ask-matt Matt Deck Recommendation Request request-1. 快照 1')
+  expect(await texts(ui)).toContain('/ask-matt 运行中，已附带 Task Snapshot。')
+  expect((await ui.find({ type: 'Text', text: '运行中' }))?.props).toEqual(expect.objectContaining({ bold: true }))
+  expect((await ui.find({ type: 'Text', text: '已发出' }))?.props).toEqual(expect.objectContaining({ color: 'suggestion' }))
+
+  await turnEnd($, 't1', '先做 #3。')
+  await seen.clock.settle()
+
+  expect(seen.calls.filter(call => call.tool === 'deck_recommendation').map(call => call.args)).toEqual([
+    { requestId: 'request-1' },
+  ])
+  expect((await ui.find({ type: 'Text', text: '已回答' }))?.props).toEqual(expect.objectContaining({ bold: true }))
+  const shown = await texts(ui)
+  for (const line of [
+    '下一个成就',
+    '#3 Pane 布局设计',
+    '先画停靠在侧边的线框图，再画输入框上方的。',
+    '/prototype',
+    '它挡着 #5、#7、#8，放开 10 个 Task。',
+  ]) {
+    expect(shown.some(text => text.includes(line))).toBe(true)
+  }
+  // A field with nothing in it says so.
+  expect(shown).toContain('无')
+  expect((await ui.find({ key: 'ask' }))?.text).toBe('再问一次')
+  await ui.unmount()
+})
+
+test('n while the Session is busy holds the request, which goes once the turn has ended, with the Task Snapshot of then', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+  await turnStart($, 't1')
+
+  await ui.press({ key: 'ask' })
+
+  expect(await texts(ui)).toContain('Session 忙碌，空闲后自动发出。')
+  // While held, sent or running there is no n to make another request.
+  expect(await ui.find({ key: 'ask' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: '持有中' }))?.props).toEqual(expect.objectContaining({ bold: true }))
+  expect(await ui.find({ key: 'cancel' })).toBeDefined()
+  // Nothing is made or run while the turn goes on: the Task Snapshot is the
+  // one of when the request goes.
+  const asks = () => seen.calls.filter(call => call.tool === 'deck_ask').length
+  expect(asks()).toBe(0)
+  expect(seen.ran).toEqual([])
+
+  // Not from within the turn's end, which the engine would refuse, but just
+  // after it.
+  await turnEnd($, 't1')
+  expect(seen.ran).toEqual([])
+  await seen.clock.advance(100)
+  expect(asks()).toBe(1)
+  expect(seen.ran).toEqual([
+    { command: 'mattpocock-skills:ask-matt', args: 'Matt Deck Recommendation Request request-1. 快照 1' },
+  ])
+  expect(await texts(ui)).toContain('已交给 Session，等这一回合开始。')
+  expect(await ui.find({ key: 'cancel' })).toBeUndefined()
+
+  expect(await ui.find({ key: 'ask' })).toBeUndefined()
+  await turnStart($, 't2', '/mattpocock-skills:ask-matt Matt Deck Recommendation Request request-1. 快照 1')
+  expect(await ui.find({ key: 'ask' })).toBeUndefined()
+  expect(asks()).toBe(1)
+  await ui.unmount()
+})
+
+test('a held request can be cancelled, and is not sent when the turn ends', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+  await turnStart($, 't1')
+  await ui.press({ key: 'ask' })
+
+  await ui.press({ key: 'cancel' })
+  await turnEnd($, 't1')
+  await seen.clock.advance(1_000)
+
+  expect(seen.calls.filter(call => call.tool === 'deck_ask')).toEqual([])
+  expect(seen.ran).toEqual([])
+  expect(await texts(ui)).toContain('已取消。请求没有发出。')
+  expect((await ui.find({ key: 'ask' }))?.text).toBe('我现在该做什么')
+
+  // Asked again, it goes.
+  await ui.press({ key: 'ask' })
+  expect(seen.ran).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('a /clear drops the held request', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+  await turnStart($, 't1')
+  await ui.press({ key: 'ask' })
+
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  await turnEnd($, 't1')
+  await seen.clock.advance(1_000)
+
+  expect(seen.ran).toEqual([])
+  expect(await texts(ui)).toContain('在本 Session 运行 /ask-matt。')
+  await ui.unmount()
+})
+
+test('a turn that ends without deck_recommend shows its answer as written', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+  await ui.press({ key: 'ask' })
+  await turnStart($, 't1', '/mattpocock-skills:ask-matt Matt Deck Recommendation Request request-1. 快照 1')
+
+  // Another turn's end is not the request's.
+  await turnEnd($, 't0', '别的回合。')
+  await seen.clock.settle()
+  expect(await texts(ui)).toContain('/ask-matt 运行中，已附带 Task Snapshot。')
+
+  await turnEnd($, 't1', '先做 #3。它挡着 #5、#7、#8。')
+  await seen.clock.settle()
+
+  expect(await texts(ui)).toContain('没有收到 deck_recommend 的回报。')
+  expect((await ui.find({ type: 'Markdown' }))?.props).toEqual(expect.objectContaining({ text: '先做 #3。它挡着 #5、#7、#8。' }))
+  expect((await ui.find({ key: 'ask' }))?.text).toBe('再问一次')
+
+  // Asked again: a new request, its own id.
+  await ui.press({ key: 'ask' })
+  expect(seen.ran.map(run => run.args)).toEqual([
+    'Matt Deck Recommendation Request request-1. 快照 1',
+    'Matt Deck Recommendation Request request-2. 快照 2',
+  ])
+  expect(await texts(ui)).toContain('已交给 Session，等这一回合开始。')
+  await ui.unmount()
+})
+
+test('a turn begun while the request is being made holds it, to be made anew when the turn ends', async ($, on) => {
+  // The first deck_ask answers only when the test lets it, and says when it
+  // has been asked.
+  let asked = () => undefined as void
+  const isAsked = new Promise<void>(go => (asked = go))
+  let release = () => undefined as void
+  const released = new Promise<void>(go => (release = go))
+  let count = 0
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => {
+      if (tool !== 'deck_ask' || ++count > 1) {
+        return undefined
+      }
+      asked()
+
+      return released
+    },
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+
+  const pressed = ui.press({ key: 'ask' })
+  await isAsked
+  await turnStart($, 't1')
+  release()
+  await pressed
+
+  expect(seen.ran).toEqual([])
+  expect(await texts(ui)).toContain('Session 忙碌，空闲后自动发出。')
+  await turnEnd($, 't1')
+  await seen.clock.advance(100)
+  expect(seen.ran.map(run => run.args)).toEqual(['Matt Deck Recommendation Request request-2. 快照 2'])
+  await ui.unmount()
+})
+
+test('a request the Deck service cannot make is not sent, and says why', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    ask: () => ({
+      isError: false,
+      structuredContent: { ok: false, failure: { kind: 'unknown-skill', message: 'the Skill Source has no skill named ask-matt' } },
+    }),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+
+  await ui.press({ key: 'ask' })
+
+  expect(seen.ran).toEqual([])
+  expect(seen.toasts).toEqual(['“我现在该做什么”没有发出：the Skill Source has no skill named ask-matt'])
+  expect((await ui.find({ key: 'ask' }))?.text).toBe('我现在该做什么')
+  await ui.unmount()
+})
+
+test('above the prompt the stages take the primary button\'s place in every tab, and the answer is two rows, o showing it all', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, recommendation: () => RECOMMENDED })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...inline(96), surface: 'terminal' })
+  expect(await ui.find({ key: 'ask' })).toBeDefined()
+
+  await ui.press({ key: 'ask' })
+  await turnStart($, 't1', '/mattpocock-skills:ask-matt Matt Deck Recommendation Request request-1. 快照 1')
+  // In the tasks tab too, the stages stand where the button was.
+  expect(await ui.find({ key: 'ask' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: '运行中' }))?.props).toEqual(expect.objectContaining({ bold: true }))
+
+  await turnEnd($, 't1', '先做 #3。')
+  await seen.clock.settle()
+  await ui.press({ key: 'tab:next' })
+  const boxes = await texts(ui, 'Box')
+  expect(boxes).toContain('下一步  任务  地图  技能再问一次')
+  expect(boxes).toContain('下一个成就  ◇ #3 Pane 布局设计   技能 /prototype   阻塞 无全文')
+  expect(await texts(ui)).toContain('下一步 先画停靠在侧边的线框图，再画输入框上方的。  理由 它挡着 #5、#7、#8，放开 10 个 Task。')
+
+  const rows = seen.openedRows.length
+  await ui.press({ key: 'answer' })
+  expect(seen.openedRows.slice(rows)).toEqual([undefined])
+  expect(await texts(ui)).toContain('它挡着 #5、#7、#8，放开 10 个 Task。')
+  await ui.press({ key: 'back' })
+  expect(seen.openedRows.slice(rows)).toEqual([undefined, 4])
   await ui.unmount()
 })

@@ -3,6 +3,7 @@
 // working directory it was started in (ADR-0005), never from a path passed by
 // a caller.
 // Runs on plain Node with no installed packages, so MCP is spoken by hand.
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -10,6 +11,7 @@ import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
+import { askArgs, readRecommendation, saveRecommendation, snapshotOf } from '../kernel/recommend.ts'
 import { surveySetup } from '../kernel/setup.ts'
 import { listSkills, readSkill, SkillSourceError } from '../kernel/skills.ts'
 import { githubIssues, listTasks, readTask, TaskSourceError } from '../kernel/tasks.ts'
@@ -189,6 +191,92 @@ const tools = {
         return { content: [{ type: 'text', text: 'deck_skill takes the name of a skill' }], isError: true }
       }
       return skillAnswer(async source => ({ skill: await readSkill(source, workspace, homedir(), name) }))
+    },
+  },
+  deck_ask: {
+    description:
+      'For the Pane: make a Recommendation Request as it is sent. Answers the request\'s id, the command that runs this project\'s /ask-matt, and its arguments: the Task Snapshot read from the Task Source now, and the ask to report through deck_recommend.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    run: async (): Promise<ToolResult> => {
+      const project = await readProjectConfig(workspace)
+      if (!project.configured) {
+        throw new Error('This workspace is not a Configured Project: .matt-deck/config.json does not exist')
+      }
+      let answer: object
+      try {
+        const { call } = await readSkill(project.config.skillSource, workspace, homedir(), 'ask-matt')
+        cachedTasks = await listTasks(githubIssues(workspace), Date.now())
+        const requestId = randomUUID()
+        answer = { ok: true, requestId, command: call.slice(1), args: askArgs(requestId, snapshotOf(cachedTasks)) }
+      } catch (error: any) {
+        if (!(error instanceof SkillSourceError) && !(error instanceof TaskSourceError)) {
+          throw error
+        }
+        answer = { ok: false, failure: { kind: error.kind, message: error.message } }
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
+    },
+  },
+  deck_recommend: {
+    description:
+      'Report the Recommendation for a Matt Deck Recommendation Request, as its arguments ask: what to do next, without starting it. The Pane shows it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        requestId: { type: 'string', minLength: 1, description: 'The id of the Recommendation Request answered.' },
+        task: {
+          type: ['integer', 'null'],
+          minimum: 1,
+          description: 'The number of the Task to do next, or null when there is none.',
+        },
+        nextStep: { type: 'string', description: 'The next step on it.' },
+        skill: { type: 'string', description: 'The skill to use, as it is called (e.g. /tdd); "" for none.' },
+        reason: { type: 'string', description: 'Why this Task, now.' },
+        blockers: { type: 'string', description: 'What stands in the way; "" for nothing.' },
+      },
+      required: ['requestId', 'task', 'nextStep', 'skill', 'reason', 'blockers'],
+      additionalProperties: false,
+    },
+    run: async ({ requestId, task, nextStep, skill, reason, blockers }: any): Promise<ToolResult> => {
+      const texts = [nextStep, skill, reason, blockers]
+      if (
+        typeof requestId !== 'string' ||
+        requestId === '' ||
+        !(task === null || (Number.isInteger(task) && task >= 1)) ||
+        texts.some(text => typeof text !== 'string')
+      ) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'deck_recommend takes requestId, task (a Task number or null), and nextStep, skill, reason and blockers as text',
+            },
+          ],
+          isError: true,
+        }
+      }
+      saveRecommendation(homedir(), requestId, { task, nextStep, skill, reason, blockers }, Date.now())
+
+      return { content: [{ type: 'text', text: 'Recorded; the Matt Deck Pane shows it.' }], isError: false }
+    },
+  },
+  deck_recommendation: {
+    description: 'For the Pane: read the Recommendation reported for a Recommendation Request, if any.',
+    inputSchema: {
+      type: 'object',
+      properties: { requestId: { type: 'string', minLength: 1, description: 'The id of the Recommendation Request.' } },
+      required: ['requestId'],
+      additionalProperties: false,
+    },
+    run: async ({ requestId }: any): Promise<ToolResult> => {
+      if (typeof requestId !== 'string' || requestId === '') {
+        return { content: [{ type: 'text', text: 'deck_recommendation takes the id of a request' }], isError: true }
+      }
+      const recommendation = readRecommendation(homedir(), requestId)
+      const answer = recommendation === undefined ? { found: false } : { found: true, recommendation }
+
+      return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
     },
   },
   deck_setup_survey: {

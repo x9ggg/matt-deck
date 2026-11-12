@@ -5,11 +5,14 @@
 import type { Elements, RenderChildren, RenderPropsOf, RenderSurface } from 'claude-code'
 
 import type {
+  Ask,
   Container,
   DetailView,
   Filter,
   Group,
   Nav,
+  Recommendation,
+  RequestStatus,
   Skill,
   SkillFailure,
   SkillTextView,
@@ -44,6 +47,11 @@ export type Actions = {
   closeSkill: () => void
   // Puts `text` in the prompt box for the person to send.
   prefill: (text: string) => void
+  // Asks what to do now; cancels the request held; shows the whole answer
+  // above the prompt, or goes back from it.
+  ask: () => void
+  cancelAsk: () => void
+  showAnswer: (isShown: boolean) => void
 }
 
 // Columns a text takes in the terminal: wide East Asian characters take two,
@@ -127,6 +135,27 @@ const SKILL_FAILURE: Record<SkillFailure['kind'], (message: string) => string> =
 // The skill every Recommendation runs (ADR-0003), listed apart.
 const ENTRY_SKILL = 'ask-matt'
 
+// A Recommendation Request's stages, as the stage bar names them, and what
+// each one waiting says.
+const STAGES: [RequestStatus, string][] = [
+  ['held', '持有中'],
+  ['sent', '已发出'],
+  ['running', '运行中'],
+  ['answered', '已回答'],
+]
+// A Recommendation's four texts, as the card labels them.
+const RECOMMENDATION_FIELDS = [
+  ['下一步', 'nextStep'],
+  ['技能', 'skill'],
+  ['理由', 'reason'],
+  ['阻塞', 'blockers'],
+] as const
+const STAGE_NOTE: Partial<Record<RequestStatus, string>> = {
+  held: 'Session 忙碌，空闲后自动发出。',
+  sent: '已交给 Session，等这一回合开始。',
+  running: '/ask-matt 运行中，已附带 Task Snapshot。',
+}
+
 const pad = (n: number) => String(n).padStart(2, '0')
 
 // A closing time as the list writes it, in the local time zone: `11-11 14:07`.
@@ -185,6 +214,7 @@ export const drawPane = (
   props: RenderPropsOf['Pane'],
   view: View,
   nav: Nav,
+  ask: Ask,
   actions: Actions,
 ) => {
   const { Box, Button, Link, Markdown, Text } = el
@@ -1382,6 +1412,189 @@ export const drawPane = (
       </Box>
     )
   }
+  // The next tab: the request's stages, and the Recommendation its turn
+  // left, or the turn's answer.
+  const isPending = ask.status === 'held' || ask.status === 'sent' || ask.status === 'running'
+  const askButton =
+    ask.status === 'answered' ? (
+      <Button key="ask" plain hotkey="n" label="再问一次" onPress={actions.ask} />
+    ) : (
+      <Box flexDirection="row">
+        <Button key="ask" variant="primary" hotkey="n" label="我现在该做什么" onPress={actions.ask} />
+        <Text color="inactive"> n</Text>
+      </Box>
+    )
+  // The stages gone through, the one the request is at in bold, and those
+  // to come.
+  const stageBar = () => {
+    const at = STAGES.findIndex(([status]) => status === ask.status)
+
+    return (
+      <Box flexDirection="row">
+        {STAGES.flatMap(([, label], index) => [
+          ...(index > 0 ? [<Text dimColor={index > at}> › </Text>] : []),
+          index < at ? (
+            <Text color="suggestion">{label}</Text>
+          ) : index === at ? (
+            <Text bold>{label}</Text>
+          ) : (
+            <Text dimColor>{label}</Text>
+          ),
+        ])}
+      </Box>
+    )
+  }
+  const cancel = <Button key="cancel" plain hotkey="c" label="取消" onPress={actions.cancelAsk} />
+  const recommendation = ask.answer !== undefined && 'recommendation' in ask.answer ? ask.answer.recommendation : undefined
+  const answerText = ask.answer !== undefined && 'text' in ask.answer ? ask.answer.text : ''
+  // The recommended Task with its glyph and title, as the list knows it.
+  const recommendedTask = () => {
+    if (recommendation?.task == null) {
+      return <Text>无</Text>
+    }
+    const number = recommendation.task
+    const found =
+      list === undefined
+        ? undefined
+        : [
+            ...list.containers.map(container => ({ group: container.group, task: container as Task })),
+            ...GROUPS.flatMap(group => list.groups[group].map(task => ({ group, task }))),
+          ].find(({ task }) => task.number === number)
+
+    return found === undefined ? (
+      <Text>#{number}</Text>
+    ) : (
+      <Text>
+        <Text color={GLYPH_COLOR[found.group]}>{GLYPH[found.group]}</Text> #{number} {found.task.title}
+      </Text>
+    )
+  }
+  // The Recommendation's five fields: the Task, then the four texts, each
+  // label in a column of its own. A field with nothing in it says so.
+  const recommendationRows = (fields: Recommendation) => [
+    <Text>下一个成就</Text>,
+    recommendedTask(),
+    ...RECOMMENDATION_FIELDS.map(([label, field]) => (
+      <Box flexDirection="row">
+        <Text>{label + spaces(8 - width(label))}</Text>
+        <Text>{fields[field] === '' ? '无' : fields[field]}</Text>
+      </Box>
+    )),
+  ]
+  const unreported = ['没有收到 deck_recommend 的回报。', '下面是这一回合的回答原文。']
+
+  const dockedNext = () => {
+    if (ask.status === 'none' || ask.status === 'cancelled') {
+      return (
+        <Box flexDirection="column">
+          {askButton}
+          <Text>{ask.status === 'none' ? '在本 Session 运行 /ask-matt。' : '已取消。请求没有发出。'}</Text>
+        </Box>
+      )
+    }
+    if (isPending) {
+      return (
+        <Box flexDirection="column">
+          {stageBar()}
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text>{STAGE_NOTE[ask.status]}</Text>
+            {ask.status === 'held' && cancel}
+          </Box>
+        </Box>
+      )
+    }
+
+    return (
+      <Box flexDirection="column">
+        {stageBar()}
+        {ask.answer !== undefined && 'recommendation' in ask.answer ? (
+          <Box borderStyle="single" borderColor="inactive" flexDirection="column">
+            {recommendationRows(ask.answer.recommendation)}
+          </Box>
+        ) : (
+          <Box flexDirection="column">
+            {unreported.map(line => (
+              <Text>{line}</Text>
+            ))}
+            <Text> </Text>
+            <Markdown text={answerText} />
+            <Text> </Text>
+          </Box>
+        )}
+        {askButton}
+      </Box>
+    )
+  }
+
+  // Above the prompt: the two rows under the tabs, or the whole answer
+  // under the way back.
+  const inlineNext = () => {
+    if (ask.status === 'answered' && nav.isAnswerShown === true) {
+      return (
+        <Box flexDirection="column">
+          <Box flexDirection="row" justifyContent="space-between">
+            <Box flexDirection="row">
+              <Button key="back" plain hotkey="b" label="返回" onPress={() => actions.showAnswer(false)} />
+              <Text color="inactive">
+                {'  '}下一步 / {recommendation !== undefined ? 'Recommendation' : '回答原文'}
+              </Text>
+            </Box>
+          </Box>
+          <Text color="subtle">{'─'.repeat(columns)}</Text>
+          {ask.answer !== undefined && 'recommendation' in ask.answer ? (
+            recommendationRows(ask.answer.recommendation)
+          ) : (
+            <Markdown text={answerText} />
+          )}
+        </Box>
+      )
+    }
+    const showAll = <Button key="answer" plain hotkey="o" label="全文" onPress={() => actions.showAnswer(true)} />
+    const [actionRow, listRow] =
+      ask.status === 'none'
+        ? [<Text>在本 Session 运行 /ask-matt，自动带上 Task Snapshot。</Text>, <Text> </Text>]
+        : ask.status === 'cancelled'
+          ? [<Text>已取消。请求没有发出。</Text>, <Text> </Text>]
+          : isPending
+            ? [
+                <Box flexDirection="row" justifyContent="space-between">
+                  <Text>{STAGE_NOTE[ask.status]}</Text>
+                  {ask.status === 'held' && cancel}
+                </Box>,
+                <Text> </Text>,
+              ]
+            : recommendation !== undefined
+              ? [
+                  <Box flexDirection="row" justifyContent="space-between">
+                    <Box flexDirection="row" flexShrink={1}>
+                      <Text>下一个成就  </Text>
+                      {recommendedTask()}
+                      <Text wrap="truncate-end">
+                        {'   '}技能 {recommendation.skill || '无'}   阻塞 {recommendation.blockers || '无'}
+                      </Text>
+                    </Box>
+                    {showAll}
+                  </Box>,
+                  <Text wrap="truncate-end">
+                    下一步 {recommendation.nextStep || '无'}  理由 {recommendation.reason || '无'}
+                  </Text>,
+                ]
+              : [
+                  <Box flexDirection="row" justifyContent="space-between">
+                    <Text>没有收到 deck_recommend 的回报，下面是这一回合的回答原文。</Text>
+                    {showAll}
+                  </Box>,
+                  <Text wrap="truncate-end">{answerText.split('\n').find(line => line.trim() !== '') ?? ''}</Text>,
+                ]
+
+    return (
+      <Box flexDirection="column">
+        {actionRow}
+        {listRow}
+      </Box>
+    )
+  }
+
   const skillShown = nav.tab === 'skills' ? nav.skill : undefined
 
   if (isInline) {
@@ -1435,7 +1648,10 @@ export const drawPane = (
             {refresh}
           </Box>
         </Box>
-        {tabRow}
+        <Box flexDirection="row" justifyContent="space-between">
+          {tabRow}
+          {isPending ? stageBar() : askButton}
+        </Box>
         {detail !== undefined ? (
           detailView(detail)
         ) : skillShown !== undefined ? (
@@ -1447,10 +1663,7 @@ export const drawPane = (
         ) : nav.tab === 'skills' ? (
           inlineSkills()
         ) : (
-          <Box flexDirection="column">
-            <Text> </Text>
-            <Text> </Text>
-          </Box>
+          inlineNext()
         )}
       </Box>
     )
@@ -1474,6 +1687,7 @@ export const drawPane = (
       {tabRow}
       <Text color="subtle">{'─'.repeat(columns)}</Text>
       {detail !== undefined && detailView(detail)}
+      {detail === undefined && nav.tab === 'next' && dockedNext()}
       {detail === undefined && nav.tab === 'tasks' && dockedTasks()}
       {detail === undefined && nav.tab === 'map' && mapView()}
       {detail === undefined && nav.tab === 'skills' && (skillShown === undefined ? dockedSkills() : skillView(skillShown))}

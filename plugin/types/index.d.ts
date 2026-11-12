@@ -91,6 +91,37 @@ export type SkillText = Skill & { text: string }
 // What `deck_skill` answers.
 export type DeckSkillAnswer = { ok: true; skill: SkillText } | { ok: false; failure: SkillFailure }
 
+// What `deck_ask` answers: a Recommendation Request made as it is sent, the
+// command that runs /ask-matt and its arguments; or why none could be made.
+export type DeckAskAnswer =
+  | { ok: true; requestId: string; command: string; args: string }
+  | { ok: false; failure: TaskFailure | SkillFailure }
+
+// What the agent reported through `deck_recommend`: the Task to do next by
+// number, or null; each text "" where there was nothing to say.
+export type Recommendation = { task: number | null; nextStep: string; skill: string; reason: string; blockers: string }
+
+// What `deck_recommendation` answers for a request.
+export type DeckRecommendationAnswer = { found: true; recommendation: Recommendation } | { found: false }
+
+// Where this Session's Recommendation Request is. held: pressed while the
+// Session was busy, kept by the Pane and not sent yet; sent: handed to the
+// Session; running: its turn has started; answered: its turn has ended;
+// cancelled: given up while held.
+export type RequestStatus = 'none' | 'held' | 'sent' | 'running' | 'answered' | 'cancelled'
+
+// The Session's one Recommendation Request, and whether a turn of its main
+// loop is running. `requestId` is the request's once it is sent, `turnId`
+// its turn once it runs; `answer` what its turn left: the Recommendation, or
+// the turn's answer where none was reported.
+export type Ask = {
+  isBusy: boolean
+  status: RequestStatus
+  requestId?: string
+  turnId?: string
+  answer?: { recommendation: Recommendation } | { text: string }
+}
+
 // The skills as last read, and one skill's text as last read.
 export type SkillsView =
   | { status: 'loading' }
@@ -150,8 +181,10 @@ export type Filter = 'all' | Group
 // one shown. `page` is the tasks tab's page; `map` the Spec or Map the map
 // tab shows, `switching` whether it lists them to switch, `mapPage` the page
 // of what it shows. `skill` is the skill the skills tab drilled into, and
-// `skillsPage` that tab's page.
+// `skillsPage` that tab's page. `isAnswerShown`: above the prompt, the
+// next tab shows the whole answer of the request.
 export type Nav = {
+  isAnswerShown?: boolean
   tab: Tab
   filter: Filter
   page: number
@@ -166,6 +199,6 @@ export type Nav = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'matt-deck': { view: Shaped<View>; nav: Shaped<Nav> }
+    'matt-deck': { view: Shaped<View>; nav: Shaped<Nav>; ask: Shaped<Ask> }
   }
 }
