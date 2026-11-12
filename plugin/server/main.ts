@@ -10,7 +10,7 @@ import { createInterface } from 'node:readline'
 
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
 import { surveySetup } from '../kernel/setup.ts'
-import { githubIssues, listTasks, TaskSourceError } from '../kernel/tasks.ts'
+import { githubIssues, listTasks, readTask, TaskSourceError } from '../kernel/tasks.ts'
 import type { TaskList, TaskListFailure } from '../kernel/tasks.ts'
 
 // The Workspace is the checkout the service was started in: the nearest
@@ -84,6 +84,32 @@ const tools = {
       }
 
       return { content: [{ type: 'text', text: JSON.stringify(cachedTasks) }], structuredContent: cachedTasks, isError: false }
+    },
+  },
+  deck_task: {
+    description:
+      'Read one Task of this project from its Task Source: its description, acceptance criteria (checked or not), assignees, labels and link.',
+    inputSchema: {
+      type: 'object',
+      properties: { number: { type: 'integer', minimum: 1, description: 'The Task\'s number.' } },
+      required: ['number'],
+      additionalProperties: false,
+    },
+    run: async ({ number }: any): Promise<ToolResult> => {
+      if (!Number.isInteger(number) || number < 1) {
+        return { content: [{ type: 'text', text: 'deck_task takes the number of a Task, a whole number from 1' }], isError: true }
+      }
+      let answer
+      try {
+        answer = { ok: true, task: await readTask(githubIssues(workspace), number) }
+      } catch (error: any) {
+        if (!(error instanceof TaskSourceError)) {
+          throw error
+        }
+        answer = { ok: false, failure: { kind: error.kind, message: error.message } }
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
     },
   },
   deck_setup_survey: {

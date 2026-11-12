@@ -51,6 +51,30 @@ export type TaskFailure = {
 // What `deck_tasks` answers.
 export type DeckTasksAnswer = TaskList | { ok: false; failure: TaskFailure }
 
+// A Task as `deck_task` reads it: the body split into the description and
+// the acceptance criteria, the body's checklist items.
+export type TaskDetail = {
+  number: number
+  title: string
+  isOpen: boolean
+  closedAt: string | null
+  updatedAt: string
+  labels: string[]
+  assignees: string[]
+  url: string
+  description: string
+  acceptance: { text: string; isChecked: boolean }[]
+}
+
+// What `deck_task` answers.
+export type DeckTaskAnswer = { ok: true; task: TaskDetail } | { ok: false; failure: TaskFailure }
+
+// One Task's detail as last read: still asking, read, or why not.
+export type DetailView =
+  | { status: 'loading' }
+  | { status: 'loaded'; task: TaskDetail }
+  | { status: 'failed'; failure: TaskFailure }
+
 // What the Mod knows of the project config: still asking, the Deck service
 // out of reach, the service's answer, or why the config could not be read.
 export type ConfigView =
@@ -71,6 +95,8 @@ export type View = {
   sessionId: string
   config: ConfigView
   tasks: TasksView
+  // Each Task's detail as last read, by number.
+  details: Record<number, DetailView>
   // When the Tasks were last asked for: how old they are is told from it.
   checkedAt: number
 }
@@ -80,12 +106,15 @@ export type Tab = 'next' | 'tasks' | 'map' | 'skills'
 export type Filter = 'all' | Group
 
 // Where the person is in the pane. `focus` is the key of the row the action
-// bar is about, the last one the focus was on.
+// bar is about, the last one the focus was on. `detail` is the Task the tab
+// `from` drilled into, after the Tasks drilled through on the way, the last
+// one shown.
 export type Nav = {
   tab: Tab
   filter: Filter
   page: number
   focus?: string
+  detail?: { from: Tab; path: number[] }
 }
 
 declare module 'claude-code' {

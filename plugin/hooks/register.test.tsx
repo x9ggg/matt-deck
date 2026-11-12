@@ -71,6 +71,56 @@ const PROJECT = tasks({
   ],
 })
 
+// A Task as `deck_task` reads it, after the examples in `docs/pane-layout.md`.
+const DETAILS: Record<number, object> = {
+  7: {
+    number: 7,
+    title: 'Map View',
+    isOpen: true,
+    closedAt: null,
+    updatedAt: '2026-11-11T09:00:00Z',
+    labels: ['ready-for-agent'],
+    assignees: [],
+    url: 'https://github.com/acme/shop/issues/7',
+    description: '在 Pane 里展示一个 Spec 的 Child Task 和它们的阻塞关系。',
+    acceptance: [
+      { text: '树按 Blocking Edge 缩进', isChecked: true },
+      { text: '可以从树钻进 Task 详情', isChecked: false },
+    ],
+  },
+  15: {
+    number: 15,
+    title: '配置技能',
+    isOpen: false,
+    closedAt: '2026-11-11T14:07:00Z',
+    updatedAt: '2026-11-11T14:07:00Z',
+    labels: ['ready-for-agent'],
+    assignees: ['octocat'],
+    url: 'https://github.com/acme/shop/issues/15',
+    description: '首次配置一个项目。',
+    acceptance: [],
+  },
+}
+
+const detailOf = (number: number): Answer => ({
+  isError: false,
+  structuredContent: {
+    ok: true,
+    task: DETAILS[number] ?? {
+      number,
+      title: `Task ${number}`,
+      isOpen: true,
+      closedAt: null,
+      updatedAt: '2026-11-11T09:00:00Z',
+      labels: [],
+      assignees: [],
+      url: `https://github.com/acme/shop/issues/${number}`,
+      description: '',
+      acceptance: [],
+    },
+  },
+})
+
 // A fake engine: the Deck service answering `deck_config` with `config`, or
 // out of reach when there is none, and `deck_tasks` with what `tasks` gives
 // at each call; a clock that moves only when the test moves it; and a pane
@@ -81,11 +131,14 @@ const engine = (
   {
     config,
     tasks = () => PROJECT,
+    detail = number => detailOf(number),
     isNarrow = false,
-  }: { config: Answer | undefined; tasks?: () => Answer; isNarrow?: boolean },
+  }: { config: Answer | undefined; tasks?: () => Answer; detail?: (number: number) => Answer; isNarrow?: boolean },
 ) => {
   const seen = {
     opened: [] as string[],
+    // The rows each open asked for, `undefined` where it asked for none.
+    openedRows: [] as (number | undefined)[],
     closed: [] as string[],
     calls: [] as { server: string; tool: string; args?: Record<string, unknown> }[],
     clock: undefined as unknown as MockClock,
@@ -104,7 +157,8 @@ const engine = (
   }))
   on('mcp.call', (_, e) => {
     seen.calls.push(e)
-    const answer = e.tool === 'deck_tasks' ? tasks() : config!
+    const answer =
+      e.tool === 'deck_tasks' ? tasks() : e.tool === 'deck_task' ? detail(e.args!.number as number) : config!
 
     return {
       value: {
@@ -117,6 +171,7 @@ const engine = (
   on('ui.open', (_, e) => {
     const isPlaced = !(isNarrow && seen.opened.length === 0)
     seen.opened.push(e.id)
+    seen.openedRows.push(e.rows)
     panes = [...panes.filter(pane => pane.id !== e.id), { id: e.id, isPlaced }]
 
     return { value: isPlaced ? { isPlaced } : { isPlaced, reason: 'narrow' } }
@@ -268,6 +323,8 @@ test('the tasks tab lists open Specs and Maps first, then the Tasks by group', a
       '地图',
       '技能',
       '全部 5  ◇ 1  ▶ 0  □ 2  ◆ 2',
+      // The action bar's action.
+      '详情',
       '◇ Spec #1 规格：里程碑一，Claude Code… 1/4',
       '◇ #3  Pane 布局设计                 可执行',
       '□ #5  任务列表：按分组展示 Task 被 #3 阻塞',
@@ -304,13 +361,13 @@ test('the action bar follows the focus from row to row and keeps the last row', 
   await focus($, 'task:5')
   expect(await texts(ui)).toContain('#5  ready-for-agent')
 
-  // On a Spec the bar counts its Child Tasks by group.
+  // On a Spec the bar counts its Child Tasks by group, then its action.
   await focus($, 'task:1')
-  expect((await ui.find({ type: 'Box', text: /^#1  / }))?.text).toBe('#1  ◇ 1  ▶ 0  □ 2  ◆ 1')
+  expect((await ui.find({ type: 'Box', text: /^#1  / }))?.text).toBe('#1  ◇ 1  ▶ 0  □ 2  ◆ 1详情')
 
   // Off the rows (onto a tab) the bar stays where it was.
   await focus($, 'tab:map')
-  expect((await ui.find({ type: 'Box', text: /^#1  / }))?.text).toBe('#1  ◇ 1  ▶ 0  □ 2  ◆ 1')
+  expect((await ui.find({ type: 'Box', text: /^#1  / }))?.text).toBe('#1  ◇ 1  ▶ 0  □ 2  ◆ 1详情')
   await ui.unmount()
 })
 
@@ -619,7 +676,7 @@ test('above the prompt the pane is four rows: top with counts, tabs, action bar,
   // The list's row: Specs and Maps first, then the groups in order, as many
   // as fit, and the chosen filter at its end.
   const items = (await ui.findAll({ type: 'Button' })).map(button => button.text)
-  expect(items.slice(5)).toEqual(['◇ Spec #1 1/4', '◇ #3 Pane 布局设计', '□ #5 任务列表：按分组展示 Task', '还有 3 个', '全部 5'])
+  expect(items.slice(5)).toEqual(['详情', '◇ Spec #1 1/4', '◇ #3 Pane 布局设计', '□ #5 任务列表：按分组展示 Task', '还有 3 个', '全部 5'])
   await ui.unmount()
 
   // Narrower, the top gives up the words after the counts, then the Session
@@ -648,7 +705,7 @@ test('above the prompt the list row turns pages by width', async ($, on) => {
   expect((await ui.find({ key: 'page:prev' }))?.text).toBe('前面 2 个')
   expect(await keys()).toEqual(['task:5'])
   // The action bar is on the new page's first row, its title cut to fit.
-  expect(await texts(ui, 'Box')).toContain('□ #5  任务列表：按分组展示 T…   被 #3 阻塞   ready-for-agent')
+  expect(await texts(ui, 'Box')).toContain('□ #5  任务列表：按…   被 #3 阻塞   ready-for-agent')
 
   await ui.press({ key: 'page:prev' })
   expect(await keys()).toEqual(['task:1', 'task:3'])
@@ -674,5 +731,151 @@ test('the tabs switch the content under the top, which stays', async ($, on) => 
 
   await ui.press({ key: 'tab:tasks' })
   expect(await ui.find({ key: 'filter' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a Task opened from its row shows its status, description, acceptance criteria and blockers', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await ui.press({ key: 'task:7' })
+  await seen.clock.settle()
+
+  expect(seen.calls.at(-1)).toEqual({ server: SERVER, tool: 'deck_task', args: { number: 7 } })
+  // The list gives way to the detail; the top and the tabs stay.
+  expect(await ui.find({ key: 'filter' })).toBeUndefined()
+  expect(await ui.find({ key: 'tab:tasks' })).toBeDefined()
+  const boxes = await texts(ui, 'Box')
+  expect(boxes).toContain('返回  任务 / #1 / #7')
+  expect(boxes).toContain('#7 Map View')
+  expect(boxes).toContain('□ 被 #3 #5 阻塞')
+  expect(await texts(ui)).toContain('ready-for-agent · 未指派 · 更新 11-11')
+  // The title is bold, its number in the colour of its status.
+  expect((await ui.find({ type: 'Text', text: 'Map View' }))?.props.bold).toBe(true)
+  expect((await ui.find({ key: 'parent:1' }))?.text).toBe('属于 Spec #1 规格：里程碑一，Claude Code …')
+  expect((await ui.find({ type: 'Markdown' }))?.props.text).toBe('在 Pane 里展示一个 Spec 的 Child Task 和它们的阻塞关系。')
+  expect(boxes).toContain('[x] 树按 Blocking Edge 缩进')
+  expect(boxes).toContain('[ ] 可以从树钻进 Task 详情')
+  expect(await texts(ui)).toContain('被阻塞 2')
+  expect((await ui.find({ key: 'blocker:3' }))?.text).toBe('◇ #3  Pane 布局设计')
+  expect((await ui.find({ key: 'blocker:5' }))?.text).toBe('□ #5  任务列表：按分组展示 Task')
+  expect((await ui.find({ type: 'Link' }))?.props.href).toBe('https://github.com/acme/shop/issues/7')
+  await ui.unmount()
+})
+
+test('from a detail b goes back one step at a time, to the row it came from, with the filter kept', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'filter' })
+  await ui.press({ key: 'filter' })
+  await ui.press({ key: 'filter' })
+  await focus($, 'task:7')
+
+  // o drills into the row the action bar is about.
+  await ui.press({ key: 'open' })
+  await seen.clock.settle()
+  expect(await texts(ui, 'Box')).toContain('返回  任务 / #1 / #7')
+
+  // On into a blocker, and on into what that one belongs to.
+  await ui.press({ key: 'blocker:5' })
+  await seen.clock.settle()
+  expect(await texts(ui, 'Box')).toContain('返回  任务 / #1 / #7 / #5')
+  expect(await texts(ui, 'Box')).toContain('#5 Task 5')
+  await ui.press({ key: 'parent:1' })
+  await seen.clock.settle()
+  expect(await texts(ui, 'Box')).toContain('返回  任务 / #1 / #7 / #5 / #1')
+
+  await ui.press({ key: 'back' })
+  expect(await texts(ui, 'Box')).toContain('返回  任务 / #1 / #7 / #5')
+  await ui.press({ key: 'back' })
+  expect(await texts(ui, 'Box')).toContain('返回  任务 / #1 / #7')
+  await ui.press({ key: 'back' })
+
+  // The list, still filtered to the blocked group, the action bar on the row.
+  expect((await ui.findAll({ type: 'Button', text: /^□ #/ })).map(row => row.key)).toEqual(['task:5', 'task:7'])
+  expect(await texts(ui)).toContain('#7  ready-for-agent')
+  expect(await ui.find({ key: 'back' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a tab left from a detail shows its list when it is shown again', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await ui.press({ key: 'task:3' })
+  await seen.clock.settle()
+  await ui.press({ key: 'tab:skills' })
+  expect(await ui.find({ key: 'back' })).toBeUndefined()
+  expect(await texts(ui)).toContain('Skill Source 插件 mattpocock-skills')
+  await ui.press({ key: 'tab:tasks' })
+
+  expect(await ui.find({ key: 'back' })).toBeUndefined()
+  expect(await ui.find({ key: 'filter' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a closed Task with no acceptance criteria shows when it was closed and says it has none', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await ui.press({ key: 'task:15' })
+  await seen.clock.settle()
+
+  const lines = await texts(ui)
+  expect(await texts(ui, 'Box')).toContain('◆ 已解锁')
+  // Closing times are drawn in the local time zone.
+  expect(lines).toContainEqual(expect.stringMatching(/^ready-for-agent · octocat · 11-1[12] \d\d:\d\d$/))
+  expect(lines).toContain('正文里没有验收条件。')
+  // Nothing blocks it, and it belongs to nothing.
+  expect(lines.some(line => line.startsWith('被阻塞'))).toBe(false)
+  expect(await ui.find({ type: 'Button', text: /^属于/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('above the prompt a detail grows the pane under the top and the tabs, and b gives back the four rows', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  await focus($, 'task:7')
+
+  await ui.press({ key: 'open' })
+  await seen.clock.settle()
+
+  expect(seen.openedRows).toEqual([4, undefined])
+  expect(await texts(ui, 'Box')).toContain('下一步  任务  地图  技能')
+  expect(await texts(ui, 'Box')).toContain('返回  任务 / #1 / #7')
+  expect(await texts(ui, 'Box')).toContain('#7 Map View')
+
+  await ui.press({ key: 'back' })
+  expect(seen.openedRows).toEqual([4, undefined, 4])
+  expect(await texts(ui, 'Box')).toContain('□ #7  Map View   被 #3 #5 阻塞   ready-for-agent')
+  await ui.unmount()
+})
+
+test('a Task that cannot be read says why under the way back', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    detail: () => failed('offline', 'error connecting to api.github.com'),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await ui.press({ key: 'task:3' })
+  await seen.clock.settle()
+
+  const lines = await texts(ui)
+  expect(lines).toContain('✕ 读取 #3 失败')
+  expect(lines).toContain('连不上 GitHub。检查网络后按 r 重试。')
+  expect(await ui.find({ key: 'back' })).toBeDefined()
   await ui.unmount()
 })

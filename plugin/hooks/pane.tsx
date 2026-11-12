@@ -4,7 +4,7 @@
 // goes to one of the `actions`.
 import type { Elements, RenderChildren, RenderPropsOf, RenderSurface } from 'claude-code'
 
-import type { Container, Filter, Group, Nav, Tab, Task, TaskFailure, TaskList, View } from '../types'
+import type { Container, DetailView, Filter, Group, Nav, Tab, Task, TaskFailure, TaskList, View } from '../types'
 
 type El = Elements[RenderSurface]
 
@@ -15,6 +15,10 @@ export type Actions = {
   showGroup: (group: Group) => void
   // Shows another page and moves the focus onto the row `key`.
   turnPage: (page: number, key: string | undefined) => void
+  // Drills into the Task `number`, from a row or from the detail shown.
+  openTask: (number: number) => void
+  // Goes back one step from a detail.
+  back: () => void
 }
 
 // Columns a text takes in the terminal: wide East Asian characters take two,
@@ -130,6 +134,8 @@ const listOf = (list: TaskList, filter: Filter) => ({
 
 const containerRow = (container: Container): Row => ({ key: keyOf(container.number), container })
 
+const numberOf = (row: Row) => ('container' in row ? row.container.number : row.task.number)
+
 // How each of a Spec's or Map's Child Tasks stands, by group.
 const childCounts = (list: TaskList, container: Container) =>
   GROUPS.map(group => ({
@@ -146,7 +152,7 @@ export const drawPane = (
   nav: Nav,
   actions: Actions,
 ) => {
-  const { Box, Button, Text } = el
+  const { Box, Button, Link, Markdown, Text } = el
   const columns = props.bodyColumns
   const isInline = props.placement === 'inline'
   const { config, tasks } = view
@@ -308,25 +314,31 @@ export const drawPane = (
       <Text> {count}</Text>,
     ])
 
+  // The action bar's actions, at its right end, and the columns they take
+  // with the gap before them.
+  const rowActions = (row: Row) => (
+    <Button key="open" plain hotkey="o" label="详情" onPress={() => actions.openTask(numberOf(row))} />
+  )
+  const ACTIONS_WIDTH = 2 + width('o: 详情')
+
   // What the action bar says of a row before its actions: a Task's triage
   // label, a Spec's or Map's Child Tasks by group.
-  const actionBar = (row: Row) => {
-    if ('container' in row) {
-      return (
+  const actionBar = (row: Row) => (
+    <Box flexDirection="row" justifyContent="space-between">
+      {'container' in row ? (
         <Box flexDirection="row">
           <Text>{numbered(row.container.number)}</Text>
           {childCountItems(row.container)}
         </Box>
-      )
-    }
-
-    return (
-      <Text>
-        {numbered(row.task.number)}
-        {row.task.labels.find(label => TRIAGE_LABELS.includes(label)) ?? ''}
-      </Text>
-    )
-  }
+      ) : (
+        <Text>
+          {numbered(row.task.number)}
+          {row.task.labels.find(label => TRIAGE_LABELS.includes(label)) ?? ''}
+        </Text>
+      )}
+      {rowActions(row)}
+    </Box>
+  )
 
   // Inline, the action bar names the row as well: glyph, number, title,
   // status, then what the docked one says after the number.
@@ -342,15 +354,18 @@ export const drawPane = (
       )
 
       return (
-        <Box flexDirection="row">
-          {glyph(container.group)}
-          <Text>
-            {' '}
-            {head}
-            {cut(container.title, columns - 2 - width(head) - width(tail) - countsWidth)}
-            {tail}
-          </Text>
-          {childCountItems(container)}
+        <Box flexDirection="row" justifyContent="space-between">
+          <Box flexDirection="row">
+            {glyph(container.group)}
+            <Text>
+              {' '}
+              {head}
+              {cut(container.title, columns - 2 - width(head) - width(tail) - countsWidth - ACTIONS_WIDTH)}
+              {tail}
+            </Text>
+            {childCountItems(container)}
+          </Box>
+          {rowActions(row)}
         </Box>
       )
     }
@@ -360,14 +375,17 @@ export const drawPane = (
     const tail = `${status === '' ? '' : `   ${status}`}${label === '' ? '' : `   ${label}`}`
 
     return (
-      <Box flexDirection="row">
-        {glyph(group, group === 'blocked')}
-        <Text dimColor={group === 'blocked'}>
-          {' '}
-          {numbered(task.number)}
-          {cut(task.title, columns - 2 - numberColumns - 1 - width(tail))}
-          {tail}
-        </Text>
+      <Box flexDirection="row" justifyContent="space-between">
+        <Box flexDirection="row">
+          {glyph(group, group === 'blocked')}
+          <Text dimColor={group === 'blocked'}>
+            {' '}
+            {numbered(task.number)}
+            {cut(task.title, columns - 2 - numberColumns - 1 - width(tail) - ACTIONS_WIDTH)}
+            {tail}
+          </Text>
+        </Box>
+        {rowActions(row)}
       </Box>
     )
   }
@@ -384,7 +402,12 @@ export const drawPane = (
       const title = cut(container.title, room)
 
       return (
-        <Button key={row.key} plain autoFocus={row === landing ? true : undefined} onPress={() => undefined}>
+        <Button
+          key={row.key}
+          plain
+          autoFocus={row === landing ? true : undefined}
+          onPress={() => actions.openTask(container.number)}
+        >
           {glyph(container.group)}
           <Text>{head}</Text>
           <Text color="inactive">{number}</Text>
@@ -404,7 +427,12 @@ export const drawPane = (
     const title = cut(task.title, room)
 
     return (
-      <Button key={row.key} plain autoFocus={row === landing ? true : undefined} onPress={() => undefined}>
+      <Button
+        key={row.key}
+        plain
+        autoFocus={row === landing ? true : undefined}
+        onPress={() => actions.openTask(task.number)}
+      >
         {glyph(group, dim)}
         <Text color="inactive" dimColor={dim}>
           {' '}
@@ -640,7 +668,12 @@ export const drawPane = (
             {pageRows.map((row, index) => (
               <Box flexDirection="row">
                 {(index > 0 || pageIndex > 0) && <Text>{'   '}</Text>}
-                <Button key={row.key} plain autoFocus={row === landing ? true : undefined} onPress={() => undefined}>
+                <Button
+                  key={row.key}
+                  plain
+                  autoFocus={row === landing ? true : undefined}
+                  onPress={() => actions.openTask(numberOf(row))}
+                >
                   {'container' in row ? glyph(row.container.group) : glyph(row.group, row.group === 'blocked')}
                   <Text dimColor={'group' in row && row.group === 'blocked'}>{labelOf(row).slice(1)}</Text>
                 </Button>
@@ -660,6 +693,148 @@ export const drawPane = (
       </Box>
     )
   }
+
+  // A Task the list holds, a Spec or Map among them, with where it stands.
+  const entryOf = (number: number): { task: Task; group: Group; kind?: Container['kind'] } | undefined => {
+    const container = list?.containers.find(container => container.number === number)
+    if (container !== undefined) {
+      return { task: container, group: container.group, kind: container.kind }
+    }
+    for (const group of GROUPS) {
+      const task = list?.groups[group].find(task => task.number === number)
+      if (task !== undefined) {
+        return { task, group }
+      }
+    }
+
+    return undefined
+  }
+
+  const sectionTitle = (title: string) => (
+    <Text color="inactive" bold>
+      {title}
+    </Text>
+  )
+
+  // A Task drilled into: the way back and the way here, then the Task. What
+  // the list knows of it (its status, what it belongs to, what blocks it)
+  // comes from the list, the rest from its own read.
+  const detailView = ({ from, path }: NonNullable<Nav['detail']>) => {
+    const number = path.at(-1)!
+    const entry = entryOf(number)
+    const firstParent = entryOf(path[0]!)?.task.parent ?? null
+    const crumbs = [
+      TABS.find(({ tab }) => tab === from)!.label,
+      ...(firstParent === null ? [] : [`#${firstParent}`]),
+      ...path.map(number => `#${number}`),
+    ].join(' / ')
+    const shown: DetailView = view.details[number] ?? { status: 'loading' }
+
+    const body = (() => {
+      if (shown.status === 'loading') {
+        return [<Text color="inactive">正在读取 #{number}…</Text>]
+      }
+      if (shown.status === 'failed') {
+        return [
+          <Text color="error">✕ 读取 #{number} 失败</Text>,
+          <Text>{FAILURE[shown.failure.kind](shown.failure.message)}</Text>,
+        ]
+      }
+      const { task } = shown
+      const label = task.labels.find(label => TRIAGE_LABELS.includes(label))
+      const updated = new Date(task.updatedAt)
+      const time =
+        task.closedAt === null
+          ? `更新 ${pad(updated.getMonth() + 1)}-${pad(updated.getDate())}`
+          : closedTime(task.closedAt)
+      const meta = [...(label === undefined ? [] : [label]), task.assignees.join(', ') || '未指派', time].join(' · ')
+      const parent = entry?.task.parent == null ? undefined : list?.containers.find(c => c.number === entry.task.parent)
+      const blockers = (entry?.task.blockers ?? []).flatMap(blocker => {
+        const found = entryOf(blocker)
+
+        return found === undefined ? [] : [{ ...found, number: blocker }]
+      })
+
+      return [
+        <Box flexDirection="row">
+          <Text color={entry === undefined ? undefined : GLYPH_COLOR[entry.group]}>#{task.number}</Text>
+          <Text> </Text>
+          <Text bold>{task.title}</Text>
+        </Box>,
+        ...(entry === undefined
+          ? []
+          : [
+              <Box flexDirection="row">
+                {glyph(entry.group, entry.group === 'blocked')}
+                <Text>
+                  {' '}
+                  {entry.group === 'done' ? '已解锁' : entry.group === 'inProgress' ? '进行中' : statusOf(entry.task, entry.group)}
+                </Text>
+              </Box>,
+            ]),
+        <Text>{meta}</Text>,
+        ...(parent === undefined
+          ? []
+          : [
+              <Button key={`parent:${parent.number}`} plain onPress={() => actions.openTask(parent.number)}>
+                <Text>
+                  {cut(`属于 ${parent.kind === 'spec' ? 'Spec' : 'Map'} #${parent.number} ${parent.title}`, columns)}
+                </Text>
+              </Button>,
+            ]),
+        <Text> </Text>,
+        sectionTitle('描述'),
+        task.description === '' ? <Text color="inactive">没有描述。</Text> : <Markdown text={task.description} />,
+        <Text> </Text>,
+        sectionTitle('验收条件'),
+        ...(task.acceptance.length === 0
+          ? [<Text color="inactive">正文里没有验收条件。</Text>]
+          : task.acceptance.map(item => (
+              <Box flexDirection="row">
+                <Text>{item.isChecked ? '[x] ' : '[ ] '}</Text>
+                <Markdown text={item.text} />
+              </Box>
+            ))),
+        ...(blockers.length === 0
+          ? []
+          : [
+              <Text> </Text>,
+              sectionTitle(`被阻塞 ${blockers.length}`),
+              ...blockers.map(blocker => (
+                <Button key={`blocker:${blocker.number}`} plain onPress={() => actions.openTask(blocker.number)}>
+                  {glyph(blocker.group, blocker.group === 'blocked')}
+                  <Text dimColor={blocker.group === 'blocked'}>
+                    {' '}
+                    {numbered(blocker.number)}
+                    {cut(blocker.task.title, columns - 2 - (numberColumns + 1))}
+                  </Text>
+                </Button>
+              )),
+            ]),
+        <Text> </Text>,
+        <Link href={task.url}>
+          <Text color="suggestion" underline>
+            在 GitHub 打开
+          </Text>
+        </Link>,
+      ]
+    })()
+
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row">
+          <Button key="back" plain hotkey="b" label="返回" onPress={actions.back} />
+          <Text>
+            {'  '}
+            {cut(crumbs, columns - width('b: 返回  '))}
+          </Text>
+        </Box>
+        <Text color="subtle">{'─'.repeat(columns)}</Text>
+        {body}
+      </Box>
+    )
+  }
+  const detail = nav.detail?.from === nav.tab ? nav.detail : undefined
 
   const skillSource =
     config.config.skillSource.type === 'plugin'
@@ -718,7 +893,9 @@ export const drawPane = (
           </Box>
         </Box>
         {tabRow}
-        {nav.tab === 'tasks' ? (
+        {detail !== undefined ? (
+          detailView(detail)
+        ) : nav.tab === 'tasks' ? (
           inlineTasks()
         ) : nav.tab === 'skills' ? (
           <Box flexDirection="column">
@@ -754,8 +931,9 @@ export const drawPane = (
       </Box>
       {tabRow}
       <Text color="subtle">{'─'.repeat(columns)}</Text>
-      {nav.tab === 'tasks' && dockedTasks()}
-      {nav.tab === 'skills' && (
+      {detail !== undefined && detailView(detail)}
+      {detail === undefined && nav.tab === 'tasks' && dockedTasks()}
+      {detail === undefined && nav.tab === 'skills' && (
         <Text>
           Skill Source <Text color="inactive">{skillSource}</Text>
         </Text>

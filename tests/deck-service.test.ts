@@ -634,3 +634,146 @@ test('deck_tasks reads every page of issues', async t => {
   assert.deepEqual(numbers(groups.ready), [1, 2])
   assert.ok((await gh.calls())[0]!.args.includes('--paginate'))
 })
+
+// One issue as `gh issue view --json` prints it.
+const viewed = ({
+  number,
+  title = `Task ${number}`,
+  state = 'OPEN',
+  closedAt = null,
+  updatedAt = '2026-11-11T09:00:00Z',
+  labels = [],
+  assignees = [],
+  body = '',
+}: {
+  number: number
+  title?: string
+  state?: 'OPEN' | 'CLOSED'
+  closedAt?: string | null
+  updatedAt?: string
+  labels?: string[]
+  assignees?: string[]
+  body?: string
+}) => ({
+  number,
+  title,
+  state,
+  closedAt,
+  updatedAt,
+  url: `https://github.com/acme/shop/issues/${number}`,
+  labels: labels.map(name => ({ id: name, name, description: '', color: '000000' })),
+  assignees: assignees.map(login => ({ id: login, login, name: '' })),
+  body,
+})
+
+test('deck_task reads one Task with its description and its acceptance criteria as checked or not', async t => {
+  const gh = await fakeGh()
+  await gh.answer({
+    stdout: viewed({
+      number: 9,
+      title: '推荐：我现在该做什么',
+      labels: ['ready-for-agent'],
+      assignees: ['octocat', 'hubot'],
+      body: [
+        '## Parent',
+        '',
+        '#1',
+        '',
+        '## What to build',
+        '',
+        '点一次按钮，在当前 Session 里运行 `/ask-matt`。',
+        '',
+        '## Acceptance criteria',
+        '',
+        '- [ ] 忙碌时请求先被持有，空闲后自动发出',
+        '- [x] 持有期间可以取消',
+        '',
+        '## Blocked by',
+        '',
+        '- #5',
+        '- #8',
+        '',
+      ].join('\n'),
+    }),
+  })
+  const dir = await configured()
+  const deck = startDeck(dir, gh.env)
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_task', { number: 9 })
+
+  assert.equal(result.isError, false)
+  assert.deepEqual(result.structuredContent, {
+    ok: true,
+    task: {
+      number: 9,
+      title: '推荐：我现在该做什么',
+      isOpen: true,
+      closedAt: null,
+      updatedAt: '2026-11-11T09:00:00Z',
+      labels: ['ready-for-agent'],
+      assignees: ['octocat', 'hubot'],
+      url: 'https://github.com/acme/shop/issues/9',
+      // The sections the detail draws elsewhere are not in the description.
+      description: '## What to build\n\n点一次按钮，在当前 Session 里运行 `/ask-matt`。',
+      acceptance: [
+        { text: '忙碌时请求先被持有，空闲后自动发出', isChecked: false },
+        { text: '持有期间可以取消', isChecked: true },
+      ],
+    },
+  })
+  const [call] = await gh.calls()
+  assert.deepEqual(call!.args.slice(0, 3), ['issue', 'view', '9'])
+  assert.equal(call!.cwd, dir)
+})
+
+test('deck_task reads a Task whose body has no acceptance criteria', async t => {
+  const gh = await fakeGh()
+  await gh.answer({
+    stdout: viewed({
+      number: 15,
+      state: 'CLOSED',
+      closedAt: '2026-11-11T14:07:00Z',
+      body: 'Part of #1\n\n首次配置一个项目。\n\n- 选定 Task Source\n- 选定 Skill Source\n',
+    }),
+  })
+  const empty = await fakeGh()
+  await empty.answer({ stdout: viewed({ number: 16 }) })
+  const deck = startDeck(await configured(), gh.env)
+  const bare = startDeck(await configured(), empty.env)
+  t.after(deck.stop)
+  t.after(bare.stop)
+
+  const { task } = (await deck.callTool('deck_task', { number: 15 })).structuredContent
+  const { task: blank } = (await bare.callTool('deck_task', { number: 16 })).structuredContent
+
+  assert.equal(task.isOpen, false)
+  assert.equal(task.closedAt, '2026-11-11T14:07:00Z')
+  // A plain list is description, not acceptance criteria.
+  assert.equal(task.description, '首次配置一个项目。\n\n- 选定 Task Source\n- 选定 Skill Source')
+  assert.deepEqual(task.acceptance, [])
+  assert.equal(blank.description, '')
+  assert.deepEqual(blank.acceptance, [])
+})
+
+test('deck_task says why the Task cannot be read, and takes only a Task number', async t => {
+  const gh = await fakeGh()
+  await gh.answer({ exitCode: 1, stderr: 'GraphQL: Could not resolve to an issue or pull request with the number of 999.\n' })
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const missing = await deck.callTool('deck_task', { number: 999 })
+  const malformed = await Promise.all([{}, { number: '9' }, { number: 0 }, { number: 1.5 }].map(args => deck.callTool('deck_task', args)))
+
+  assert.equal(missing.isError, false)
+  assert.deepEqual(missing.structuredContent, {
+    ok: false,
+    failure: { kind: 'failed', message: 'GraphQL: Could not resolve to an issue or pull request with the number of 999.' },
+  })
+  assert.deepEqual(
+    malformed.map(result => result.isError),
+    [true, true, true, true],
+  )
+  // Only the one read reached gh.
+  assert.equal((await gh.calls()).length, 1)
+})

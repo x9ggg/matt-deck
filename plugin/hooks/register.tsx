@@ -3,11 +3,26 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ConfigView, DeckConfigAnswer, DeckTasksAnswer, Filter, Nav, TasksView, View } from '../types'
+import type {
+  ConfigView,
+  DeckConfigAnswer,
+  DeckTaskAnswer,
+  DeckTasksAnswer,
+  DetailView,
+  Filter,
+  Nav,
+  Tab,
+  TasksView,
+  View,
+} from '../types'
 import { drawPane } from './pane.tsx'
 
 const PANE = 'matt-deck'
 const TITLE = 'Matt Deck'
+// Above the prompt the pane is four rows, and as tall as it may be while it
+// shows a detail.
+const LIST_OPEN = { id: PANE, title: TITLE, columns: 42, rows: 4 }
+const DETAIL_OPEN = { id: PANE, title: TITLE, columns: 42 }
 const COMMAND = 'deck'
 
 // How often the Pane reads the Tasks by itself. The Deck service caches a
@@ -22,12 +37,12 @@ const FILTERS: Filter[] = ['all', 'ready', 'inProgress', 'blocked', 'done']
 
 const view = atom(
   { plugin: 'matt-deck', key: 'view' } as const,
-  { sessionId: '', config: { status: 'loading' }, tasks: { status: 'loading' }, checkedAt: 0 } as View,
-  { shape: 'view-2' },
+  { sessionId: '', config: { status: 'loading' }, tasks: { status: 'loading' }, details: {}, checkedAt: 0 } as View,
+  { shape: 'view-3' },
 )
 
 const nav = atom({ plugin: 'matt-deck', key: 'nav' } as const, { tab: 'tasks', filter: 'all', page: 0 } as Nav, {
-  shape: 'nav-1',
+  shape: 'nav-2',
 })
 
 const textOf = (answer: { content: { text?: string }[] }) => answer.content.map(block => block.text ?? '').join('\n')
@@ -74,6 +89,31 @@ const loadTasks = async ($: EngineInterface, refresh: boolean) => {
   })
 }
 
+// Reads one Task's detail from the Deck service. A detail read before stays
+// in sight until the new read answers.
+const loadTask = async ($: EngineInterface, number: number) => {
+  await update($, view, current =>
+    current.details[number] === undefined
+      ? { ...current, details: { ...current.details, [number]: { status: 'loading' } as DetailView } }
+      : current,
+  )
+  const deck = await $.mcp.connect('deck')
+  let answer: DeckTaskAnswer
+  if (!deck.isConnected) {
+    answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
+  } else {
+    const result = await $.mcp.call(deck.server, 'deck_task', { number })
+    answer = result.isError
+      ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
+      : JSON.parse(result.content[0]!.text!)
+  }
+
+  const detail: DetailView = answer.ok
+    ? { status: 'loaded', task: answer.task }
+    : { status: 'failed', failure: answer.failure }
+  await update($, view, current => ({ ...current, details: { ...current.details, [number]: detail } }))
+}
+
 const isConfigured = async ($: EngineInterface) => (await read($, view)).config.status === 'configured'
 
 export const register: Register = on => {
@@ -88,7 +128,7 @@ export const register: Register = on => {
     // The Pane opens only where a project config exists; a malformed one
     // opens it to say why.
     if (config.status === 'configured' || config.status === 'error') {
-      await $.ui.open({ id: PANE, title: TITLE, columns: 42, rows: 4 })
+      await $.ui.open(LIST_OPEN)
     }
     // The Tasks are read off the session's start, so it does not wait on gh.
     if (config.status === 'configured') {
@@ -141,7 +181,7 @@ export const register: Register = on => {
 
       return { text: 'Matt Deck 已关闭。' }
     }
-    const opened = await $.ui.open({ id: PANE, title: TITLE, columns: 42, rows: 4 })
+    const opened = await $.ui.open(LIST_OPEN)
 
     return { text: opened.isPlaced ? 'Matt Deck 已打开。' : `Matt Deck 暂未显示：${opened.reason}` }
   })
@@ -157,10 +197,56 @@ export const register: Register = on => {
     return moved
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) =>
-    drawPane($.ui.resolve(e), e.props, await read($, view), await read($, nav), {
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const isInline = e.props.placement === 'inline'
+    // Leaving a detail for the list: above the prompt the pane goes back to
+    // four rows, and the focus back onto the row it was on.
+    const toList = async (focus: string | undefined) => {
+      if (isInline) {
+        await $.ui.open(LIST_OPEN)
+      }
+      if (focus !== undefined) {
+        await $.ui.focus({ requestId: PANE, key: focus }).catch(() => undefined)
+      }
+    }
+    const showTab = async (tab: Tab) => {
+      const { detail } = await read($, nav)
+      // A tab left from a detail shows its list when it is shown again.
+      const left = await update($, nav, current => ({ ...current, tab, detail: undefined }))
+      if (detail !== undefined) {
+        await toList(tab === detail.from ? left.focus : undefined)
+      }
+    }
+
+    return drawPane($.ui.resolve(e), e.props, await read($, view), await read($, nav), {
       refresh: () => void loadTasks($, true),
-      showTab: tab => void update($, nav, current => ({ ...current, tab })),
+      showTab: tab => void showTab(tab),
+      // Drills into a Task: from the list's row, which the focus goes back
+      // to, or on from the detail shown.
+      openTask: number =>
+        void (async () => {
+          await update($, nav, current => ({
+            ...current,
+            ...(current.detail === undefined ? { focus: `task:${number}` } : {}),
+            detail: { from: current.detail?.from ?? current.tab, path: [...(current.detail?.path ?? []), number] },
+          }))
+          if (isInline) {
+            await $.ui.open(DETAIL_OPEN)
+          }
+          await loadTask($, number)
+        })(),
+      // One step back: to the Task drilled through before, or to the list.
+      back: () =>
+        void (async () => {
+          const after = await update($, nav, current => {
+            const path = current.detail?.path.slice(0, -1) ?? []
+
+            return { ...current, detail: path.length === 0 ? undefined : { from: current.detail!.from, path } }
+          })
+          if (after.detail === undefined) {
+            await toList(after.focus)
+          }
+        })(),
       cycleFilter: () =>
         void update($, nav, current => ({
           ...current,
@@ -179,6 +265,6 @@ export const register: Register = on => {
             await $.ui.focus({ requestId: PANE, key }).catch(() => undefined)
           }
         })(),
-    }),
-  )
+    })
+  })
 }
