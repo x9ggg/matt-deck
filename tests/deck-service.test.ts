@@ -454,6 +454,7 @@ test('deck_tasks groups the Tasks of the Task Source', async t => {
     labels: ['ready-for-agent'],
     parent: null,
     blockers: [3],
+    blockedBy: [3],
     closedAt: null,
   })
   assert.deepEqual(groups.done[0].blockers, [])
@@ -487,6 +488,35 @@ test('deck_tasks reads Blocking Edges from the body when GitHub has no native de
   )
 })
 
+test('deck_tasks keeps every Blocking Edge a Task declares, to closed Tasks and from closed ones too', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 3, state: 'CLOSED', closedAt: '2026-11-11T05:40:00Z' }),
+    issue({ number: 4 }),
+    // Blocked by a closed Task, an open one, and an issue the source does not hold.
+    issue({ number: 5, blockedBy: [4, 3, 99] }),
+    issue({ number: 6, state: 'CLOSED', closedAt: '2026-11-11T06:00:00Z', blockedBy: [3] }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+  const edges = [...groups.ready, ...groups.blocked, ...groups.done].map(
+    ({ number, blockers, blockedBy }: { number: number; blockers: number[]; blockedBy: number[] }) => ({
+      number,
+      blockers,
+      blockedBy,
+    }),
+  )
+
+  assert.deepEqual(edges, [
+    { number: 4, blockers: [], blockedBy: [] },
+    { number: 5, blockers: [4], blockedBy: [3, 4] },
+    { number: 6, blockers: [], blockedBy: [3] },
+    { number: 3, blockers: [], blockedBy: [] },
+  ])
+})
+
 test('deck_tasks lists Specs and Maps apart from the groups, each with its Child Tasks', async t => {
   const gh = await fakeGh()
   await gh.issues([
@@ -502,6 +532,8 @@ test('deck_tasks lists Specs and Maps apart from the groups, each with its Child
     issue({ number: 12, body: 'Part of #10\n\nThe rest.\n' }),
     // A Parent section wins over a `Part of` line.
     issue({ number: 14, body: 'Part of #1\n\n## Parent\n\n#10\n' }),
+    // A sub-issue wins over a Parent section.
+    issue({ number: 15, parent: 1, body: '## Parent\n\n#10\n' }),
     // A Map with no Child Task yet is still a Map.
     issue({ number: 20, labels: ['wayfinder:map'] }),
     // A closed Spec is still a Spec.
@@ -518,7 +550,7 @@ test('deck_tasks lists Specs and Maps apart from the groups, each with its Child
   assert.deepEqual(
     containers.map(({ kind, number, isOpen, children, progress }: any) => ({ kind, number, isOpen, children, progress })),
     [
-      { kind: 'spec', number: 1, isOpen: true, children: [2, 3, 13], progress: { closed: 1, inProgress: 0, total: 3 } },
+      { kind: 'spec', number: 1, isOpen: true, children: [2, 3, 13, 15], progress: { closed: 1, inProgress: 0, total: 4 } },
       { kind: 'map', number: 10, isOpen: true, children: [11, 12, 14], progress: { closed: 0, inProgress: 0, total: 3 } },
       { kind: 'map', number: 20, isOpen: true, children: [], progress: { closed: 0, inProgress: 0, total: 0 } },
       { kind: 'spec', number: 30, isOpen: false, children: [31], progress: { closed: 1, inProgress: 0, total: 1 } },
@@ -528,7 +560,7 @@ test('deck_tasks lists Specs and Maps apart from the groups, each with its Child
   assert.equal(containers[0].group, 'ready')
   assert.deepEqual(containers[0].labels, ['ready-for-agent'])
   // Specs and Maps are in no group.
-  assert.deepEqual(numbers(groups.ready), [3, 11, 12, 13, 14, 40])
+  assert.deepEqual(numbers(groups.ready), [3, 11, 12, 13, 14, 15, 40])
   assert.deepEqual(numbers(groups.done), [31, 2])
   assert.equal(groups.ready.find((task: any) => task.number === 12).parent, 10)
   assert.equal(groups.ready.find((task: any) => task.number === 40).parent, null)

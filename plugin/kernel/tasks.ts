@@ -50,7 +50,8 @@ export class TaskSourceError extends Error {
 export type Group = 'ready' | 'inProgress' | 'blocked' | 'done'
 
 // A Task as the kernel lists it. `parent` is its Spec or Map, `blockers` the
-// open Tasks blocking an open one, by number.
+// open Tasks blocking an open one, `blockedBy` every Task it declares a
+// Blocking Edge to, closed ones too, by number.
 export type Task = {
   number: number
   title: string
@@ -58,6 +59,7 @@ export type Task = {
   labels: string[]
   parent: number | null
   blockers: number[]
+  blockedBy: number[]
   closedAt: string | null
 }
 
@@ -111,6 +113,7 @@ export const listTasks = async (source: TaskSource, now: number): Promise<TaskLi
       // hold (a pull request, another repository's issue) cannot be checked,
       // so it does not block.
       blockers: task.isOpen ? blockedBy.filter(number => isOpen.get(number) === true).sort((a, b) => a - b) : [],
+      blockedBy: blockedBy.filter(number => isOpen.has(number)).sort((a, b) => a - b),
     } as Task,
   }))
 

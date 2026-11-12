@@ -19,6 +19,12 @@ export type Actions = {
   openTask: (number: number) => void
   // Goes back one step from a detail.
   back: () => void
+  // Shows the Map View of the Spec or Map `number`.
+  showMap: (number: number) => void
+  // Lists the Specs and Maps to switch the Map View to, the focus on the
+  // one shown, `current`; and goes back to the Map View without switching.
+  openSwitch: (current: number) => void
+  closeSwitch: () => void
 }
 
 // Columns a text takes in the terminal: wide East Asian characters take two,
@@ -315,15 +321,24 @@ export const drawPane = (
     ])
 
   // The action bar's actions, at its right end, and the columns they take
-  // with the gap before them.
+  // with the gap before them: a Spec or Map opens its Map View as well.
   const rowActions = (row: Row) => (
-    <Button key="open" plain hotkey="o" label="详情" onPress={() => actions.openTask(numberOf(row))} />
+    <Box flexDirection="row">
+      {'container' in row && (
+        <Box flexDirection="row">
+          <Button key="map" plain hotkey="m" label="地图" onPress={() => actions.showMap(row.container.number)} />
+          <Text>{'  '}</Text>
+        </Box>
+      )}
+      <Button key="open" plain hotkey="o" label="详情" onPress={() => actions.openTask(numberOf(row))} />
+    </Box>
   )
-  const ACTIONS_WIDTH = 2 + width('o: 详情')
+  const actionsWidth = (row: Row) => 2 + width('container' in row ? 'm: 地图  o: 详情' : 'o: 详情')
 
   // What the action bar says of a row before its actions: a Task's triage
-  // label, a Spec's or Map's Child Tasks by group.
-  const actionBar = (row: Row) => (
+  // label, or what is given in its place; a Spec's or Map's Child Tasks by
+  // group.
+  const actionBar = (row: Row, label?: string) => (
     <Box flexDirection="row" justifyContent="space-between">
       {'container' in row ? (
         <Box flexDirection="row">
@@ -333,7 +348,10 @@ export const drawPane = (
       ) : (
         <Text>
           {numbered(row.task.number)}
-          {row.task.labels.find(label => TRIAGE_LABELS.includes(label)) ?? ''}
+          {cut(
+            label ?? row.task.labels.find(label => TRIAGE_LABELS.includes(label)) ?? '',
+            columns - numberColumns - 1 - actionsWidth(row),
+          )}
         </Text>
       )}
       {rowActions(row)}
@@ -360,7 +378,7 @@ export const drawPane = (
             <Text>
               {' '}
               {head}
-              {cut(container.title, columns - 2 - width(head) - width(tail) - countsWidth - ACTIONS_WIDTH)}
+              {cut(container.title, columns - 2 - width(head) - width(tail) - countsWidth - actionsWidth(row))}
               {tail}
             </Text>
             {childCountItems(container)}
@@ -381,7 +399,7 @@ export const drawPane = (
           <Text dimColor={group === 'blocked'}>
             {' '}
             {numbered(task.number)}
-            {cut(task.title, columns - 2 - numberColumns - 1 - width(tail) - ACTIONS_WIDTH)}
+            {cut(task.title, columns - 2 - numberColumns - 1 - width(tail) - actionsWidth(row))}
             {tail}
           </Text>
         </Box>
@@ -391,8 +409,13 @@ export const drawPane = (
   }
 
   // A docked list row, filling the pane's width: glyph, number, title cut to
-  // what is left, the status at the right end.
-  const docked = (row: Row) => {
+  // what is left, the status at the right end. It takes the focus when the
+  // pane takes the keyboard if it is where the focus lands, and opens its
+  // Task when pressed, unless told otherwise.
+  const docked = (
+    row: Row,
+    { isLanding = row === landing, onPress = () => actions.openTask(numberOf(row)) } = {},
+  ) => {
     if ('container' in row) {
       const { container } = row
       const head = ` ${container.kind === 'spec' ? 'Spec' : 'Map'} `
@@ -402,12 +425,7 @@ export const drawPane = (
       const title = cut(container.title, room)
 
       return (
-        <Button
-          key={row.key}
-          plain
-          autoFocus={row === landing ? true : undefined}
-          onPress={() => actions.openTask(container.number)}
-        >
+        <Button key={row.key} plain autoFocus={isLanding ? true : undefined} onPress={onPress}>
           {glyph(container.group)}
           <Text>{head}</Text>
           <Text color="inactive">{number}</Text>
@@ -427,12 +445,7 @@ export const drawPane = (
     const title = cut(task.title, room)
 
     return (
-      <Button
-        key={row.key}
-        plain
-        autoFocus={row === landing ? true : undefined}
-        onPress={() => actions.openTask(task.number)}
-      >
+      <Button key={row.key} plain autoFocus={isLanding ? true : undefined} onPress={onPress}>
         {glyph(group, dim)}
         <Text color="inactive" dimColor={dim}>
           {' '}
@@ -449,17 +462,17 @@ export const drawPane = (
     )
   }
 
-  // A Spec's or Map's progress bar, under its row: closed, in progress, the
-  // rest; all of it `warning` once every Child Task is closed.
-  const progressBar = (container: Container) => {
-    const bar = columns - 2
+  // A Spec's or Map's progress bar: closed, in progress, the rest; all of it
+  // `warning` once every Child Task is closed. Under its row it is indented
+  // two columns; in the Map View's card it fills the box.
+  const progressBar = (container: Container, bar = columns - 2, indent = '  ') => {
     const { closed, inProgress, total } = container.progress
     const closedCells = total === 0 ? 0 : Math.round((closed / total) * bar)
     const inProgressCells = total === 0 ? 0 : Math.round(((closed + inProgress) / total) * bar) - closedCells
 
     return (
       <Box flexDirection="row">
-        <Text>{'  '}</Text>
+        <Text>{indent}</Text>
         <Text color={total > 0 && closed === total ? 'warning' : 'suggestion'}>{'━'.repeat(closedCells)}</Text>
         <Text color="suggestion" dimColor>
           {'╍'.repeat(inProgressCells)}
@@ -469,8 +482,64 @@ export const drawPane = (
     )
   }
 
+  // Lines that stay together on a page, the keys of the rows among them, and
+  // whether the first is a blank line, dropped at the top of a page.
+  type Unit = { lines: RenderChildren[]; keys: string[]; blankFirst: boolean }
+
+  // The units in pages of `room` rows, so the engine never scrolls the pane:
+  // the page `at` with a row for the way back and one for the way on.
+  const paged = (units: Unit[], room: number, at: number) => {
+    const heightOf = (unit: Unit, isFirst: boolean) => unit.lines.length - (isFirst && unit.blankFirst ? 1 : 0)
+    const pages: Unit[][] = [[]]
+    const allHeight = units.reduce((sum, unit, index) => sum + heightOf(unit, index === 0), 0)
+    if (allHeight <= room) {
+      pages[0] = units
+    } else {
+      let used = 0
+      for (const unit of units) {
+        const page = pages.at(-1)!
+        // Each page keeps a row for the way back and one for the way on.
+        const fits = room - (pages.length > 1 ? 1 : 0) - 1
+        if (page.length > 0 && used + heightOf(unit, false) > fits) {
+          pages.push([unit])
+          used = heightOf(unit, true)
+        } else {
+          used += heightOf(unit, page.length === 0)
+          page.push(unit)
+        }
+      }
+    }
+    const pageIndex = Math.min(at, pages.length - 1)
+    const page = pages[pageIndex]!
+    const itemsOf = (units: Unit[]) => units.reduce((sum, unit) => sum + unit.keys.length, 0)
+    const before = itemsOf(pages.slice(0, pageIndex).flat())
+    const after = itemsOf(pages.slice(pageIndex + 1).flat())
+
+    return [
+      pageIndex > 0 && (
+        <Button
+          key="page:prev"
+          plain
+          onPress={() => actions.turnPage(pageIndex - 1, pages[pageIndex - 1]!.flatMap(unit => unit.keys).at(-1))}
+        >
+          <Text color="inactive">{'  '}前面还有 {before} 个</Text>
+        </Button>
+      ),
+      ...page.flatMap((unit, index) => (index === 0 && unit.blankFirst ? unit.lines.slice(1) : unit.lines)),
+      pageIndex < pages.length - 1 && (
+        <Button
+          key="page:next"
+          plain
+          onPress={() => actions.turnPage(pageIndex + 1, pages[pageIndex + 1]!.flatMap(unit => unit.keys)[0])}
+        >
+          <Text color="inactive">{'  '}还有 {after} 个</Text>
+        </Button>
+      ),
+    ]
+  }
+
   // The docked tasks tab: filter, action bar, and the rows in pages that fit
-  // under the fixed rows, so the engine never scrolls the pane.
+  // under the fixed rows.
   const dockedTasks = () => {
     if (list === undefined || shown === undefined) {
       return tasks.status === 'failed' ? failureBox(tasks.failure) : <Text color="inactive">正在读取 Task…</Text>
@@ -496,10 +565,8 @@ export const drawPane = (
       )
     }
 
-    // The list in units that stay together on a page: a Spec or Map with its
-    // bar, a group's title with its first row (after a blank line, dropped at
-    // the top of a page), each further row, a group's fold.
-    type Unit = { lines: RenderChildren[]; keys: string[]; blankFirst: boolean }
+    // The list in units: a Spec or Map with its bar, a group's title with
+    // its first row after a blank line, each further row, a group's fold.
     const units: Unit[] = shown.containers.map(container => ({
       lines: [docked(containerRow(container)), progressBar(container)],
       keys: [keyOf(container.number)],
@@ -546,56 +613,13 @@ export const drawPane = (
     // is its rows, its title and its border.
     const failureRows = tasks.status === 'failed' ? reasonRows(tasks.failure).length + 3 : 0
     const room = Math.max(3, props.scroll.bodyRows - 7 - failureRows)
-    const heightOf = (unit: Unit, isFirst: boolean) => unit.lines.length - (isFirst && unit.blankFirst ? 1 : 0)
-    const pages: Unit[][] = [[]]
-    const allHeight = units.reduce((sum, unit, index) => sum + heightOf(unit, index === 0), 0)
-    if (allHeight <= room) {
-      pages[0] = units
-    } else {
-      let used = 0
-      for (const unit of units) {
-        const page = pages.at(-1)!
-        // Each page keeps a row for the way back and one for the way on.
-        const fits = room - (pages.length > 1 ? 1 : 0) - 1
-        if (page.length > 0 && used + heightOf(unit, false) > fits) {
-          pages.push([unit])
-          used = heightOf(unit, true)
-        } else {
-          used += heightOf(unit, page.length === 0)
-          page.push(unit)
-        }
-      }
-    }
-    const pageIndex = Math.min(nav.page, pages.length - 1)
-    const page = pages[pageIndex]!
-    const itemsOf = (units: Unit[]) => units.reduce((sum, unit) => sum + unit.keys.length, 0)
-    const before = itemsOf(pages.slice(0, pageIndex).flat())
-    const after = itemsOf(pages.slice(pageIndex + 1).flat())
 
     return (
       <Box flexDirection="column">
         {head}
         {actionBar(focused!)}
         <Text> </Text>
-        {pageIndex > 0 && (
-          <Button
-            key="page:prev"
-            plain
-            onPress={() => actions.turnPage(pageIndex - 1, pages[pageIndex - 1]!.flatMap(unit => unit.keys).at(-1))}
-          >
-            <Text color="inactive">{'  '}前面还有 {before} 个</Text>
-          </Button>
-        )}
-        {page.flatMap((unit, index) => (index === 0 && unit.blankFirst ? unit.lines.slice(1) : unit.lines))}
-        {pageIndex < pages.length - 1 && (
-          <Button
-            key="page:next"
-            plain
-            onPress={() => actions.turnPage(pageIndex + 1, pages[pageIndex + 1]!.flatMap(unit => unit.keys)[0])}
-          >
-            <Text color="inactive">{'  '}还有 {after} 个</Text>
-          </Button>
-        )}
+        {paged(units, room, nav.page)}
       </Box>
     )
   }
@@ -708,6 +732,248 @@ export const drawPane = (
     }
 
     return undefined
+  }
+
+  const refs = (numbers: number[]) => numbers.map(number => `#${number}`).join(' ')
+  const listed = list === undefined ? [] : [...list.containers, ...GROUPS.flatMap(group => list.groups[group])]
+
+  // A Spec's or Map's Child Tasks as a tree of Blocking Edges: a Task hangs
+  // under the lowest-numbered of its fellow Child Tasks it declares one to,
+  // closed or not, so the tree keeps its shape as they close. The top level
+  // is ready, in progress, blocked, closed; Tasks under one go by number. A
+  // loop of Blocking Edges, which the Task Source does not forbid, is cut
+  // where it is first reached. `line` is what a node's row starts with,
+  // `more` the start of the row under it.
+  type TreeNode = { number: number; task: Task; group: Group; under?: number; line: string; more: string }
+  const treeOf = (container: Container) => {
+    const members = container.children.flatMap(number => {
+      const entry = entryOf(number)
+
+      return entry === undefined ? [] : [{ number, ...entry }]
+    })
+    const hangsUnder = new Map(
+      members.map(member => [
+        member.number,
+        member.task.blockedBy.find(number => number !== member.number && container.children.includes(number)),
+      ]),
+    )
+    const drawn = new Set<number>()
+    const nodes: TreeNode[] = []
+    const visit = (member: (typeof members)[number], under: number | undefined, prefix: string, isLast: boolean) => {
+      drawn.add(member.number)
+      const below = members.filter(other => hangsUnder.get(other.number) === member.number && !drawn.has(other.number))
+      const own = under === undefined ? '' : `${prefix}${isLast ? '   ' : '│  '}`
+      nodes.push({
+        number: member.number,
+        task: member.task,
+        group: member.group,
+        under,
+        line: under === undefined ? '' : `${prefix}${isLast ? '└─ ' : '├─ '}`,
+        more: `${own}${below.length > 0 ? '│ ' : '  '}`,
+      })
+      below.forEach((other, index) => visit(other, member.number, own, index === below.length - 1))
+    }
+    // In the order the tasks tab lists them: by group, then as in the group.
+    const listOrder = GROUPS.flatMap(group => list!.groups[group].map(task => task.number))
+    const inOrder = [...members].sort(
+      (a, b) =>
+        GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || listOrder.indexOf(a.number) - listOrder.indexOf(b.number),
+    )
+    for (const member of inOrder.filter(member => hangsUnder.get(member.number) === undefined)) {
+      visit(member, undefined, '', true)
+    }
+    // What is left hangs on a loop: walked up to the loop, which is cut
+    // there, so a Task under the loop stays under it.
+    for (const member of inOrder) {
+      if (drawn.has(member.number)) {
+        continue
+      }
+      const walked = new Set<number>()
+      let at = member.number
+      while (!walked.has(at)) {
+        walked.add(at)
+        at = hangsUnder.get(at)!
+      }
+      visit(members.find(other => other.number === at)!, undefined, '', true)
+    }
+
+    return nodes
+  }
+
+  // What the Map View's action bar says of a Task where the tasks tab has
+  // its triage label: every open Task blocking it, else the open ones it
+  // blocks.
+  const relationOf = (task: Task) => {
+    if (task.blockers.length > 0) {
+      return `被 ${refs(task.blockers)} 阻塞`
+    }
+    const blocking = listed.filter(other => other.blockers.includes(task.number)).map(other => other.number)
+
+    return blocking.length > 0 ? `挡着 ${refs(blocking.sort((a, b) => a - b))}` : undefined
+  }
+
+  // The Specs and Maps to choose from, open ones first, and the one the map
+  // tab shows: the one chosen, else the first.
+  const choices = [...(list?.containers ?? [])].sort((a, b) => Number(b.isOpen) - Number(a.isOpen))
+  const mapped = choices.find(container => container.number === nav.map) ?? choices[0]
+
+  // A node of the tree: at the top a row as the tasks tab draws it; under
+  // another, the tree's lines, its glyph, number and title. A blocked node is
+  // dimmed, its lines aside.
+  const nodeRow = (node: TreeNode, isLanding: boolean) => {
+    const container = list!.containers.find(container => container.number === node.number)
+    const row: Row =
+      container === undefined ? { key: keyOf(node.number), task: node.task, group: node.group } : containerRow(container)
+    if (node.under === undefined) {
+      return docked(row, { isLanding })
+    }
+    const dim = node.group === 'blocked'
+    const number = `#${node.number} `
+
+    return (
+      <Button
+        key={row.key}
+        plain
+        autoFocus={isLanding ? true : undefined}
+        onPress={() => actions.openTask(node.number)}
+      >
+        <Text color="inactive">{node.line}</Text>
+        {glyph(node.group, dim)}
+        <Text color="inactive" dimColor={dim}>
+          {' '}
+          {number}
+        </Text>
+        <Text dimColor={dim}>{cut(node.task.title, columns - width(node.line) - 2 - width(number))}</Text>
+      </Button>
+    )
+  }
+
+  // The Map View: the card naming the Spec or Map with its progress, the
+  // action bar, and the tree in pages that fit under them. Above the prompt
+  // the card is one row and the bar under it.
+  const mapView = () => {
+    if (list === undefined) {
+      return tasks.status === 'failed' ? failureBox(tasks.failure) : <Text color="inactive">正在读取 Task…</Text>
+    }
+    const failure = tasks.status === 'failed' ? failureBox(tasks.failure) : undefined
+    if (mapped === undefined) {
+      return (
+        <Box flexDirection="column">
+          {failure}
+          <Text>还没有 Spec 或 Map。</Text>
+          <Text color="inactive">带 Child Task 的 Task 会出现在这里。</Text>
+        </Box>
+      )
+    }
+    if (nav.switching === true) {
+      // The Specs and Maps drawn as the tasks tab draws them, the one shown
+      // where the focus is; enter shows the one pressed.
+      const units: Unit[] = choices.map(container => ({
+        lines: [
+          docked(
+            { key: `switch:${container.number}`, container },
+            { isLanding: container === mapped, onPress: () => actions.showMap(container.number) },
+          ),
+          progressBar(container),
+        ],
+        keys: [`switch:${container.number}`],
+        blankFirst: false,
+      }))
+
+      return (
+        <Box flexDirection="column">
+          <Box flexDirection="row">
+            <Button key="back" plain hotkey="b" label="返回" onPress={actions.closeSwitch} />
+            <Text>{'  '}地图 / 切换</Text>
+          </Box>
+          <Text color="subtle">{'─'.repeat(columns)}</Text>
+          {paged(units, Math.max(3, props.scroll.bodyRows - (isInline ? 4 : 6)), nav.mapPage ?? 0)}
+        </Box>
+      )
+    }
+    const kind = mapped.kind === 'spec' ? 'Spec' : 'Map'
+    const { closed, total } = mapped.progress
+    const progress = `${closed} / ${total} · ${total === 0 ? 0 : Math.round((closed / total) * 100)}%`
+    const switcher = choices.length > 1 && (
+      <Button key="switch" plain hotkey="s" label="切换" onPress={() => actions.openSwitch(mapped.number)} />
+    )
+    const card = isInline ? (
+      <Box flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text>
+            {kind} #{mapped.number}{' '}
+            {cut(mapped.title, columns - width(`${kind} #${mapped.number} `) - width(progress) - 2 - (switcher ? width('  s: 切换') : 0))}
+          </Text>
+          <Box flexDirection="row">
+            <Text>{progress}</Text>
+            {switcher && <Text>{'  '}</Text>}
+            {switcher}
+          </Box>
+        </Box>
+        {progressBar(mapped, columns, '')}
+      </Box>
+    ) : (
+      <Box borderStyle="single" borderColor="subtle" flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text>
+            {kind} #{mapped.number}
+          </Text>
+          {switcher}
+        </Box>
+        <Text>{cut(mapped.title, columns - 2)}</Text>
+        <Box flexDirection="row">{childCountItems(mapped)}</Box>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text>解锁进度</Text>
+          <Text>{progress}</Text>
+        </Box>
+        {progressBar(mapped, columns - 2, '')}
+      </Box>
+    )
+    const nodes = treeOf(mapped)
+    if (nodes.length === 0) {
+      return (
+        <Box flexDirection="column">
+          {failure}
+          {card}
+          <Text color="inactive">还没有 Child Task。</Text>
+        </Box>
+      )
+    }
+    // Where the focus lands, and the node the action bar is about.
+    const landingNode = nodes.find(node => node.group === 'ready') ?? nodes[0]!
+    const focusedNode = nodes.find(node => keyOf(node.number) === nav.focus) ?? landingNode
+    const units: Unit[] = nodes.map(node => {
+      const others = node.task.blockers.filter(number => number !== node.under)
+      const more =
+        node.under !== undefined && others.length > 0
+          ? [<Text color="inactive">{`${node.more}还被 ${refs(others)} 阻塞`}</Text>]
+          : []
+
+      return { lines: [nodeRow(node, node === landingNode), ...more], keys: [keyOf(node.number)], blankFirst: false }
+    })
+    const focusedContainer = list.containers.find(container => container.number === focusedNode.number)
+    const bar =
+      focusedContainer === undefined
+        ? actionBar(
+            { key: keyOf(focusedNode.number), task: focusedNode.task, group: focusedNode.group },
+            relationOf(focusedNode.task),
+          )
+        : actionBar(containerRow(focusedContainer))
+    // Room under the fixed rows: docked, the top four and the card's seven;
+    // above the prompt, the top two and the card's two; and the action bar,
+    // and the reason of a failed read.
+    const failureRows =
+      tasks.status === 'failed' ? (isInline ? 2 : reasonRows(tasks.failure).length + 3) : 0
+    const room = Math.max(3, props.scroll.bodyRows - (isInline ? 5 : 12) - failureRows)
+
+    return (
+      <Box flexDirection="column">
+        {failure}
+        {card}
+        {bar}
+        {paged(units, room, nav.mapPage ?? 0)}
+      </Box>
+    )
   }
 
   const sectionTitle = (title: string) => (
@@ -897,6 +1163,8 @@ export const drawPane = (
           detailView(detail)
         ) : nav.tab === 'tasks' ? (
           inlineTasks()
+        ) : nav.tab === 'map' ? (
+          mapView()
         ) : nav.tab === 'skills' ? (
           <Box flexDirection="column">
             <Text>
@@ -933,6 +1201,7 @@ export const drawPane = (
       <Text color="subtle">{'─'.repeat(columns)}</Text>
       {detail !== undefined && detailView(detail)}
       {detail === undefined && nav.tab === 'tasks' && dockedTasks()}
+      {detail === undefined && nav.tab === 'map' && mapView()}
       {detail === undefined && nav.tab === 'skills' && (
         <Text>
           Skill Source <Text color="inactive">{skillSource}</Text>

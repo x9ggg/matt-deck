@@ -20,7 +20,7 @@ import { drawPane } from './pane.tsx'
 const PANE = 'matt-deck'
 const TITLE = 'Matt Deck'
 // Above the prompt the pane is four rows, and as tall as it may be while it
-// shows a detail.
+// shows a detail or the map tab.
 const LIST_OPEN = { id: PANE, title: TITLE, columns: 42, rows: 4 }
 const DETAIL_OPEN = { id: PANE, title: TITLE, columns: 42 }
 const COMMAND = 'deck'
@@ -199,22 +199,38 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const isInline = e.props.placement === 'inline'
-    // Leaving a detail for the list: above the prompt the pane goes back to
-    // four rows, and the focus back onto the row it was on.
-    const toList = async (focus: string | undefined) => {
-      if (isInline) {
-        await $.ui.open(LIST_OPEN)
-      }
-      if (focus !== undefined) {
-        await $.ui.focus({ requestId: PANE, key: focus }).catch(() => undefined)
+    const moveFocus = async (key: string | undefined) => {
+      if (key !== undefined) {
+        await $.ui.focus({ requestId: PANE, key }).catch(() => undefined)
       }
     }
+    // Leaving a detail for the list: above the prompt the pane goes back to
+    // four rows, unless the list is the map tab's, and the focus back onto
+    // the row it was on.
+    const toList = async (tab: Tab, focus: string | undefined) => {
+      if (isInline && tab !== 'map') {
+        await $.ui.open(LIST_OPEN)
+      }
+      await moveFocus(focus)
+    }
     const showTab = async (tab: Tab) => {
-      const { detail } = await read($, nav)
-      // A tab left from a detail shows its list when it is shown again.
-      const left = await update($, nav, current => ({ ...current, tab, detail: undefined }))
-      if (detail !== undefined) {
-        await toList(tab === detail.from ? left.focus : undefined)
+      const before = await read($, nav)
+      // A tab left from a detail, or from the list to switch the Map View,
+      // shows its list when it is shown again.
+      const left = await update($, nav, current => ({
+        ...current,
+        tab,
+        detail: undefined,
+        switching: false,
+        mapPage: 0,
+      }))
+      // Above the prompt the map tab is as tall as a detail.
+      const wasTall = before.detail !== undefined || before.tab === 'map'
+      if (isInline && wasTall !== (tab === 'map')) {
+        await $.ui.open(tab === 'map' ? DETAIL_OPEN : LIST_OPEN)
+      }
+      if (before.detail !== undefined && tab === before.detail.from) {
+        await moveFocus(left.focus)
       }
     }
 
@@ -244,7 +260,7 @@ export const register: Register = on => {
             return { ...current, detail: path.length === 0 ? undefined : { from: current.detail!.from, path } }
           })
           if (after.detail === undefined) {
-            await toList(after.focus)
+            await toList(after.tab, after.focus)
           }
         })(),
       cycleFilter: () =>
@@ -260,10 +276,39 @@ export const register: Register = on => {
       // the page turned all the same.
       turnPage: (page, key) =>
         void (async () => {
-          await update($, nav, current => ({ ...current, page, ...(key === undefined ? {} : { focus: key }) }))
-          if (key !== undefined) {
-            await $.ui.focus({ requestId: PANE, key }).catch(() => undefined)
+          await update($, nav, current => ({
+            ...current,
+            ...(current.tab === 'map' ? { mapPage: page } : { page }),
+            ...(key === undefined || key.startsWith('switch:') ? {} : { focus: key }),
+          }))
+          await moveFocus(key)
+        })(),
+      showMap: number =>
+        void (async () => {
+          const before = await read($, nav)
+          await update($, nav, current => ({
+            ...current,
+            tab: 'map',
+            map: number,
+            switching: false,
+            mapPage: 0,
+            detail: undefined,
+          }))
+          if (isInline && before.tab !== 'map') {
+            await $.ui.open(DETAIL_OPEN)
           }
+        })(),
+      // The focus goes onto the Spec or Map shown, and back onto the node it
+      // was on.
+      openSwitch: current =>
+        void (async () => {
+          await update($, nav, now => ({ ...now, switching: true, mapPage: 0 }))
+          await moveFocus(`switch:${current}`)
+        })(),
+      closeSwitch: () =>
+        void (async () => {
+          const after = await update($, nav, current => ({ ...current, switching: false, mapPage: 0 }))
+          await moveFocus(after.focus)
         })(),
     })
   })

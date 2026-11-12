@@ -20,14 +20,16 @@ const CONFIGURED = {
 
 type Answer = { structuredContent?: unknown; isError: boolean; text?: string }
 
-// A Task as `deck_tasks` lists it.
-const task = (number: number, title: string, more: object = {}) => ({
+// A Task as `deck_tasks` lists it. Unless told otherwise it declares a
+// Blocking Edge to each of its blockers and to nothing else.
+const task = (number: number, title: string, more: { blockers?: number[]; [field: string]: unknown } = {}) => ({
   number,
   title,
   isOpen: true,
   labels: [] as string[],
   parent: null as number | null,
   blockers: [] as number[],
+  blockedBy: more.blockers ?? ([] as number[]),
   closedAt: null as string | null,
   ...more,
 })
@@ -363,11 +365,11 @@ test('the action bar follows the focus from row to row and keeps the last row', 
 
   // On a Spec the bar counts its Child Tasks by group, then its action.
   await focus($, 'task:1')
-  expect((await ui.find({ type: 'Box', text: /^#1  / }))?.text).toBe('#1  ◇ 1  ▶ 0  □ 2  ◆ 1详情')
+  expect((await ui.find({ type: 'Box', text: /^#1  / }))?.text).toBe('#1  ◇ 1  ▶ 0  □ 2  ◆ 1地图  详情')
 
   // Off the rows (onto a tab) the bar stays where it was.
   await focus($, 'tab:map')
-  expect((await ui.find({ type: 'Box', text: /^#1  / }))?.text).toBe('#1  ◇ 1  ▶ 0  □ 2  ◆ 1详情')
+  expect((await ui.find({ type: 'Box', text: /^#1  / }))?.text).toBe('#1  ◇ 1  ▶ 0  □ 2  ◆ 1地图  详情')
   await ui.unmount()
 })
 
@@ -639,7 +641,7 @@ test('above the prompt the action bar names a Spec once, then its progress and i
   await focus($, 'task:1')
 
   expect(await texts(ui, 'Box')).toContain(
-    '◇ Spec #1 规格：里程碑一，Claude Code 上的 Matt Deck 闭环   1/4   ◇ 1  ▶ 0  □ 2  ◆ 1',
+    '◇ Spec #1 规格：里程碑一，Claude Code 上的 Matt De…   1/4   ◇ 1  ▶ 0  □ 2  ◆ 1',
   )
   await ui.unmount()
 })
@@ -877,5 +879,228 @@ test('a Task that cannot be read says why under the way back', async ($, on) => 
   expect(lines).toContain('✕ 读取 #3 失败')
   expect(lines).toContain('连不上 GitHub。检查网络后按 r 重试。')
   expect(await ui.find({ key: 'back' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the map tab shows the first open Spec: its card, the action bar, and its Child Tasks in a tree of Blocking Edges', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await ui.press({ key: 'tab:map' })
+
+  const boxes = await texts(ui, 'Box')
+  // The card: which Spec, its title cut to the box, its Child Tasks by group,
+  // its progress. The project has another Spec to switch to.
+  expect(boxes).toContain('Spec #1切换')
+  expect(await texts(ui)).toContain('规格：里程碑一，Claude Code 上的 Matt D…')
+  expect(boxes).toContain('◇ 1  ▶ 0  □ 2  ◆ 1')
+  expect(boxes).toContain('解锁进度1 / 4 · 25%')
+  // The action bar is on the first ready Task, which blocks two others.
+  expect(boxes).toContain('#3  挡着 #5 #7详情')
+  // A Task hangs under the lowest-numbered Task blocking it, and says what
+  // else blocks it; the top level is ready, then closed.
+  expect((await texts(ui, 'Button')).filter(text => /^[◇▶□◆├└│ ]/.test(text))).toEqual([
+    '◇ #3  Pane 布局设计                 可执行',
+    '├─ □ #5 任务列表：按分组展示 Task',
+    '└─ □ #7 Map View',
+    expect.stringMatching(/^◆ #2  骨架：Configured Projec… 11-1[01] \d\d:\d\d$/),
+  ])
+  expect(await texts(ui)).toContain('     还被 #5 阻塞')
+  expect((await ui.find({ key: 'task:3' }))?.props.autoFocus).toBe(true)
+  // A blocked node is dimmed, the tree's lines aside.
+  expect((await ui.find({ key: 'task:5' }))?.children.slice(1)).toEqual(
+    Array(3).fill(expect.objectContaining({ props: expect.objectContaining({ dimColor: true }) })),
+  )
+  await ui.unmount()
+})
+
+test('the tree keeps its shape as blockers close, and names a blocker outside the Spec', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () =>
+      tasks({
+        containers: [
+          spec(1, '规格一', [3, 4, 5, 6, 7, 8, 9], { closed: 2, inProgress: 0, total: 7 }),
+          spec(40, '另一个规格', [41], { closed: 0, inProgress: 0, total: 1 }),
+        ],
+        // #5 is blocked by #3, which has closed: it is ready, still under #3.
+        ready: [task(5, '跟在 #3 后面', { parent: 1, blockedBy: [3] }), task(41, '别处的 Task', { parent: 40 })],
+        blocked: [
+          // Blocked only from outside the Spec: at the top, saying by what.
+          task(6, '等别处', { parent: 1, blockers: [41] }),
+          // Blocking each other: drawn once each, not forever.
+          task(8, '环一', { parent: 1, blockers: [9] }),
+          task(9, '环二', { parent: 1, blockers: [8] }),
+          // Under a Task on the loop, though its number is lower.
+          task(7, '跟在环后面', { parent: 1, blockers: [8] }),
+        ],
+        // The latest closed first, as the tasks tab has them.
+        done: [
+          task(4, '后关闭的', { isOpen: false, parent: 1, closedAt: '2026-11-11T09:00:00Z' }),
+          task(3, '已经关闭', { isOpen: false, parent: 1, closedAt: '2026-11-11T05:40:00Z' }),
+        ],
+      }),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await ui.press({ key: 'tab:map' })
+
+  expect((await texts(ui, 'Button')).filter(text => /^[◇▶□◆├└│ ]/.test(text))).toEqual([
+    '□ #6  等别处                   被 #41 阻塞',
+    expect.stringMatching(/^◆ #4  后关闭的 +11-1[12] \d\d:\d\d$/),
+    expect.stringMatching(/^◆ #3  已经关闭                 11-1[01] \d\d:\d\d$/),
+    '└─ ◇ #5 跟在 #3 后面',
+    // A loop is cut where it is reached, after the top level.
+    '□ #8  环一                      被 #9 阻塞',
+    '├─ □ #7 跟在环后面',
+    '└─ □ #9 环二',
+  ])
+  await focus($, 'task:6')
+  expect(await texts(ui, 'Box')).toContain('#6  被 #41 阻塞详情')
+  await ui.unmount()
+})
+
+// A project with a Spec, a Map and a closed Spec.
+const SPECS_AND_MAPS = tasks({
+  containers: [
+    spec(1, '规格：里程碑一', [3], { closed: 0, inProgress: 0, total: 1 }),
+    { ...spec(21, 'Codex 适配走哪条路', [22], { closed: 0, inProgress: 0, total: 1 }), kind: 'map' },
+    spec(30, '里程碑零', [31], { closed: 1, inProgress: 0, total: 1 }, { isOpen: false, group: 'done' }),
+  ],
+  ready: [task(3, '规格一的 Task', { parent: 1 }), task(22, '要定的事', { parent: 21 })],
+  done: [task(31, '里程碑零的 Task', { isOpen: false, parent: 30, closedAt: '2026-11-10T05:40:00Z' })],
+})
+
+test('s lists only the Specs and Maps, the closed last, and enter shows the one chosen', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => SPECS_AND_MAPS })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:map' })
+
+  await ui.press({ key: 'switch' })
+
+  expect(await texts(ui, 'Box')).toContain('返回  地图 / 切换')
+  expect((await ui.findAll({ type: 'Button', text: /^[◇◆] / })).map(button => button.text)).toEqual([
+    '◇ Spec #1 规格：里程碑一               0/1',
+    '◇ Map #21 Codex 适配走哪条路           0/1',
+    '◆ Spec #30 里程碑零                    1/1',
+  ])
+  // The one shown is where the focus is.
+  expect((await ui.find({ key: 'switch:1' }))?.props.autoFocus).toBe(true)
+
+  await ui.press({ key: 'switch:21' })
+  expect(await ui.find({ key: 'back' })).toBeUndefined()
+  expect(await texts(ui, 'Box')).toContain('Map #21切换')
+  expect((await ui.find({ key: 'task:22' }))?.text).toMatch(/^◇ #22 要定的事/)
+
+  // b goes back without switching; a closed Spec can be chosen too.
+  await ui.press({ key: 'switch' })
+  await ui.press({ key: 'back' })
+  expect(await texts(ui, 'Box')).toContain('Map #21切换')
+  await ui.press({ key: 'switch' })
+  await ui.press({ key: 'switch:30' })
+  expect(await texts(ui, 'Box')).toContain('Spec #30切换')
+  await ui.unmount()
+})
+
+test('m on a Spec in the tasks tab opens its Map View', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => SPECS_AND_MAPS })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await focus($, 'task:21')
+
+  await ui.press({ key: 'map' })
+
+  expect((await ui.find({ key: 'tab:map' }))?.children).toEqual([
+    expect.objectContaining({ props: expect.objectContaining({ bold: true, underline: true }) }),
+  ])
+  expect(await texts(ui, 'Box')).toContain('Map #21切换')
+  await ui.unmount()
+})
+
+test('with one Spec there is nothing to switch to, and with none the map tab says so', async ($, on) => {
+  let answer = tasks({ containers: [spec(1, '唯一的规格', [3], { closed: 0, inProgress: 0, total: 1 })], ready: [task(3, 'T', { parent: 1 })] })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:map' })
+  expect(await ui.find({ key: 'switch' })).toBeUndefined()
+  expect(await texts(ui, 'Box')).toContain('Spec #1')
+
+  answer = tasks({ ready: [task(3, 'T')] })
+  await ui.press({ key: 'refresh' })
+  await seen.clock.settle()
+
+  const lines = await texts(ui)
+  expect(lines).toContain('还没有 Spec 或 Map。')
+  expect(lines).toContain('带 Child Task 的 Task 会出现在这里。')
+  await ui.unmount()
+})
+
+test('above the prompt the map tab grows the pane, the card in one row, and gives the four rows back', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+
+  await ui.press({ key: 'tab:map' })
+
+  expect(seen.openedRows).toEqual([4, undefined])
+  const boxes = await texts(ui, 'Box')
+  expect(boxes).toContain('Spec #1 规格：里程碑一，Claude Code 上的 Matt Deck 闭环1 / 4 · 25%  切换')
+  expect(boxes).toContain('#3  挡着 #5 #7详情')
+  expect((await ui.find({ key: 'task:5' }))?.text).toBe('├─ □ #5 任务列表：按分组展示 Task')
+
+  // Into a node's detail and back, the pane stays tall.
+  await ui.press({ key: 'task:5' })
+  await seen.clock.settle()
+  expect(await texts(ui, 'Box')).toContain('返回  地图 / #1 / #5')
+  await ui.press({ key: 'back' })
+  expect(seen.openedRows).toEqual([4, undefined, undefined])
+  expect(await texts(ui, 'Box')).toContain('#5  被 #3 阻塞详情')
+
+  await ui.press({ key: 'tab:tasks' })
+  expect(seen.openedRows).toEqual([4, undefined, undefined, 4])
+  await ui.unmount()
+})
+
+test('a tree taller than the pane turns pages under the card', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () =>
+      tasks({
+        containers: [spec(1, '大规格', [3, ...Array.from({ length: 8 }, (_, i) => 101 + i)], { closed: 0, inProgress: 0, total: 9 })],
+        ready: [task(3, '起点', { parent: 1 })],
+        blocked: Array.from({ length: 8 }, (_, i) => task(101 + i, `第 ${i + 1} 个`, { parent: 1, blockers: [3] })),
+      }),
+  })
+  await start($)
+  await seen.clock.settle()
+  // Five rows fit under the fixed twelve.
+  const ui = await $.ui.mount({
+    ...PANE_TARGET,
+    props: { ...PANE_TARGET.props, scroll: { offset: 0, bodyRows: 17 } },
+    surface: 'terminal',
+  })
+  await ui.press({ key: 'tab:map' })
+  const nodes = async () => (await ui.findAll({ type: 'Button' })).map(b => b.key).filter(key => key?.startsWith('task:'))
+
+  expect(await nodes()).toEqual(['task:3', 'task:101', 'task:102', 'task:103'])
+  expect((await ui.find({ key: 'page:next' }))?.text).toBe('  还有 5 个')
+
+  await ui.press({ key: 'page:next' })
+  expect(await nodes()).toEqual(['task:104', 'task:105', 'task:106'])
+  expect((await ui.find({ key: 'page:prev' }))?.text).toBe('  前面还有 4 个')
+
+  // The tasks tab keeps its own page.
+  await ui.press({ key: 'tab:tasks' })
+  expect(await ui.find({ key: 'page:prev' })).toBeUndefined()
   await ui.unmount()
 })

@@ -15,7 +15,8 @@ export type DeckConfigAnswer =
 export type Group = 'ready' | 'inProgress' | 'blocked' | 'done'
 
 // A Task as `deck_tasks` lists it: `blockers` are the open Tasks blocking an
-// open one.
+// open one, `blockedBy` every Task it declares a Blocking Edge to, closed
+// ones too.
 export type Task = {
   number: number
   title: string
@@ -23,6 +24,7 @@ export type Task = {
   labels: string[]
   parent: number | null
   blockers: number[]
+  blockedBy: number[]
   closedAt: string | null
 }
 
@@ -108,13 +110,18 @@ export type Filter = 'all' | Group
 // Where the person is in the pane. `focus` is the key of the row the action
 // bar is about, the last one the focus was on. `detail` is the Task the tab
 // `from` drilled into, after the Tasks drilled through on the way, the last
-// one shown.
+// one shown. `page` is the tasks tab's page; `map` the Spec or Map the map
+// tab shows, `switching` whether it lists them to switch, `mapPage` the page
+// of what it shows.
 export type Nav = {
   tab: Tab
   filter: Filter
   page: number
   focus?: string
   detail?: { from: Tab; path: number[] }
+  map?: number
+  switching?: boolean
+  mapPage?: number
 }
 
 declare module 'claude-code' {
