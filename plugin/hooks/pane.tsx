@@ -819,7 +819,7 @@ export const drawPane = (
 
   // A node of the tree: at the top a row as the tasks tab draws it; under
   // another, the tree's lines, its glyph, number and title. A blocked node is
-  // dimmed, its lines aside.
+  // dimmed whole.
   const nodeRow = (node: TreeNode, isLanding: boolean) => {
     const container = list!.containers.find(container => container.number === node.number)
     const row: Row =
@@ -837,7 +837,9 @@ export const drawPane = (
         autoFocus={isLanding ? true : undefined}
         onPress={() => actions.openTask(node.number)}
       >
-        <Text color="inactive">{node.line}</Text>
+        <Text color="inactive" dimColor={dim}>
+          {node.line}
+        </Text>
         {glyph(node.group, dim)}
         <Text color="inactive" dimColor={dim}>
           {' '}
@@ -946,7 +948,11 @@ export const drawPane = (
       const others = node.task.blockers.filter(number => number !== node.under)
       const more =
         node.under !== undefined && others.length > 0
-          ? [<Text color="inactive">{`${node.more}还被 ${refs(others)} 阻塞`}</Text>]
+          ? [
+              <Text color="inactive" dimColor={node.group === 'blocked'}>
+                {`${node.more}还被 ${refs(others)} 阻塞`}
+              </Text>,
+            ]
           : []
 
       return { lines: [nodeRow(node, node === landingNode), ...more], keys: [keyOf(node.number)], blankFirst: false }
@@ -1042,7 +1048,7 @@ export const drawPane = (
         ...(parent === undefined
           ? []
           : [
-              <Button key={`parent:${parent.number}`} plain onPress={() => actions.openTask(parent.number)}>
+              <Button key={`parent:${parent.number}`} plain onPress={() => actions.showMap(parent.number)}>
                 <Text>
                   {cut(`属于 ${parent.kind === 'spec' ? 'Spec' : 'Map'} #${parent.number} ${parent.title}`, columns)}
                 </Text>

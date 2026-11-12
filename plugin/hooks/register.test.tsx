@@ -782,14 +782,14 @@ test('from a detail b goes back one step at a time, to the row it came from, wit
   await seen.clock.settle()
   expect(await texts(ui, 'Box')).toContain('返回  任务 / #1 / #7')
 
-  // On into a blocker, and on into what that one belongs to.
+  // On into a blocker, and on into the one blocking that.
   await ui.press({ key: 'blocker:5' })
   await seen.clock.settle()
   expect(await texts(ui, 'Box')).toContain('返回  任务 / #1 / #7 / #5')
   expect(await texts(ui, 'Box')).toContain('#5 Task 5')
-  await ui.press({ key: 'parent:1' })
+  await ui.press({ key: 'blocker:3' })
   await seen.clock.settle()
-  expect(await texts(ui, 'Box')).toContain('返回  任务 / #1 / #7 / #5 / #1')
+  expect(await texts(ui, 'Box')).toContain('返回  任务 / #1 / #7 / #5 / #3')
 
   await ui.press({ key: 'back' })
   expect(await texts(ui, 'Box')).toContain('返回  任务 / #1 / #7 / #5')
@@ -909,10 +909,11 @@ test('the map tab shows the first open Spec: its card, the action bar, and its C
   ])
   expect(await texts(ui)).toContain('     还被 #5 阻塞')
   expect((await ui.find({ key: 'task:3' }))?.props.autoFocus).toBe(true)
-  // A blocked node is dimmed, the tree's lines aside.
-  expect((await ui.find({ key: 'task:5' }))?.children.slice(1)).toEqual(
-    Array(3).fill(expect.objectContaining({ props: expect.objectContaining({ dimColor: true }) })),
+  // A blocked node is dimmed whole: the tree's lines, and the row under it.
+  expect((await ui.find({ key: 'task:5' }))?.children).toEqual(
+    Array(4).fill(expect.objectContaining({ props: expect.objectContaining({ dimColor: true }) })),
   )
+  expect((await ui.find({ type: 'Text', text: '     还被 #5 阻塞' }))?.props.dimColor).toBe(true)
   await ui.unmount()
 })
 
@@ -1021,6 +1022,25 @@ test('m on a Spec in the tasks tab opens its Map View', async ($, on) => {
     expect.objectContaining({ props: expect.objectContaining({ bold: true, underline: true }) }),
   ])
   expect(await texts(ui, 'Box')).toContain('Map #21切换')
+  await ui.unmount()
+})
+
+test('the row saying what a Task belongs to opens that Spec\'s Map View', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'task:7' })
+  await seen.clock.settle()
+
+  await ui.press({ key: 'parent:1' })
+
+  expect((await ui.find({ key: 'tab:map' }))?.children).toEqual([
+    expect.objectContaining({ props: expect.objectContaining({ bold: true, underline: true }) }),
+  ])
+  expect(await texts(ui, 'Box')).toContain('Spec #1切换')
+  // The detail is left behind, as when a tab is left from one.
+  expect(await ui.find({ key: 'back' })).toBeUndefined()
   await ui.unmount()
 })
 
