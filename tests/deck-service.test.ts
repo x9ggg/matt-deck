@@ -353,6 +353,83 @@ test('deck_write_config writes nothing when the config is malformed', async t =>
   assert.deepEqual(read.structuredContent, { configured: false, workspace: dir })
 })
 
+const ALLOW_RULE = 'mcp__plugin_matt-deck_deck'
+
+test('deck_allow_service adds the rule allowing the Deck service to the project\'s local settings, once', async t => {
+  const dir = await workspace()
+  const deck = startDeck(dir, { HOME: await home() })
+  t.after(deck.stop)
+  const settings = () => readFile(join(dir, '.claude', 'settings.local.json'), 'utf8')
+
+  const before = await deck.callTool('deck_setup_survey')
+  const added = await deck.callTool('deck_allow_service')
+  const written = await settings()
+  const again = await deck.callTool('deck_allow_service')
+  const after = await deck.callTool('deck_setup_survey')
+
+  assert.equal(before.structuredContent.isServiceAllowed, false)
+  assert.deepEqual(added.structuredContent, { path: '.claude/settings.local.json', rule: ALLOW_RULE, added: true })
+  assert.deepEqual(JSON.parse(written), { permissions: { allow: [ALLOW_RULE] } })
+  assert.deepEqual(again.structuredContent, { path: '.claude/settings.local.json', rule: ALLOW_RULE, added: false })
+  assert.equal(await settings(), written)
+  assert.equal(after.structuredContent.isServiceAllowed, true)
+})
+
+test('deck_allow_service keeps what the local settings hold, and leaves a file it cannot read as it is', async t => {
+  const kept = await workspace()
+  await mkdir(join(kept, '.claude'))
+  await writeFile(
+    join(kept, '.claude', 'settings.local.json'),
+    JSON.stringify({ permissions: { allow: ['Bash(gh issue list:*)'], deny: ['WebFetch'] }, outputStyle: 'Explanatory' }),
+  )
+  // Not JSON, or permissions in a shape no rule can be added to.
+  const unreadable = ['{ not json', '{"permissions":"ab"}', '{"permissions":{"allow":"xy"}}', '{"permissions":{"allow":{}}}']
+  const broken = await Promise.all(
+    unreadable.map(async text => {
+      const dir = await workspace()
+      await mkdir(join(dir, '.claude'))
+      await writeFile(join(dir, '.claude', 'settings.local.json'), text)
+
+      return dir
+    }),
+  )
+  const decks = [kept, ...broken].map(dir => startDeck(dir))
+  for (const deck of decks) {
+    t.after(deck.stop)
+  }
+
+  const [a, ...refused] = await Promise.all(decks.map(deck => deck.callTool('deck_allow_service')))
+
+  assert.equal(a.isError, false)
+  assert.deepEqual(JSON.parse(await readFile(join(kept, '.claude', 'settings.local.json'), 'utf8')), {
+    permissions: { allow: ['Bash(gh issue list:*)', ALLOW_RULE], deny: ['WebFetch'] },
+    outputStyle: 'Explanatory',
+  })
+  assert.deepEqual(
+    refused.map(result => result.isError),
+    [true, true, true, true],
+  )
+  assert.match(refused[0].content[0].text, /settings\.local\.json is not valid JSON/)
+  assert.match(refused[1].content[0].text, /settings\.local\.json.*permissions/)
+  for (const [index, dir] of broken.entries()) {
+    assert.equal(await readFile(join(dir, '.claude', 'settings.local.json'), 'utf8'), unreadable[index])
+  }
+})
+
+test('deck_allow_service writes where the Session runs, which is where Claude Code reads local settings', async t => {
+  const dir = await workspace()
+  await mkdir(join(dir, '.git'))
+  await mkdir(join(dir, 'packages', 'app'), { recursive: true })
+  const deck = startDeck(join(dir, 'packages', 'app'))
+  t.after(deck.stop)
+
+  await deck.callTool('deck_allow_service')
+
+  assert.deepEqual(JSON.parse(await readFile(join(dir, 'packages', 'app', '.claude', 'settings.local.json'), 'utf8')), {
+    permissions: { allow: [ALLOW_RULE] },
+  })
+})
+
 // A `gh` on the Deck service's PATH that answers with prepared JSON (see
 // fake-gh.ts). `answer` sets what every later call gets; `calls` lists the
 // calls made so far.

@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 为当前项目写出 Deck 的项目配置。之后新开的 Session 里 Pane 会自动出现。
 
-所有读写都经 Deck 服务（MCP 服务 `deck`）的两个工具完成：`deck_setup_survey` 摸底，`deck_write_config` 写出配置文件。一次只问一个问题，把推荐答案放在最前面。
+所有读写都经 Deck 服务（MCP 服务 `deck`）的三个工具完成：`deck_setup_survey` 摸底，`deck_write_config` 写出配置文件，`deck_allow_service` 写入允许 Deck 服务的权限规则。一次只问一个问题，把推荐答案放在最前面。
 
 ## 1. 摸底
 
@@ -17,12 +17,13 @@ disable-model-invocation: true
 - `existing`：现有配置。`{ configured: false }`；`{ configured: true, config }`；或配置文件存在但格式不对时的 `{ configured: true, problem }`。
 - `taskSource`：从仓库的 Matt issue tracker 文档预填的 Task Source，没有文档时为 `null`。`tracker` 是文档标题里写的任务来源，标题里读不出时为 `null`。`type` 是它对应的 Task Source 类型，没有可预填的类型时为 `null`。
 - `skillSources`：本机找到的 Matt skills，每份一项，可直接放进配置。
+- `isServiceAllowed`：本项目的 `.claude/settings.local.json` 里是否已有允许 Deck 服务工具的权限规则。
 
 Deck 服务连不上时，告诉用户原因并停止。
 
 ## 2. 已有配置
 
-`existing.configured` 为 `true` 时，把现有配置（或 `problem`）原样展示给用户，问是否修改。用户不改就停止。用户要改就继续，写入时带 `replace: true`：
+`existing.configured` 为 `true` 时，把现有配置（或 `problem`）原样展示给用户，问是否修改。用户不改：`existing` 有 `config` 时跳到第 6 步；只有 `problem` 时停止，配置读不出来，Pane 用不了。用户要改就继续，写入时带 `replace: true`：
 
 - Task Source 照第 3 步重新判定，以这次摸底的结果为准。
 - Skill Source 在第 4 步把 `existing.config.skillSource` 作为推荐项。`existing` 只有 `problem` 时没有现有值，第 4 步只用 `skillSources`。
@@ -50,4 +51,20 @@ Skill Source 选定后固定，Deck 展示和 agent 执行都用这一份。
 
 调用 `deck_write_config`，参数为 `{ "config": { "taskSource": ..., "skillSource": ... } }`，第 2 步用户同意修改时加 `"replace": true`。工具报错时把原文告诉用户并停止。
 
-写入成功后告诉用户：配置在 `.matt-deck/config.json`，提交进仓库后随仓库走；新开一个 Session，Pane 会自动出现。
+写入成功后告诉用户：配置在 `.matt-deck/config.json`，提交进仓库后随仓库走。
+
+## 6. 权限规则
+
+Pane 的每次读取都是对 Deck 服务工具的一次调用。项目里没有允许这些工具的权限规则时，每次调用都要先经过 Session 的权限钩子；钩子等人批准的环境里（例如 cmux），Pane 会迟迟不出现，每次刷新都要等。
+
+`isServiceAllowed` 为 `true`：规则已经在，不用问。
+
+否则把下面三点告诉用户，问是否写入：
+
+- 写入的位置是本项目的 `.claude/settings.local.json`，只在本机生效，不随仓库走。
+- 写入的规则是 `mcp__plugin_matt-deck_deck`，文件里已有的内容保留。
+- 之后本项目里 Deck 服务的所有工具都不再逐次询问，agent 调用时也一样。
+
+用户同意就调用 `deck_allow_service`；工具报错时把原文告诉用户。用户不同意就不写，并说明：Pane 读取迟迟不返回时，可以再运行一次本技能补上。
+
+最后告诉用户：新开一个 Session，Pane 会自动出现。

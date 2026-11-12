@@ -4,6 +4,7 @@
 // a caller.
 // Runs on plain Node with no installed packages, so MCP is spoken by hand.
 import { existsSync } from 'node:fs'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -40,6 +41,39 @@ type ToolResult = {
   content: { type: 'text'; text: string }[]
   structuredContent?: object
   isError: boolean
+}
+
+// Claude Code puts every call of a tool that no permission rule allows
+// through the Session's permission hooks, the Pane's own reads too, and a hook
+// that waits for the person keeps the Pane waiting with it. This rule allows every
+// tool of the Deck service, as Claude Code names the service of this plugin.
+// It goes in the local settings of the directory the Session runs in, which
+// is where Claude Code reads them, not at the Workspace's root.
+const ALLOW_RULE = 'mcp__plugin_matt-deck_deck'
+const LOCAL_SETTINGS = '.claude/settings.local.json'
+
+// Throws when the file is there and is not a JSON object.
+const readLocalSettings = async (): Promise<Record<string, any>> => {
+  let text: string
+  try {
+    text = await readFile(join(process.cwd(), LOCAL_SETTINGS), 'utf8')
+  } catch (error: any) {
+    if (error.code === 'ENOENT') {
+      return {}
+    }
+    throw error
+  }
+  let settings: unknown
+  try {
+    settings = JSON.parse(text)
+  } catch (error: any) {
+    throw new Error(`${LOCAL_SETTINGS} is not valid JSON: ${error.message}`)
+  }
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
+    throw new Error(`${LOCAL_SETTINGS} is not a JSON object`)
+  }
+
+  return settings
 }
 
 // Answers from the Skill Source of the project config. A Skill Source that
@@ -159,10 +193,16 @@ const tools = {
   },
   deck_setup_survey: {
     description:
-      'For the configure skill: the existing project config, the Task Source prefilled from the Matt issue tracker doc, and the Matt skills found on this machine.',
+      'For the configure skill: the existing project config, the Task Source prefilled from the Matt issue tracker doc, the Matt skills found on this machine, and whether the local settings allow the Deck service\'s tools.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: async (): Promise<ToolResult> => {
-      const result = await surveySetup(workspace, homedir())
+      // Local settings that cannot be read allow nothing; deck_allow_service
+      // says why when it is asked to write them.
+      const allowed: unknown = (await readLocalSettings().catch(() => ({}) as Record<string, any>)).permissions?.allow
+      const result = {
+        ...(await surveySetup(workspace, homedir())),
+        isServiceAllowed: Array.isArray(allowed) && allowed.includes(ALLOW_RULE),
+      }
 
       return {
         content: [{ type: 'text', text: JSON.stringify(result) }],
@@ -195,6 +235,31 @@ const tools = {
         structuredContent: written,
         isError: false,
       }
+    },
+  },
+  deck_allow_service: {
+    description:
+      'For the configure skill: add the permission rule allowing every tool of the Deck service to this project\'s local settings (.claude/settings.local.json), keeping what they hold. Only after the user agreed.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    run: async (): Promise<ToolResult> => {
+      const settings = await readLocalSettings()
+      const permissions = settings.permissions ?? {}
+      const allowed = permissions.allow ?? []
+      if (typeof permissions !== 'object' || Array.isArray(permissions) || !Array.isArray(allowed)) {
+        throw new Error(`Not written, ${LOCAL_SETTINGS} holds its permissions in a shape no rule can be added to`)
+      }
+      const added = !allowed.includes(ALLOW_RULE)
+      if (added) {
+        const path = join(process.cwd(), LOCAL_SETTINGS)
+        await mkdir(dirname(path), { recursive: true })
+        await writeFile(
+          path,
+          `${JSON.stringify({ ...settings, permissions: { ...permissions, allow: [...allowed, ALLOW_RULE] } }, null, 2)}\n`,
+        )
+      }
+      const result = { path: LOCAL_SETTINGS, rule: ALLOW_RULE, added }
+
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
     },
   },
 }

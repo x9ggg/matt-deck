@@ -33,4 +33,6 @@ Pane 只在 Configured Project 里出现，也就是仓库根目录有 `.matt-de
 
 配置技能会从仓库的 `docs/agents/issue-tracker.md` 预填 Task Source，在本机找出 Matt skills 供你选作 Skill Source，然后写出 `.matt-deck/config.json`。把它提交进仓库，配置就随仓库走。
 
+最后它会问你，要不要在本项目的 `.claude/settings.local.json` 里加一条权限规则 `mcp__plugin_matt-deck_deck`，允许 Deck 服务的工具不再逐次询问。Pane 的每次读取都是对这些工具的调用；没有这条规则时，Session 里等人批准的权限钩子（例如 cmux 注入的）会让 Pane 每次读取都等上一两分钟。
+
 之后新开一个 Session，Pane 会自动出现。
