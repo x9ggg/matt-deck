@@ -377,7 +377,7 @@ export const register: Register = on => {
           const before = await read($, nav)
           await update($, nav, current => ({
             ...current,
-            tab: 'map',
+            tab: 'map' as const,
             map: number,
             switching: false,
             mapPage: 0,
