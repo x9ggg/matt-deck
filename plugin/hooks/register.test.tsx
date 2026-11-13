@@ -223,6 +223,7 @@ const engine = (
     draft = '',
     canFill = true,
     waitFor = () => undefined,
+    connecting = () => undefined,
     ask = asked,
     recommendation = () => ({ isError: false, structuredContent: { found: false } }),
     occupy = session => ({ isError: false, structuredContent: { ok: true, occupied: true, occupant: session } }),
@@ -241,6 +242,8 @@ const engine = (
     // What a call of a tool waits on before it answers, as a call does that
     // a permission hook keeps waiting.
     waitFor?: (tool: string) => Promise<void> | undefined
+    // What a connection to the Deck service waits on before it is made.
+    connecting?: () => Promise<void> | undefined
     // What `deck_ask` answers at its `count`th call, and `deck_recommendation`
     // for a request.
     ask?: (count: number) => Answer
@@ -275,12 +278,16 @@ const engine = (
   on('session.id', () => ({ value: seen.sessionId }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
-  on('mcp.connect', () => ({
-    value:
-      config === undefined
-        ? { isConnected: false, reason: 'failed', message: 'The deck server failed to start.' }
-        : { isConnected: true, server: SERVER },
-  }))
+  on('mcp.connect', async () => {
+    await connecting()
+
+    return {
+      value:
+        config === undefined
+          ? { isConnected: false, reason: 'failed', message: 'The deck server failed to start.' }
+          : { isConnected: true, server: SERVER },
+    }
+  })
   on('mcp.call', async (_, e) => {
     seen.calls.push(e)
     await waitFor(e.tool)
@@ -2580,4 +2587,64 @@ test('after a /clear no beat names the Session it ended, though the id moves on 
   await seen.clock.advance(60_000)
 
   expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: 'a1b2c3d4-session' }, { session: '2c9f224f-cleared' }])
+})
+
+test('a /clear whose end the Deck service never answers still beats on under the new id', async ($, on) => {
+  const { waiting, release } = gate()
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => (tool === 'deck_end_session' ? waiting : undefined),
+  })
+  await start($)
+  await seen.clock.settle()
+
+  // As a call the end's short bound aborts: nothing after it in the hook runs.
+  seen.sessionId = '2c9f224f-cleared'
+  const ending = $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  await seen.clock.advance(60_000)
+
+  expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: 'a1b2c3d4-session' }, { session: '2c9f224f-cleared' }])
+  release()
+  await ending
+})
+
+test('a beat due while the Deck service is told of the end does not name the Session that ends', async ($, on) => {
+  const { waiting, release } = gate()
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => (tool === 'deck_end_session' ? waiting : undefined),
+  })
+  await start($)
+  await seen.clock.settle()
+
+  // The id moves on only once the end is through.
+  const ending = $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  await seen.clock.advance(60_000)
+  release()
+  await ending
+  await seen.clock.settle()
+  expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: 'a1b2c3d4-session' }])
+
+  seen.sessionId = '2c9f224f-cleared'
+  await seen.clock.advance(60_000)
+  expect(callsOf(seen, 'deck_heartbeat').slice(1)).toEqual([{ session: '2c9f224f-cleared' }])
+})
+
+test('a beat that waited for the Deck service while its Session ended is not sent after the end', async ($, on) => {
+  const { waiting, release } = gate()
+  let connecting: Promise<void> | undefined
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, connecting: () => connecting })
+  await start($)
+  await seen.clock.settle()
+
+  // The beat has read the Session's id and waits to be connected.
+  connecting = waiting
+  await seen.clock.advance(60_000)
+  connecting = undefined
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  expect(callsOf(seen, 'deck_end_session')).toEqual([{ session: 'a1b2c3d4-session' }])
+  release()
+  await seen.clock.settle()
+
+  expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: 'a1b2c3d4-session' }])
 })

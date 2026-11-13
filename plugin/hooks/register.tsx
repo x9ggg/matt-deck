@@ -424,29 +424,23 @@ const answerRequest = async ($: EngineInterface, requestId: string, text: string
 
 const isConfigured = async ($: EngineInterface) => (await read($, view)).config.status === 'configured'
 
-// Tells the Deck service that the Session runs, or that the Session
-// `session` has ended. Not heard, it holds the Session's Occupancies
-// Orphaned once its last heartbeat is too old.
-const tellDeck = async ($: EngineInterface, tool: 'deck_heartbeat' | 'deck_end_session', session: string) => {
-  const deck = await $.mcp.connect('deck')
-  if (deck.isConnected) {
-    await $.mcp.call(deck.server, tool, { session })
-  }
-}
-
 // The Session's heartbeat, from the start of a Session in a Configured
 // Project; kept here, not in the Session's state, which a /clear starts
-// over. Each beat names the Session's id as it is then, but never `ended`,
-// the id a /clear or a resume has just ended: a beat would hold its
-// Occupancies again.
+// over. Each beat names the Session's id as it is then, but never
+// `endedSession`, the id the Session last ended under: a beat would hold its
+// Occupancies again. A beat asks that last, once the Deck service is
+// connected: one that waited for it while the Session ended is not sent
+// after the end.
 let heartbeat: { cancel: () => void } | undefined
-const startHeartbeat = ($: EngineInterface, ended?: string) => {
+let endedSession: string | undefined
+const startHeartbeat = ($: EngineInterface) => {
   heartbeat?.cancel()
   const beat = () =>
     void (async () => {
       const session = await $.session.id()
-      if (session !== ended) {
-        await tellDeck($, 'deck_heartbeat', session)
+      const deck = await $.mcp.connect('deck')
+      if (deck.isConnected && session !== endedSession) {
+        await $.mcp.call(deck.server, 'deck_heartbeat', { session })
       }
     })()
   $.clock.after(0, beat)
@@ -545,20 +539,27 @@ export const register: Register = on => {
     return entered
   })
 
-  // The Session ends: its Occupancies are Orphaned. A /clear ends the
-  // conversation the held request was for: it is dropped. After a /clear or
-  // a resume the process goes on under another id, with no session.start:
-  // the heartbeat starts again, under that one.
+  // The Session ends: no beat names it from here on, said before anything
+  // waits, as the heartbeat may be due while the Deck service is told. Told,
+  // the Deck service holds its Occupancies Orphaned; not heard, once its
+  // last heartbeat is too old. A /clear ends the conversation the held
+  // request was for: it is dropped. After a /clear or a resume the process
+  // goes on under another id, with no session.start: the heartbeat starts
+  // again, under that one.
   on('session.end', async ($, e, next) => {
+    endedSession = e.sessionId
     if (e.reason === 'clear') {
       await update($, ask, current => (current.status === 'held' ? { ...current, status: 'none' as const } : current))
     }
     if (heartbeat !== undefined) {
-      await tellDeck($, 'deck_end_session', e.sessionId)
+      const deck = await $.mcp.connect('deck')
+      if (deck.isConnected) {
+        await $.mcp.call(deck.server, 'deck_end_session', { session: e.sessionId })
+      }
     }
     const ended = await next(e)
     if (heartbeat !== undefined && (e.reason === 'clear' || e.reason === 'resume')) {
-      startHeartbeat($, e.sessionId)
+      startHeartbeat($)
     }
 
     return ended
