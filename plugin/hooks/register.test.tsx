@@ -33,6 +33,7 @@ const task = (number: number, title: string, more: { blockers?: number[]; [field
   closedAt: null as string | null,
   occupant: null as string | null,
   isOrphaned: false,
+  hasEvidence: false,
   ...more,
 })
 
@@ -117,10 +118,11 @@ const DETAILS: Record<number, object> = {
   },
 }
 
-const detailOf = (number: number): Answer => ({
+const detailOf = (number: number, reports: object[] = []): Answer => ({
   isError: false,
   structuredContent: {
     ok: true,
+    reports,
     task: DETAILS[number] ?? {
       number,
       title: `Task ${number}`,
@@ -258,6 +260,8 @@ const engine = (
 ) => {
   const seen = {
     opened: [] as string[],
+    // The tool calls that reached the engine, as the Mod passed them on.
+    tools: [] as Record<string, unknown>[],
     // The rows each open asked for, `undefined` where it asked for none.
     openedRows: [] as (number | undefined)[],
     closed: [] as string[],
@@ -359,7 +363,11 @@ const engine = (
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('prompt.submit', (_, e) => (isDropped(e.text) ? { drop: '不发' } : { text: e.text }))
   on('turn.complete', () => ({ text: '' }))
-  on('tool.call', () => ({ result: {} }))
+  on('tool.call', (_, e) => {
+    seen.tools.push(e)
+
+    return { result: {} }
+  })
   on('command.run', (_, e) => {
     seen.ran.push({ command: e.command, args: e.args })
 
@@ -2816,4 +2824,138 @@ test('after a /clear without a project config the deck command still answers in 
 
   expect(seen.opened).toEqual([])
   expect(answer.text).toMatch(/未配置/)
+})
+
+const REPORT = 'mcp__plugin_matt-deck_deck__deck_report'
+
+test('a deck_report the agent calls is sent with the id of this Session, never one the agent gave', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const evidence = [{ text: '测试通过', source: 'npm test 的输出' }]
+
+  await $.tool.call({ tool: REPORT, task: 3, result: '做完了。', evidence })
+  await $.tool.call({ tool: REPORT, task: 3, result: '又做了一次。', evidence, session: 'made-up' })
+  // After a /clear the Session goes on under another id.
+  seen.sessionId = 'e5f6a7b8-cleared'
+  await $.tool.call({ tool: REPORT, task: 3, result: '清空之后。', evidence })
+
+  const reports = seen.tools.filter(call => call.tool === REPORT)
+  expect(reports.map(call => call.session)).toEqual(['a1b2c3d4-session', 'a1b2c3d4-session', 'e5f6a7b8-cleared'])
+  expect(reports[0]).toMatchObject({ task: 3, result: '做完了。', evidence })
+  // Another tool goes as it came.
+  await $.tool.call({ tool: 'mcp__plugin_matt-deck_deck__deck_config' })
+  expect(seen.tools.at(-1)!.session).toBeUndefined()
+})
+
+// The reports of the example of a closed Task in `docs/pane-layout.md`.
+const REPORTS = [
+  { session: '3f9c21d0-other', reportedAt: Date.UTC(2026, 10, 11, 9, 30), result: '先做了一半。', evidence: [] },
+  {
+    session: '9d04c6f1-session',
+    reportedAt: Date.UTC(2026, 10, 11, 14, 2),
+    result: '已实现并在本仓库运行通过。',
+    evidence: [{ text: '在本仓库运行配置技能，生成 .matt-deck/config.json', source: '提交 8254bd7' }],
+  },
+]
+
+const EVIDENCED = tasks({
+  ready: [task(3, 'Pane 布局设计', { labels: ['ready-for-human'] })],
+  inProgress: [task(16, '命令行', { labels: ['ready-for-agent'], occupant: 'a1b2c3d4-session', hasEvidence: true })],
+  done: [
+    task(15, '配置技能', { isOpen: false, labels: ['ready-for-agent'], closedAt: '2026-11-11T14:07:00Z', hasEvidence: true }),
+    task(2, '骨架', { isOpen: false, labels: ['ready-for-agent'], closedAt: '2026-11-11T05:40:00Z' }),
+  ],
+})
+
+test('a Task\'s detail shows its execution records, each Session\'s with its time, result and Acceptance Evidence with where it comes from', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => EVIDENCED,
+    detail: number => detailOf(number, number === 15 ? REPORTS : number === 16 ? REPORTS.slice(1) : []),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await ui.press({ key: 'task:15' })
+  await seen.clock.settle()
+
+  const lines = await texts(ui)
+  const boxes = await texts(ui, 'Box')
+  // Closed, and with Acceptance Evidence: each its own mark.
+  expect(boxes).toContain('◆ 已解锁  ✓ 验收证据')
+  expect(lines).toContain('执行记录 2')
+  // Times are drawn in the local time zone.
+  expect(boxes).toContainEqual(expect.stringMatching(/^Session 3f9c21d0 *11-1[12] \d\d:\d\d$/))
+  expect(boxes).toContainEqual(expect.stringMatching(/^Session 9d04c6f1 *11-1[12] \d\d:\d\d$/))
+  expect(lines.indexOf('先做了一半。')).toBeLessThan(lines.indexOf('已实现并在本仓库运行通过。'))
+  expect(boxes).toContain('✓ 在本仓库运行配置技能，生成 .matt-deck/config.json（提交 8254bd7）')
+  expect((await ui.find({ type: 'Text', text: '在本仓库运行配置技能，生成 .matt-deck/config.json（提交 8254bd7）' }))?.props.color).toBe(
+    'success',
+  )
+  await ui.press({ key: 'back' })
+
+  // In progress with Acceptance Evidence is not closed.
+  await ui.press({ key: 'task:16' })
+  await seen.clock.settle()
+  expect(await texts(ui, 'Box')).toContain('▶ 进行中 · 本 Session  ✓ 验收证据')
+  await ui.press({ key: 'back' })
+
+  // Closed is not having Acceptance Evidence; no report says so.
+  await ui.press({ key: 'task:2' })
+  await seen.clock.settle()
+  expect(await texts(ui, 'Box')).toContain('◆ 已解锁')
+  expect(await ui.find({ type: 'Text', text: '✓ 验收证据' })).toBeUndefined()
+  expect(await texts(ui)).toContain('执行记录')
+  expect(await texts(ui)).toContain('还没有 Session 执行过这个 Task。')
+  await ui.unmount()
+})
+
+test('the action bar of a closed Task with Acceptance Evidence says so, in both placements', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => EVIDENCED })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await focus($, 'task:15')
+  expect((await ui.find({ type: 'Box', text: /^#15 / }))?.text).toBe('#15 ready-for-agent  ✓ 验收证据详情')
+  expect((await ui.find({ type: 'Text', text: '✓ 验收证据' }))?.props.color).toBe('success')
+  await focus($, 'task:2')
+  expect(await ui.find({ type: 'Text', text: '✓ 验收证据' })).toBeUndefined()
+  // An open Task's bar keeps its action in that place.
+  await focus($, 'task:16')
+  expect(await ui.find({ type: 'Text', text: '✓ 验收证据' })).toBeUndefined()
+  await ui.unmount()
+
+  const inline = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  await focus($, 'task:15')
+  expect((await inline.find({ type: 'Text', text: '✓ 验收证据' }))?.props.color).toBe('success')
+  await inline.unmount()
+})
+
+test('a report on a Task whose detail was read shows in it at once, read again past what was shown', async ($, on) => {
+  let reports: object[] = []
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => EVIDENCED,
+    detail: number => detailOf(number, number === 2 ? reports : []),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'task:2' })
+  await seen.clock.settle()
+  expect(await texts(ui)).toContain('还没有 Session 执行过这个 Task。')
+
+  reports = REPORTS.slice(1)
+  await $.tool.call({ tool: REPORT, task: 2, result: '已实现并在本仓库运行通过。', evidence: [] })
+  await seen.clock.settle()
+
+  expect(await texts(ui)).toContain('执行记录 1')
+  // A Task whose detail was never read is not read for a report.
+  await $.tool.call({ tool: REPORT, task: 3, result: '做完了。', evidence: [] })
+  await seen.clock.settle()
+  expect(seen.calls.filter(call => call.tool === 'deck_task').map(call => call.args)).toEqual([{ number: 2 }, { number: 2 }])
+  await ui.unmount()
 })

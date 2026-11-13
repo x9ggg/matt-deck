@@ -17,8 +17,10 @@ export type SourceTask = {
   blockedBy: number[]
 }
 
-// One Task as the Task Source holds it, with what only its detail shows.
+// One Task as the Task Source holds it, with what only its detail shows, and
+// the identity of the Task Source holding it.
 export type SourceTaskDetail = {
+  identity: string
   number: number
   title: string
   isOpen: boolean
@@ -58,7 +60,8 @@ export type Group = 'ready' | 'inProgress' | 'blocked' | 'done'
 // open Tasks blocking an open one, `blockedBy` every Task it declares a
 // Blocking Edge to, closed ones too, by number. `occupant` is the Session
 // whose Occupancy holds it, or null; `isOrphaned` says that Session has
-// ended while the Task is open.
+// ended while the Task is open. `hasEvidence` says a report gave Acceptance
+// Evidence for it, open or closed.
 export type Task = {
   number: number
   title: string
@@ -70,6 +73,7 @@ export type Task = {
   closedAt: string | null
   occupant: string | null
   isOrphaned: boolean
+  hasEvidence: boolean
 }
 
 // A Spec or a Map: a Task with Child Tasks, or a Map with none yet. `group`
@@ -113,11 +117,13 @@ const groupOf = (task: Task): Group => {
 }
 
 // The Tasks of a read of the Task Source, read at `fetchedAt`, grouped with
-// the Occupancies of its open Tasks, `occupants`, by Task number.
+// the Occupancies of its open Tasks, `occupants`, by Task number, and the
+// Tasks a report gave Acceptance Evidence for, `evidenced`.
 export const listTasks = (
   source: SourceRead,
   fetchedAt: number,
   occupants: ReadonlyMap<number, { session: string; isOrphaned: boolean }>,
+  evidenced: ReadonlySet<number>,
 ): TaskList => {
   const read = [...source.tasks].sort((a, b) => a.number - b.number)
   const isOpen = new Map(read.map(task => [task.number, task.isOpen]))
@@ -134,6 +140,7 @@ export const listTasks = (
       blockedBy: blockedBy.filter(number => isOpen.has(number)).sort((a, b) => a - b),
       occupant: task.isOpen ? (occupants.get(task.number)?.session ?? null) : null,
       isOrphaned: task.isOpen && occupants.get(task.number)?.isOrphaned === true,
+      hasEvidence: evidenced.has(task.number),
     } as Task,
   }))
 
@@ -160,7 +167,7 @@ export const listTasks = (
 
 // A Task as its detail shows it: the body split into the description and the
 // acceptance criteria, which are the body's checklist items.
-export type TaskDetail = Omit<SourceTaskDetail, 'body'> & {
+export type TaskDetail = Omit<SourceTaskDetail, 'identity' | 'body'> & {
   description: string
   acceptance: { text: string; isChecked: boolean }[]
 }
@@ -171,8 +178,9 @@ const CHECKLIST_ITEM = /^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/
 // belongs to, what blocks it, its acceptance criteria.
 const DRAWN_ELSEWHERE = /^\s*#{1,6}\s*\**\s*(parent|blocked by|acceptance criteria)\b/i
 
-export const readTask = async (source: TaskSource, number: number): Promise<TaskDetail> => {
-  const { body, ...task } = await source.readOne(number)
+// The Task `number`, with the identity of the Task Source holding it.
+export const readTask = async (source: TaskSource, number: number): Promise<{ identity: string; task: TaskDetail }> => {
+  const { identity, body, ...task } = await source.readOne(number)
   const acceptance: TaskDetail['acceptance'] = []
   const kept: string[] = []
   let isDropping = false
@@ -214,7 +222,7 @@ export const readTask = async (source: TaskSource, number: number): Promise<Task
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 
-  return { ...task, description, acceptance }
+  return { identity, task: { ...task, description, acceptance } }
 }
 
 // The issues of the workspace's GitHub repository, read with the `gh` command
@@ -316,6 +324,8 @@ export const githubIssues = (workspace: string): TaskSource => ({
     const issue: ViewedIssue = JSON.parse(stdout)
 
     return {
+      // The repository's owner and name, as the issue's link names them.
+      identity: new URL(issue.url).pathname.split('/').slice(1, 3).join('/'),
       number: issue.number,
       title: issue.title,
       isOpen: issue.state === 'OPEN',

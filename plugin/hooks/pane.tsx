@@ -107,6 +107,9 @@ const spaces = (columns: number) => ' '.repeat(Math.max(0, columns))
 
 const GROUPS: Group[] = ['ready', 'inProgress', 'blocked', 'done']
 
+// What a Task with Acceptance Evidence is marked with, beside its status.
+const EVIDENCE = '✓ 验收证据'
+
 const GLYPH: Record<Group, string> = { ready: '◇', inProgress: '▶', blocked: '□', done: '◆' }
 const GLYPH_COLOR: Record<Group, string | undefined> = {
   ready: 'suggestion',
@@ -169,8 +172,9 @@ const STAGE_NOTE: Partial<Record<RequestStatus, string>> = {
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
-// A closing time as the list writes it, in the local time zone: `11-11 14:07`.
-const closedTime = (closedAt: string) => {
+// A closing time as the list writes it, in the local time zone: `11-11 14:07`;
+// a report's time the same.
+const closedTime = (closedAt: string | number) => {
   const date = new Date(closedAt)
 
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
@@ -531,9 +535,19 @@ export const drawPane = (
   // The rows the asking takes beyond the action bar's one.
   const takeOverRows = takingOver === undefined ? 0 : isInline ? 1 : 4
 
+  // A closed Task's action bar says it has Acceptance Evidence, where its
+  // action would be.
+  const isEvidenced = (task: Task) => !task.isOpen && task.hasEvidence
+  const evidenceMark = (
+    <Box flexDirection="row">
+      <Text>{'  '}</Text>
+      <Text color="success">{EVIDENCE}</Text>
+    </Box>
+  )
+
   // What the action bar says of a row before its actions: a Task's triage
-  // label, or what is given in its place; a Spec's or Map's Child Tasks by
-  // group.
+  // label, or what is given in its place, and a closed Task's Acceptance
+  // Evidence; a Spec's or Map's Child Tasks by group.
   const actionBar = (row: Row, label?: string) => (
     <Box flexDirection="row" justifyContent="space-between">
       {'container' in row ? (
@@ -542,13 +556,16 @@ export const drawPane = (
           {childCountItems(row.container)}
         </Box>
       ) : (
-        <Text>
-          {numbered(row.task.number)}
-          {cut(
-            label ?? row.task.labels.find(label => TRIAGE_LABELS.includes(label)) ?? '',
-            columns - numberColumns - 1 - actionsWidth(row),
-          )}
-        </Text>
+        <Box flexDirection="row">
+          <Text>
+            {numbered(row.task.number)}
+            {cut(
+              label ?? row.task.labels.find(label => TRIAGE_LABELS.includes(label)) ?? '',
+              columns - numberColumns - 1 - actionsWidth(row) - (isEvidenced(row.task) ? width(`  ${EVIDENCE}`) : 0),
+            )}
+          </Text>
+          {isEvidenced(row.task) && evidenceMark}
+        </Box>
       )}
       {rowActions(row)}
     </Box>
@@ -587,6 +604,7 @@ export const drawPane = (
     const said = status(task, group)
     const label = task.labels.find(label => TRIAGE_LABELS.includes(label)) ?? ''
     const tail = `${said === '' ? '' : `   ${said}`}${label === '' ? '' : `   ${label}`}`
+    const evidenceWidth = isEvidenced(task) ? width(`  ${EVIDENCE}`) : 0
 
     return (
       <Box flexDirection="row" justifyContent="space-between">
@@ -595,9 +613,10 @@ export const drawPane = (
           <Text dimColor={group === 'blocked'}>
             {' '}
             {numbered(task.number)}
-            {cut(task.title, columns - 2 - numberColumns - 1 - width(tail) - actionsWidth(row))}
+            {cut(task.title, columns - 2 - numberColumns - 1 - width(tail) - evidenceWidth - actionsWidth(row))}
             {tail}
           </Text>
+          {isEvidenced(task) && evidenceMark}
         </Box>
         {rowActions(row)}
       </Box>
@@ -1228,7 +1247,8 @@ export const drawPane = (
           <Text>{FAILURE[shown.failure.kind](shown.failure.message)}</Text>,
         ]
       }
-      const { task } = shown
+      const { task, reports } = shown
+      const hasEvidence = reports.some(report => report.evidence.length > 0)
       const label = task.labels.find(label => TRIAGE_LABELS.includes(label))
       const updated = new Date(task.updatedAt)
       const time =
@@ -1262,6 +1282,7 @@ export const drawPane = (
                       ? `进行中 · ${status(entry.task, entry.group)}`
                       : status(entry.task, entry.group)}
                 </Text>
+                {hasEvidence && evidenceMark}
               </Box>,
             ]),
         <Text>{meta}</Text>,
@@ -1303,6 +1324,28 @@ export const drawPane = (
                 </Button>
               )),
             ]),
+        // One record a report, the first first: the Session and when, the
+        // result, and each Acceptance Evidence with where it comes from.
+        <Text> </Text>,
+        sectionTitle(reports.length === 0 ? '执行记录' : `执行记录 ${reports.length}`),
+        ...(reports.length === 0
+          ? [<Text color="inactive">还没有 Session 执行过这个 Task。</Text>]
+          : reports.flatMap((report, index) => [
+              ...(index === 0 ? [] : [<Text> </Text>]),
+              <Box flexDirection="row" justifyContent="space-between">
+                <Text>Session {report.session.slice(0, 8)}</Text>
+                <Text>{closedTime(report.reportedAt)}</Text>
+              </Box>,
+              <Text>{report.result}</Text>,
+              ...report.evidence.map(evidence => (
+                <Box flexDirection="row">
+                  <Text color="success">✓ </Text>
+                  <Text color="success">
+                    {evidence.text}（{evidence.source}）
+                  </Text>
+                </Box>
+              )),
+            ])),
         <Text> </Text>,
         <Link href={task.url}>
           <Text color="suggestion" underline>

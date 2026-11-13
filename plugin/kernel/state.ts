@@ -23,6 +23,10 @@ export const openState = (home: string) => {
   db.exec(
     'CREATE TABLE IF NOT EXISTS sessions (session TEXT PRIMARY KEY, beat_at INTEGER NOT NULL, is_ended INTEGER NOT NULL)',
   )
+  // Every report of a Task, one row each, its Acceptance Evidence as JSON.
+  db.exec(
+    'CREATE TABLE IF NOT EXISTS reports (source TEXT NOT NULL, task INTEGER NOT NULL, session TEXT NOT NULL, reported_at INTEGER NOT NULL, result TEXT NOT NULL, evidence TEXT NOT NULL)',
+  )
 
   return db
 }

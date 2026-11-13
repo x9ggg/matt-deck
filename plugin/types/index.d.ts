@@ -17,7 +17,8 @@ export type Group = 'ready' | 'inProgress' | 'blocked' | 'done'
 // A Task as `deck_tasks` lists it: `blockers` are the open Tasks blocking an
 // open one, `blockedBy` every Task it declares a Blocking Edge to, closed
 // ones too; `occupant` the Session whose Occupancy holds it, or null, and
-// `isOrphaned` whether that Session has ended while the Task is open.
+// `isOrphaned` whether that Session has ended while the Task is open;
+// `hasEvidence` whether a report gave Acceptance Evidence for it.
 export type Task = {
   number: number
   title: string
@@ -29,6 +30,7 @@ export type Task = {
   closedAt: string | null
   occupant: string | null
   isOrphaned: boolean
+  hasEvidence: boolean
 }
 
 // A Spec or a Map, in no group.
@@ -71,8 +73,18 @@ export type TaskDetail = {
   acceptance: { text: string; isChecked: boolean }[]
 }
 
-// What `deck_task` answers.
-export type DeckTaskAnswer = { ok: true; task: TaskDetail } | { ok: false; failure: TaskFailure }
+// One report `deck_report` kept of a Task: the Session reporting it, when, in
+// milliseconds since the epoch, its result and its Acceptance Evidence, each
+// with where it comes from.
+export type Report = {
+  session: string
+  reportedAt: number
+  result: string
+  evidence: { text: string; source: string }[]
+}
+
+// What `deck_task` answers, with the Task's reports, the first first.
+export type DeckTaskAnswer = { ok: true; task: TaskDetail; reports: Report[] } | { ok: false; failure: TaskFailure }
 
 // What `deck_occupy` answers: whether the Session's Occupancy was recorded,
 // and the Session holding the Task now; or why the Task cannot be occupied.
@@ -151,7 +163,7 @@ export type SkillTextView =
 // One Task's detail as last read: still asking, read, or why not.
 export type DetailView =
   | { status: 'loading' }
-  | { status: 'loaded'; task: TaskDetail }
+  | { status: 'loaded'; task: TaskDetail; reports: Report[] }
   | { status: 'failed'; failure: TaskFailure }
 
 // What the Mod knows of the project config: still asking, the Deck service

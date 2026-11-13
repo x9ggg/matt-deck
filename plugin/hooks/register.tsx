@@ -46,6 +46,10 @@ const HEARTBEAT_MS = 60_000
 // Pane reads the Tasks again.
 const DECK_TOOL = /^mcp__plugin_matt-deck_deck__deck_/
 
+// The Deck service's tool the agent reports a Task executed with: the agent
+// does not know the id of its Session, which the Mod gives it.
+const REPORT_TOOL = 'mcp__plugin_matt-deck_deck__deck_report'
+
 const FILTERS: Filter[] = ['all', 'ready', 'inProgress', 'blocked', 'done']
 
 // The skill an Execute Prompt runs, called as the Skill Source calls it.
@@ -67,7 +71,7 @@ const view = atom(
     checkedAt: 0,
     isUnanswered: false,
   } as View,
-  { shape: 'view-5' },
+  { shape: 'view-6' },
 )
 
 const nav = atom({ plugin: 'matt-deck', key: 'nav' } as const, { tab: 'tasks', filter: 'all', page: 0 } as Nav, {
@@ -169,7 +173,7 @@ const loadTask = async ($: EngineInterface, number: number) => {
   }
 
   const detail: DetailView = answer.ok
-    ? { status: 'loaded', task: answer.task }
+    ? { status: 'loaded', task: answer.task, reports: answer.reports }
     : { status: 'failed', failure: answer.failure }
   await update($, view, current => ({ ...current, details: { ...current.details, [number]: detail } }))
 }
@@ -622,6 +626,18 @@ export const register: Register = on => {
     }
 
     return ended
+  })
+
+  // A report names the Session that made it: this one, under its id as it is
+  // now, whatever the agent gave. A Task whose detail was read shows it at
+  // once: its detail is read again, off the event.
+  on('tool.call', { tool: REPORT_TOOL }, async ($, e, next) => {
+    const called = await next({ ...e, session: await $.session.id() })
+    if ((await read($, view)).details[e.task as number] !== undefined) {
+      $.clock.after(0, () => void loadTask($, e.task as number))
+    }
+
+    return called
   })
 
   on('tool.call', { tool: DECK_TOOL }, async ($, e, next) => {

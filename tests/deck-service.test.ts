@@ -545,6 +545,7 @@ test('deck_tasks groups the Tasks of the Task Source', async t => {
     closedAt: null,
     occupant: null,
     isOrphaned: false,
+    hasEvidence: false,
   })
   assert.deepEqual(groups.done[0].blockers, [])
 })
@@ -847,6 +848,8 @@ test('deck_task reads one Task with its description and its acceptance criteria 
         { text: '持有期间可以取消', isChecked: true },
       ],
     },
+    // No Session has reported on it.
+    reports: [],
   })
   const [call] = await gh.calls()
   assert.deepEqual(call!.args.slice(0, 3), ['issue', 'view', '9'])
@@ -1652,4 +1655,92 @@ test('deck_ask tells the agent which Task in progress is Orphaned', async t => {
       ].join('\n'),
     ),
   )
+})
+
+// One Acceptance Evidence, with where it comes from.
+const EVIDENCE = [
+  { text: '在本仓库运行配置技能，生成 .matt-deck/config.json', source: '提交 8254bd7' },
+  { text: 'node --test tests/ 全部通过', source: '测试命令 npm test 的输出：# pass 42' },
+]
+
+test('deck_report keeps each report of a Task with its Session and time, which every Deck service of the repository reads in its detail', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  const clock = await fakeClock(Date.UTC(2026, 10, 11, 14, 2))
+  await gh.issues([issue({ number: 3 }), issue({ number: 7 }), issue({ number: 15, state: 'CLOSED', closedAt: '2026-11-11T14:07:00Z' })])
+  const here = startDeck(await configured(), { ...gh.env, ...clock.env, HOME: user })
+  t.after(here.stop)
+  const elsewhere = startDeck(await configured(), { ...gh.env, ...clock.env, HOME: user })
+  t.after(elsewhere.stop)
+  await here.callTool('deck_occupy', { session: 'session-a', task: 3 })
+
+  const first = await here.callTool('deck_report', {
+    session: 'session-a',
+    task: 3,
+    result: '先做了一半，测试还没过。',
+    evidence: [],
+  })
+  await clock.set(Date.UTC(2026, 10, 11, 15, 30))
+  const second = await elsewhere.callTool('deck_report', {
+    session: 'session-b',
+    task: 3,
+    result: '已实现并在本仓库运行通过。',
+    evidence: EVIDENCE,
+  })
+
+  assert.equal(first.isError, false)
+  assert.deepEqual(first.structuredContent, { ok: true })
+  assert.deepEqual(second.structuredContent, { ok: true })
+  await gh.answer({ stdout: viewed({ number: 3 }) })
+  for (const deck of [here, elsewhere]) {
+    const { reports } = (await deck.callTool('deck_task', { number: 3 })).structuredContent
+    // Every report stays, the first first.
+    assert.deepEqual(reports, [
+      { session: 'session-a', reportedAt: Date.UTC(2026, 10, 11, 14, 2), result: '先做了一半，测试还没过。', evidence: [] },
+      { session: 'session-b', reportedAt: Date.UTC(2026, 10, 11, 15, 30), result: '已实现并在本仓库运行通过。', evidence: EVIDENCE },
+    ])
+  }
+  await gh.answer({ stdout: viewed({ number: 7 }) })
+  assert.deepEqual((await here.callTool('deck_task', { number: 7 })).structuredContent.reports, [])
+  // Deck only keeps the report: the Task stays open on GitHub, and with the
+  // Session that held it.
+  assert.ok((await gh.calls()).every(call => !call.args.includes('close') && !call.args.includes('edit')))
+  await gh.issues([issue({ number: 3 }), issue({ number: 7 }), issue({ number: 15, state: 'CLOSED', closedAt: '2026-11-11T14:07:00Z' })])
+  const { groups } = (await here.callTool('deck_tasks', { refresh: true })).structuredContent
+  assert.deepEqual(occupants(groups.inProgress), { 3: 'session-a' })
+  // Acceptance Evidence is apart from the Task Status: an open Task has it,
+  // a closed one does not.
+  assert.equal(groups.inProgress[0].hasEvidence, true)
+  assert.equal(groups.ready[0].hasEvidence, false)
+  assert.equal(groups.done[0].hasEvidence, false)
+})
+
+test('deck_report takes a Task, a result, Acceptance Evidence each with where it comes from, and the Session', async t => {
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+  const report = { session: 'session-a', task: 3, result: '做完了。', evidence: EVIDENCE }
+
+  const malformed = await Promise.all(
+    [
+      { ...report, session: undefined },
+      { ...report, session: '' },
+      { ...report, task: 0 },
+      { ...report, task: '#3' },
+      { ...report, result: undefined },
+      { ...report, evidence: undefined },
+      { ...report, evidence: [{ text: '测试通过' }] },
+      { ...report, evidence: [{ text: '测试通过', source: '' }] },
+      { ...report, evidence: [{ text: '', source: 'npm test' }] },
+      { ...report, evidence: '测试通过' },
+    ].map(args => deck.callTool('deck_report', args)),
+  )
+
+  assert.deepEqual(
+    malformed.map(result => result.isError),
+    malformed.map(() => true),
+  )
+  await gh.answer({ stdout: viewed({ number: 3 }) })
+  assert.deepEqual((await deck.callTool('deck_task', { number: 3 })).structuredContent.reports, [])
 })

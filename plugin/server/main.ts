@@ -13,6 +13,7 @@ import { createInterface } from 'node:readline'
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
 import { beat, endSession, occupy, release, settleOccupancies } from '../kernel/occupancy.ts'
 import { askArgs, readRecommendation, saveRecommendation, snapshotOf } from '../kernel/recommend.ts'
+import { evidencedTasks, readReports, saveReport } from '../kernel/reports.ts'
 import { surveySetup } from '../kernel/setup.ts'
 import { listSkills, readSkill, SkillSourceError } from '../kernel/skills.ts'
 import { githubIssues, listTasks, readTask, TaskSourceError } from '../kernel/tasks.ts'
@@ -55,7 +56,8 @@ const readSource = async (refresh: boolean) => {
 
 // The Tasks of a read, with the Occupancies of its open Tasks, Orphaned or
 // not as of now; those of the others are released, unless they were recorded
-// after the read began.
+// after the read began. Each says whether a report gave Acceptance Evidence
+// for it.
 const tasksOf = ({ source, fetchedAt }: { source: SourceRead; fetchedAt: number }) =>
   listTasks(
     source,
@@ -67,6 +69,7 @@ const tasksOf = ({ source, fetchedAt }: { source: SourceRead; fetchedAt: number 
       fetchedAt,
       Date.now(),
     ),
+    evidencedTasks(homedir(), source.identity),
   )
 
 type ToolResult = {
@@ -313,7 +316,7 @@ const tools = {
   },
   deck_task: {
     description:
-      'Read one Task of this project from its Task Source: its description, acceptance criteria (checked or not), assignees, labels and link.',
+      'Read one Task of this project from its Task Source: its description, acceptance criteria (checked or not), assignees, labels and link; and every report of it deck_report kept.',
     inputSchema: {
       type: 'object',
       properties: { number: { type: 'integer', minimum: 1, description: 'The Task\'s number.' } },
@@ -326,7 +329,87 @@ const tools = {
       }
       let answer
       try {
-        answer = { ok: true, task: await readTask(githubIssues(workspace), number) }
+        const { identity, task } = await readTask(githubIssues(workspace), number)
+        answer = { ok: true, task, reports: readReports(homedir(), identity, number) }
+      } catch (error: any) {
+        if (!(error instanceof TaskSourceError)) {
+          throw error
+        }
+        answer = { ok: false, failure: { kind: error.kind, message: error.message } }
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
+    },
+  },
+  deck_report: {
+    description:
+      'Report that you finished executing a Task: the result, and the Acceptance Evidence for each acceptance criterion with where it comes from (a test command and its output, a commit, a PR). Deck keeps and shows it beside the Session and the time; it does not close the Task or release it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: { type: 'integer', minimum: 1, description: 'The Task\'s number.' },
+        result: { type: 'string', description: 'What you did, and how it ended.' },
+        evidence: {
+          type: 'array',
+          description: 'The Acceptance Evidence; [] where there is none.',
+          items: {
+            type: 'object',
+            properties: {
+              text: { type: 'string', minLength: 1, description: 'What shows an acceptance criterion is met.' },
+              source: {
+                type: 'string',
+                minLength: 1,
+                description: 'Where it comes from: the test command and its output, the commit, the PR.',
+              },
+            },
+            required: ['text', 'source'],
+            additionalProperties: false,
+          },
+        },
+        session: {
+          type: 'string',
+          minLength: 1,
+          description: 'The id of the Session reporting. The Matt Deck Pane fills it in; leave it out.',
+        },
+      },
+      required: ['task', 'result', 'evidence'],
+      additionalProperties: false,
+    },
+    run: async ({ task, result, evidence, session }: any): Promise<ToolResult> => {
+      if (
+        !Number.isInteger(task) ||
+        task < 1 ||
+        typeof result !== 'string' ||
+        !Array.isArray(evidence) ||
+        evidence.some(
+          (each: any) =>
+            typeof each !== 'object' ||
+            each === null ||
+            Object.keys(each).some(key => key !== 'text' && key !== 'source') ||
+            typeof each.text !== 'string' ||
+            each.text === '' ||
+            typeof each.source !== 'string' ||
+            each.source === '',
+        ) ||
+        typeof session !== 'string' ||
+        session === ''
+      ) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'deck_report takes the number of a Task, its result as text, and its Acceptance Evidence as a list of { text, source }, each saying where it comes from; and the id of the Session reporting, which the Matt Deck Pane fills in',
+            },
+          ],
+          isError: true,
+        }
+      }
+      let answer: object
+      try {
+        // The Task Source's identity only: a read from the cache names it.
+        const { source } = await readSource(false)
+        saveReport(homedir(), source.identity, task, { session, reportedAt: Date.now(), result, evidence })
+        answer = { ok: true }
       } catch (error: any) {
         if (!(error instanceof TaskSourceError)) {
           throw error
