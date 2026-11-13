@@ -8,6 +8,7 @@ import type {
   ConfigView,
   DeckAskAnswer,
   DeckConfigAnswer,
+  DeckOccupyAnswer,
   DeckRecommendationAnswer,
   DeckSkillAnswer,
   DeckSkillsAnswer,
@@ -41,6 +42,13 @@ const POLL_MS = 60_000
 const DECK_TOOL = /^mcp__plugin_matt-deck_deck__deck_/
 
 const FILTERS: Filter[] = ['all', 'ready', 'inProgress', 'blocked', 'done']
+
+// The skill an Execute Prompt runs, called as the Skill Source calls it.
+const IMPLEMENT = 'implement'
+
+// A Task reference as the first word of /implement's arguments: `#12`, `12`,
+// or a link ending in `/issues/12`.
+const TASK_REFERENCE = /^(?:#?(\d+)|\S*\/issues\/(\d+))$/
 
 const view = atom(
   { plugin: 'matt-deck', key: 'view' } as const,
@@ -218,6 +226,35 @@ const prefill = async ($: EngineInterface, text: string, surface: RenderSurface)
   $.ui.toast(copied.isCopied ? `不能预填输入框，已复制到剪贴板：${text}` : `不能预填输入框，也没能复制：${text}`)
 }
 
+// The call of the Skill Source's /implement, as last read, if it holds one.
+const implementCall = async ($: EngineInterface) => {
+  const { skills } = await read($, view)
+
+  return skills.status === 'loaded' ? skills.skills.find(skill => skill.name === IMPLEMENT)?.call : undefined
+}
+
+// Records this Session's Occupancy of the Task `number`, as a prompt
+// executing it is sent, and shows it. A Task another Session holds stays
+// with it: the person is told.
+const occupyTask = async ($: EngineInterface, number: number) => {
+  const deck = await $.mcp.connect('deck')
+  let answer: DeckOccupyAnswer
+  if (!deck.isConnected) {
+    answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
+  } else {
+    const result = await $.mcp.call(deck.server, 'deck_occupy', { session: (await read($, view)).sessionId, task: number })
+    answer = result.isError
+      ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
+      : JSON.parse(result.content[0]!.text!)
+  }
+  if (!answer.ok) {
+    $.ui.toast(`#${number} 没有登记 Occupancy：${answer.failure.message}`)
+  } else if (!answer.occupied) {
+    $.ui.toast(`#${number} 正由 Session ${answer.occupant.slice(0, 8)} 执行，本 Session 没有登记 Occupancy。`)
+  }
+  await loadTasks($, false)
+}
+
 // Sends the Recommendation Request the Pane marked as sent: the Deck service
 // makes it now, with the Task Snapshot as it is now, and the Session runs it.
 // A turn begun while it was being made holds it again, to be made anew.
@@ -373,6 +410,23 @@ export const register: Register = on => {
     }
 
     return completed
+  })
+
+  // A prompt sent that runs /implement on a Task starts executing it: the
+  // Execute Prompt, or the same typed by hand. The Occupancy is recorded
+  // once the prompt has entered, never for one stopped on the way.
+  on('prompt.submit', async ($, e, next) => {
+    const entered = await next(e)
+    if (entered.drop !== undefined || e.command === undefined) {
+      return entered
+    }
+    const reference = (e.command.args.trim().split(/\s+/)[0] ?? '').match(TASK_REFERENCE)
+    if (reference !== null && (await implementCall($)) === `/${e.command.name}`) {
+      const number = Number(reference[1] ?? reference[2])
+      $.clock.after(0, () => void occupyTask($, number))
+    }
+
+    return entered
   })
 
   // A /clear ends the conversation the held request was for: it is dropped.
@@ -535,6 +589,21 @@ export const register: Register = on => {
           await toList('skills', after.focus)
         })(),
       prefill: text => void prefill($, text, e.surface),
+      execute: number =>
+        void (async () => {
+          const call = await implementCall($)
+          if (call === undefined) {
+            $.ui.toast(`Skill Source 里没有 ${IMPLEMENT} 技能，不能预填执行 #${number}。`)
+            return
+          }
+          // The Execute Prompt: /implement on the Task, and the ask to report
+          // the result and its Acceptance Evidence through deck_report.
+          const text =
+            `${call} #${number}\n\n` +
+            `When you finish, call the tool deck_report for Task #${number}: what you did, ` +
+            'and the Acceptance Evidence for each acceptance criterion with where it comes from.'
+          await prefill($, text, e.surface)
+        })(),
       cycleFilter: () =>
         void update($, nav, current => ({
           ...current,

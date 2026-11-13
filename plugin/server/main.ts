@@ -11,12 +11,13 @@ import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
+import { occupy, settleOccupancies } from '../kernel/occupancy.ts'
 import { askArgs, readRecommendation, saveRecommendation, snapshotOf } from '../kernel/recommend.ts'
 import { surveySetup } from '../kernel/setup.ts'
 import { listSkills, readSkill, SkillSourceError } from '../kernel/skills.ts'
 import { githubIssues, listTasks, readTask, TaskSourceError } from '../kernel/tasks.ts'
 import type { ProjectConfig } from '../kernel/config.ts'
-import type { TaskList, TaskListFailure } from '../kernel/tasks.ts'
+import type { SourceRead, TaskListFailure } from '../kernel/tasks.ts'
 
 // The Workspace is the checkout the service was started in: the nearest
 // directory at or above the working directory that holds `.git`. Outside a
@@ -35,9 +36,35 @@ for (let dir = workspace; ; dir = dirname(dir)) {
 // The last read of the Task Source, answered again for this long to a read
 // that does not ask for a fresh one. A read that fails empties it: the read
 // after it reaches the Task Source again instead of answering with what was
-// read before the failure.
+// read before the failure. Occupancy is not cached: every answer has it as
+// the local state holds it then, whichever Session recorded it.
 const TASKS_CACHE_MS = 15_000
-let cachedTasks: TaskList | undefined
+let cachedRead: { source: SourceRead; fetchedAt: number } | undefined
+
+// The Task Source as read last, or read now when `refresh` asks for it or
+// the cache is too old. Throws a TaskSourceError.
+const readSource = async (refresh: boolean) => {
+  const now = Date.now()
+  if (refresh || cachedRead === undefined || now - cachedRead.fetchedAt >= TASKS_CACHE_MS) {
+    cachedRead = undefined
+    cachedRead = { source: await githubIssues(workspace).read(), fetchedAt: now }
+  }
+
+  return cachedRead
+}
+
+// The Tasks of a read, with the Occupancies of its open Tasks; those of the
+// others are released.
+const tasksOf = ({ source, fetchedAt }: { source: SourceRead; fetchedAt: number }) =>
+  listTasks(
+    source,
+    fetchedAt,
+    settleOccupancies(
+      homedir(),
+      source.identity,
+      source.tasks.filter(task => task.isOpen).map(task => task.number),
+    ),
+  )
 
 type ToolResult = {
   content: { type: 'text'; text: string }[]
@@ -124,24 +151,63 @@ const tools = {
       additionalProperties: false,
     },
     run: async ({ refresh }: any): Promise<ToolResult> => {
-      const now = Date.now()
-      if (refresh === true || cachedTasks === undefined || now - cachedTasks.fetchedAt >= TASKS_CACHE_MS) {
-        try {
-          cachedTasks = await listTasks(githubIssues(workspace), now)
-        } catch (error: any) {
-          if (!(error instanceof TaskSourceError)) {
-            throw error
-          }
-          cachedTasks = undefined
-          // A Task Source that cannot be read is an answer, not a broken
-          // tool: the caller shows why.
-          const failed: TaskListFailure = { ok: false, failure: { kind: error.kind, message: error.message } }
+      let read
+      try {
+        read = await readSource(refresh === true)
+      } catch (error: any) {
+        if (!(error instanceof TaskSourceError)) {
+          throw error
+        }
+        // A Task Source that cannot be read is an answer, not a broken
+        // tool: the caller shows why.
+        const failed: TaskListFailure = { ok: false, failure: { kind: error.kind, message: error.message } }
 
-          return { content: [{ type: 'text', text: JSON.stringify(failed) }], structuredContent: failed, isError: false }
+        return { content: [{ type: 'text', text: JSON.stringify(failed) }], structuredContent: failed, isError: false }
+      }
+      const list = tasksOf(read)
+
+      return { content: [{ type: 'text', text: JSON.stringify(list) }], structuredContent: list, isError: false }
+    },
+  },
+  deck_occupy: {
+    description:
+      'For the Pane: record that a Session executes a Task, as the prompt starting it is sent. A Task held by another Session stays with it; the answer names the Session holding it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session: { type: 'string', minLength: 1, description: 'The id of the Session executing the Task.' },
+        task: { type: 'integer', minimum: 1, description: 'The Task\'s number.' },
+      },
+      required: ['session', 'task'],
+      additionalProperties: false,
+    },
+    run: async ({ session, task }: any): Promise<ToolResult> => {
+      if (typeof session !== 'string' || session === '' || !Number.isInteger(task) || task < 1) {
+        return {
+          content: [{ type: 'text', text: 'deck_occupy takes the id of a Session and the number of a Task' }],
+          isError: true,
         }
       }
+      let answer: object
+      try {
+        // Read now, past the cache: a Task closed a moment ago is not occupied.
+        const { source } = await readSource(true)
+        const found = source.tasks.find(each => each.number === task)
+        if (found === undefined || !found.isOpen) {
+          const message = found === undefined ? `the Task Source has no Task #${task}` : `#${task} is closed`
+          answer = { ok: false, failure: { kind: 'not-open', message } }
+        } else {
+          const occupant = occupy(homedir(), source.identity, task, session, Date.now())
+          answer = { ok: true, occupied: occupant === session, occupant }
+        }
+      } catch (error: any) {
+        if (!(error instanceof TaskSourceError)) {
+          throw error
+        }
+        answer = { ok: false, failure: { kind: error.kind, message: error.message } }
+      }
 
-      return { content: [{ type: 'text', text: JSON.stringify(cachedTasks) }], structuredContent: cachedTasks, isError: false }
+      return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
     },
   },
   deck_task: {
@@ -205,9 +271,9 @@ const tools = {
       let answer: object
       try {
         const { call } = await readSkill(project.config.skillSource, workspace, homedir(), 'ask-matt')
-        cachedTasks = await listTasks(githubIssues(workspace), Date.now())
+        const list = tasksOf(await readSource(true))
         const requestId = randomUUID()
-        answer = { ok: true, requestId, command: call.slice(1), args: askArgs(requestId, snapshotOf(cachedTasks)) }
+        answer = { ok: true, requestId, command: call.slice(1), args: askArgs(requestId, snapshotOf(list)) }
       } catch (error: any) {
         if (!(error instanceof SkillSourceError) && !(error instanceof TaskSourceError)) {
           throw error

@@ -45,8 +45,10 @@ export type Actions = {
   // Drills into a skill's text from its row, and goes back to the list.
   openSkill: (name: string) => void
   closeSkill: () => void
-  // Puts `text` in the prompt box for the person to send.
+  // Puts `text` in the prompt box for the person to send; puts the Execute
+  // Prompt of the Task `number` there.
   prefill: (text: string) => void
+  execute: (number: number) => void
   // Asks what to do now; cancels the request held; shows the whole answer
   // above the prompt, or goes back from it.
   ask: () => void
@@ -165,8 +167,9 @@ const closedTime = (closedAt: string) => {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-// The status word at a Task row's right end.
-const statusOf = (task: Task, group: Group) => {
+// The status word at a Task row's right end; in progress, the Session
+// occupying it: this one, `session`, or another by its id's start.
+const statusOf = (task: Task, group: Group, session: string) => {
   switch (group) {
     case 'ready':
       return '可执行'
@@ -177,7 +180,7 @@ const statusOf = (task: Task, group: Group) => {
     case 'done':
       return task.closedAt === null ? '已解锁' : closedTime(task.closedAt)
     case 'inProgress':
-      return ''
+      return task.occupant === session ? '本 Session' : task.occupant!.slice(0, 8)
   }
 }
 
@@ -303,6 +306,14 @@ export const drawPane = (
       {GLYPH[group]}
     </Text>
   )
+  // A Task's glyph: its group's, but ◐ in progress for another Session.
+  const isOthers = (task: Task, group: Group) => group === 'inProgress' && task.occupant !== view.sessionId
+  const glyphText = (task: Task, group: Group) => (isOthers(task, group) ? '◐' : GLYPH[group])
+  const taskGlyph = (task: Task, group: Group, dim = false) =>
+    isOthers(task, group) ? <Text color="inactive">◐</Text> : glyph(group, dim)
+  const status = (task: Task, group: Group) => statusOf(task, group, view.sessionId)
+  // This Session's Task in progress, for the top.
+  const executing = list?.groups.inProgress.find(task => task.occupant === view.sessionId)
 
   // The filter's five items, the chosen one bold and underlined.
   const filterItems = (only?: Filter) =>
@@ -393,8 +404,18 @@ export const drawPane = (
 
   // The action bar's actions, at its right end, and the columns they take
   // with the gap before them: a Spec or Map opens its Map View as well.
+  const isExecutable = (row: Row) => 'group' in row && row.group === 'ready'
+  const executeButton = (number: number) => (
+    <Button key="execute" plain hotkey="e" label="执行" onPress={() => actions.execute(number)} />
+  )
   const rowActions = (row: Row) => (
     <Box flexDirection="row">
+      {isExecutable(row) && (
+        <Box flexDirection="row">
+          {executeButton(numberOf(row))}
+          <Text>{'  '}</Text>
+        </Box>
+      )}
       {'container' in row && (
         <Box flexDirection="row">
           <Button key="map" plain hotkey="m" label="地图" onPress={() => actions.showMap(row.container.number)} />
@@ -404,7 +425,8 @@ export const drawPane = (
       <Button key="open" plain hotkey="o" label="详情" onPress={() => actions.openTask(numberOf(row))} />
     </Box>
   )
-  const actionsWidth = (row: Row) => 2 + width('container' in row ? 'm: 地图  o: 详情' : 'o: 详情')
+  const actionsWidth = (row: Row) =>
+    2 + width('container' in row ? 'm: 地图  o: 详情' : isExecutable(row) ? 'e: 执行  o: 详情' : 'o: 详情')
 
   // What the action bar says of a row before its actions: a Task's triage
   // label, or what is given in its place; a Spec's or Map's Child Tasks by
@@ -459,14 +481,14 @@ export const drawPane = (
       )
     }
     const { task, group } = row
-    const status = statusOf(task, group)
+    const said = status(task, group)
     const label = task.labels.find(label => TRIAGE_LABELS.includes(label)) ?? ''
-    const tail = `${status === '' ? '' : `   ${status}`}${label === '' ? '' : `   ${label}`}`
+    const tail = `${said === '' ? '' : `   ${said}`}${label === '' ? '' : `   ${label}`}`
 
     return (
       <Box flexDirection="row" justifyContent="space-between">
         <Box flexDirection="row">
-          {glyph(group, group === 'blocked')}
+          {taskGlyph(task, group, group === 'blocked')}
           <Text dimColor={group === 'blocked'}>
             {' '}
             {numbered(task.number)}
@@ -511,13 +533,13 @@ export const drawPane = (
     }
     const { task, group } = row
     const dim = group === 'blocked'
-    const status = statusOf(task, group)
-    const room = columns - 2 - (numberColumns + 1) - 1 - width(status)
+    const said = status(task, group)
+    const room = columns - 2 - (numberColumns + 1) - 1 - width(said)
     const title = cut(task.title, room)
 
     return (
       <Button key={row.key} plain autoFocus={isLanding ? true : undefined} onPress={onPress}>
-        {glyph(group, dim)}
+        {taskGlyph(task, group, dim)}
         <Text color="inactive" dimColor={dim}>
           {' '}
           {numbered(task.number)}
@@ -527,7 +549,7 @@ export const drawPane = (
           {spaces(room - width(title) + 1)}
         </Text>
         <Text color="inactive" dimColor={dim}>
-          {status}
+          {said}
         </Text>
       </Button>
     )
@@ -780,7 +802,7 @@ export const drawPane = (
     const labelOf = (row: Row) =>
       'container' in row
         ? `${GLYPH[row.container.group]} ${row.container.kind === 'spec' ? 'Spec' : 'Map'} #${row.container.number} ${progressText(row.container)}`
-        : `${GLYPH[row.group]} #${row.task.number} ${cut(row.task.title, 28)}`
+        : `${glyphText(row.task, row.group)} #${row.task.number} ${cut(row.task.title, 28)}`
 
     return (
       <Box flexDirection="column">
@@ -791,7 +813,7 @@ export const drawPane = (
               key: row.key,
               label: labelOf(row),
               draw: [
-                'container' in row ? glyph(row.container.group) : glyph(row.group, row.group === 'blocked'),
+                'container' in row ? glyph(row.container.group) : taskGlyph(row.task, row.group, row.group === 'blocked'),
                 <Text dimColor={'group' in row && row.group === 'blocked'}>{labelOf(row).slice(1)}</Text>,
               ],
               isLanding: row === landing,
@@ -928,7 +950,7 @@ export const drawPane = (
         <Text color="inactive" dimColor={dim}>
           {node.line}
         </Text>
-        {glyph(node.group, dim)}
+        {taskGlyph(node.task, node.group, dim)}
         <Text color="inactive" dimColor={dim}>
           {' '}
           {number}
@@ -1125,10 +1147,14 @@ export const drawPane = (
           ? []
           : [
               <Box flexDirection="row">
-                {glyph(entry.group, entry.group === 'blocked')}
+                {taskGlyph(entry.task, entry.group, entry.group === 'blocked')}
                 <Text>
                   {' '}
-                  {entry.group === 'done' ? '已解锁' : entry.group === 'inProgress' ? '进行中' : statusOf(entry.task, entry.group)}
+                  {entry.group === 'done'
+                    ? '已解锁'
+                    : entry.group === 'inProgress'
+                      ? `进行中 · ${status(entry.task, entry.group)}`
+                      : status(entry.task, entry.group)}
                 </Text>
               </Box>,
             ]),
@@ -1162,7 +1188,7 @@ export const drawPane = (
               sectionTitle(`被阻塞 ${blockers.length}`),
               ...blockers.map(blocker => (
                 <Button key={`blocker:${blocker.number}`} plain onPress={() => actions.openTask(blocker.number)}>
-                  {glyph(blocker.group, blocker.group === 'blocked')}
+                  {taskGlyph(blocker.task, blocker.group, blocker.group === 'blocked')}
                   <Text dimColor={blocker.group === 'blocked'}>
                     {' '}
                     {numbered(blocker.number)}
@@ -1180,14 +1206,20 @@ export const drawPane = (
       ]
     })()
 
+    // The Task's actions, as in the action bar: a ready Task is executed.
+    const canExecute = entry !== undefined && entry.kind === undefined && entry.group === 'ready'
+
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row">
-          <Button key="back" plain hotkey="b" label="返回" onPress={actions.back} />
-          <Text>
-            {'  '}
-            {cut(crumbs, columns - width('b: 返回  '))}
-          </Text>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Box flexDirection="row">
+            <Button key="back" plain hotkey="b" label="返回" onPress={actions.back} />
+            <Text>
+              {'  '}
+              {cut(crumbs, columns - width('b: 返回  ') - (canExecute ? 2 + width('e: 执行') : 0))}
+            </Text>
+          </Box>
+          {canExecute && executeButton(number)}
         </Box>
         <Text color="subtle">{'─'.repeat(columns)}</Text>
         {body}
@@ -1466,7 +1498,7 @@ export const drawPane = (
       <Text>#{number}</Text>
     ) : (
       <Text>
-        <Text color={GLYPH_COLOR[found.group]}>{GLYPH[found.group]}</Text> #{number} {found.task.title}
+        {taskGlyph(found.task, found.group)} #{number} {found.task.title}
       </Text>
     )
   }
@@ -1483,6 +1515,21 @@ export const drawPane = (
     )),
   ]
   const unreported = ['没有收到 deck_recommend 的回报。', '下面是这一回合的回答原文。']
+  // The screen's primary button once an open Task is recommended: execute it.
+  const isRecommendedClosed = listed.some(task => task.number === recommendation?.task && !task.isOpen)
+  const executeRecommended =
+    recommendation?.task == null || isRecommendedClosed ? undefined : (
+      <Box flexDirection="row">
+        <Button
+          key="execute"
+          variant="primary"
+          hotkey="e"
+          label="执行这个 Task"
+          onPress={() => actions.execute(recommendation.task!)}
+        />
+        <Text color="inactive"> e</Text>
+      </Box>
+    )
 
   const dockedNext = () => {
     if (ask.status === 'none' || ask.status === 'cancelled') {
@@ -1511,6 +1558,7 @@ export const drawPane = (
         {ask.answer !== undefined && 'recommendation' in ask.answer ? (
           <Box borderStyle="single" borderColor="inactive" flexDirection="column">
             {recommendationRows(ask.answer.recommendation)}
+            {executeRecommended}
           </Box>
         ) : (
           <Box flexDirection="column">
@@ -1540,6 +1588,7 @@ export const drawPane = (
                 {'  '}下一步 / {recommendation !== undefined ? 'Recommendation' : '回答原文'}
               </Text>
             </Box>
+            {executeRecommended}
           </Box>
           <Text color="subtle">{'─'.repeat(columns)}</Text>
           {ask.answer !== undefined && 'recommendation' in ask.answer ? (
@@ -1574,7 +1623,11 @@ export const drawPane = (
                         {'   '}技能 {recommendation.skill || '无'}   阻塞 {recommendation.blockers || '无'}
                       </Text>
                     </Box>
-                    {showAll}
+                    <Box flexDirection="row">
+                      {executeRecommended}
+                      {executeRecommended !== undefined && <Text>{'  '}</Text>}
+                      {showAll}
+                    </Box>
                   </Box>,
                   <Text wrap="truncate-end">
                     下一步 {recommendation.nextStep || '无'}  理由 {recommendation.reason || '无'}
@@ -1610,8 +1663,9 @@ export const drawPane = (
         : `   ${GROUPS.slice(0, 3)
             .map(group => `${GLYPH[group]} ${counts[group]}${words ? ` ${GROUP_TITLE[group]}` : ''}`)
             .join('  ')}  ◆ ${counts.done}/${total}`
+    const executingText = executing === undefined ? '' : `  ▶ #${executing.number}`
     const fits = (words: boolean, withSession: boolean, withFreshness: boolean) =>
-      width(project) + (withSession ? 3 + session.length : 0) + width(countsText(words)) + 1 <=
+      width(project) + (withSession ? 3 + session.length : 0) + width(executingText) + width(countsText(words)) + 1 <=
       columns - (withFreshness ? right : 9)
     const [words, withSession, withFreshness] = (
       [
@@ -1630,6 +1684,13 @@ export const drawPane = (
               {project}
             </Text>
             {withSession && <Text> · {session}</Text>}
+            {executing !== undefined && (
+              <Box flexDirection="row">
+                <Text>{'  '}</Text>
+                {glyph('inProgress')}
+                <Text> #{executing.number}</Text>
+              </Box>
+            )}
             {hasCounts &&
               GROUPS.map(group => (
                 <Box flexDirection="row">
@@ -1682,7 +1743,18 @@ export const drawPane = (
         {refresh}
       </Box>
       <Box flexDirection="row" justifyContent="space-between">
-        <Text>本 Session 没有在执行 Task</Text>
+        {executing === undefined ? (
+          <Text>本 Session 没有在执行 Task</Text>
+        ) : (
+          <Box flexDirection="row">
+            <Text>本 Session </Text>
+            {glyph('inProgress')}
+            <Text>
+              {' '}#{executing.number}{' '}
+              {cut(executing.title, columns - width(`本 Session ▶ #${executing.number} `) - 2 - width(freshness.text))}
+            </Text>
+          </Box>
+        )}
         <Text color={freshness.color}>{freshness.text}</Text>
       </Box>
       {tabRow}

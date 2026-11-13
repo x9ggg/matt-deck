@@ -2,10 +2,7 @@
 // with the Task Snapshot it carries, and the Recommendations the agent
 // reports back, kept by request in the local state (ADR-0005).
 // Host-agnostic: it knows a Task list and a home directory.
-import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-
+import { openState } from './state.ts'
 import type { Task, TaskList } from './tasks.ts'
 
 // The Tasks in a few lines for the agent: the open ones by group, the
@@ -52,23 +49,10 @@ export const askArgs = (requestId: string, snapshot: string) =>
 // null for none, and the four texts, each "" where there is nothing to say.
 export type Recommendation = { task: number | null; nextStep: string; skill: string; reason: string; blockers: string }
 
-// The local state's file under `home`, shared by every Deck service of
-// this machine: the one the agent calls and the one the Pane reads may be
-// different processes.
-const open = (home: string) => {
-  mkdirSync(join(home, '.matt-deck'), { recursive: true })
-  const db = new DatabaseSync(join(home, '.matt-deck', 'deck.sqlite'))
-  db.exec(
-    'CREATE TABLE IF NOT EXISTS recommendations (request_id TEXT PRIMARY KEY, recommendation TEXT NOT NULL, reported_at INTEGER NOT NULL)',
-  )
-
-  return db
-}
-
 // Keeps the Recommendation for a request; a later report for the same
 // request replaces it.
 export const saveRecommendation = (home: string, requestId: string, recommendation: Recommendation, now: number) => {
-  const db = open(home)
+  const db = openState(home)
   try {
     db.prepare('INSERT OR REPLACE INTO recommendations VALUES (?, ?, ?)').run(
       requestId,
@@ -81,7 +65,7 @@ export const saveRecommendation = (home: string, requestId: string, recommendati
 }
 
 export const readRecommendation = (home: string, requestId: string): Recommendation | undefined => {
-  const db = open(home)
+  const db = openState(home)
   try {
     const row = db.prepare('SELECT recommendation FROM recommendations WHERE request_id = ?').get(requestId)
 

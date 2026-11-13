@@ -30,10 +30,15 @@ export type SourceTaskDetail = {
   body: string
 }
 
-// Every Task Source answers with all its Tasks, open and closed, or with one
-// of them; or throws a TaskSourceError.
+// What a Task Source holds: its identity, which names it the same from every
+// Workspace of the project (a GitHub repository's owner and name), and all
+// its Tasks, open and closed.
+export type SourceRead = { identity: string; tasks: SourceTask[] }
+
+// Every Task Source answers with all its Tasks, or with one of them; or
+// throws a TaskSourceError.
 export type TaskSource = {
-  read: () => Promise<SourceTask[]>
+  read: () => Promise<SourceRead>
   readOne: (number: number) => Promise<SourceTaskDetail>
 }
 
@@ -51,7 +56,8 @@ export type Group = 'ready' | 'inProgress' | 'blocked' | 'done'
 
 // A Task as the kernel lists it. `parent` is its Spec or Map, `blockers` the
 // open Tasks blocking an open one, `blockedBy` every Task it declares a
-// Blocking Edge to, closed ones too, by number.
+// Blocking Edge to, closed ones too, by number. `occupant` is the Session
+// whose Occupancy holds it, or null.
 export type Task = {
   number: number
   title: string
@@ -61,6 +67,7 @@ export type Task = {
   blockers: number[]
   blockedBy: number[]
   closedAt: string | null
+  occupant: string | null
 }
 
 // A Spec or a Map: a Task with Child Tasks, or a Map with none yet. `group`
@@ -90,9 +97,12 @@ const groupOf = (task: Task): Group => {
   if (!task.isOpen) {
     return 'done'
   }
-  // Occupancy comes with #10; until then nothing is in progress. A Task
-  // waiting on triage is no more startable than a blocked one, so it stands
-  // with them.
+  // Execution Status comes from Occupancy alone: an occupied Task is in
+  // progress, blocked or not. A Task waiting on triage is no more startable
+  // than a blocked one, so it stands with them.
+  if (task.occupant !== null) {
+    return 'inProgress'
+  }
   if (task.blockers.length > 0 || task.labels.some(label => WAITING_LABELS.includes(label))) {
     return 'blocked'
   }
@@ -100,8 +110,10 @@ const groupOf = (task: Task): Group => {
   return 'ready'
 }
 
-export const listTasks = async (source: TaskSource, now: number): Promise<TaskList> => {
-  const read = (await source.read()).sort((a, b) => a.number - b.number)
+// The Tasks of a read of the Task Source, read at `fetchedAt`, grouped with
+// the Occupancies of its open Tasks, `occupants`, by Task number.
+export const listTasks = (source: SourceRead, fetchedAt: number, occupants: ReadonlyMap<number, string>): TaskList => {
+  const read = [...source.tasks].sort((a, b) => a.number - b.number)
   const isOpen = new Map(read.map(task => [task.number, task.isOpen]))
   const tasks = read.map(({ blockedBy, isMap, ...task }) => ({
     isMap,
@@ -114,6 +126,7 @@ export const listTasks = async (source: TaskSource, now: number): Promise<TaskLi
       // so it does not block.
       blockers: task.isOpen ? blockedBy.filter(number => isOpen.get(number) === true).sort((a, b) => a - b) : [],
       blockedBy: blockedBy.filter(number => isOpen.has(number)).sort((a, b) => a - b),
+      occupant: task.isOpen ? (occupants.get(task.number) ?? null) : null,
     } as Task,
   }))
 
@@ -135,7 +148,7 @@ export const listTasks = async (source: TaskSource, now: number): Promise<TaskLi
   }
   groups.done.sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''))
 
-  return { ok: true, fetchedAt: now, containers, groups }
+  return { ok: true, fetchedAt, containers, groups }
 }
 
 // A Task as its detail shows it: the body split into the description and the
@@ -201,6 +214,7 @@ export const readTask = async (source: TaskSource, number: number): Promise<Task
 // line in the workspace, as `docs/agents/issue-tracker.md` has it.
 const QUERY = `query($owner: String!, $name: String!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
+    nameWithOwner
     issues(first: 100, after: $endCursor, states: [OPEN, CLOSED]) {
       nodes {
         number title state closedAt body
@@ -319,9 +333,10 @@ export const githubIssues = (workspace: string): TaskSource => ({
       '-f',
       `query=${QUERY}`,
     ])
-    const pages: { data: { repository: { issues: { nodes: IssueNode[] } } } }[] = JSON.parse(stdout)
+    const pages: { data: { repository: { nameWithOwner: string; issues: { nodes: IssueNode[] } } } }[] =
+      JSON.parse(stdout)
 
-    return pages
+    const tasks = pages
       .flatMap(page => page.data.repository.issues.nodes)
       .map(node => ({
         number: node.number,
@@ -343,5 +358,7 @@ export const githubIssues = (workspace: string): TaskSource => ({
             ? node.blockedBy.nodes.map(blocker => blocker.number)
             : references(declared(node.body, 'Blocked by') ?? ''),
       }))
+
+    return { identity: pages[0]!.data.repository.nameWithOwner, tasks }
   },
 })

@@ -31,6 +31,7 @@ const task = (number: number, title: string, more: { blockers?: number[]; [field
   blockers: [] as number[],
   blockedBy: more.blockers ?? ([] as number[]),
   closedAt: null as string | null,
+  occupant: null as string | null,
   ...more,
 })
 
@@ -46,13 +47,24 @@ const spec = (number: number, title: string, children: number[], progress: objec
 // 12:00 on 2026-11-12, when the tests read the Task Source.
 const NOW = Date.UTC(2026, 10, 12, 12, 0)
 
-const tasks = (lists: { containers?: object[]; ready?: object[]; blocked?: object[]; done?: object[] }) => ({
+const tasks = (lists: {
+  containers?: object[]
+  ready?: object[]
+  inProgress?: object[]
+  blocked?: object[]
+  done?: object[]
+}) => ({
   isError: false,
   structuredContent: {
     ok: true,
     fetchedAt: NOW,
     containers: lists.containers ?? [],
-    groups: { ready: lists.ready ?? [], inProgress: [], blocked: lists.blocked ?? [], done: lists.done ?? [] },
+    groups: {
+      ready: lists.ready ?? [],
+      inProgress: lists.inProgress ?? [],
+      blocked: lists.blocked ?? [],
+      done: lists.done ?? [],
+    },
   },
 })
 
@@ -212,6 +224,8 @@ const engine = (
     waitFor = () => undefined,
     ask = asked,
     recommendation = () => ({ isError: false, structuredContent: { found: false } }),
+    occupy = session => ({ isError: false, structuredContent: { ok: true, occupied: true, occupant: session } }),
+    isDropped = () => false,
   }: {
     config: Answer | undefined
     tasks?: () => Answer
@@ -229,6 +243,10 @@ const engine = (
     // for a request.
     ask?: (count: number) => Answer
     recommendation?: (requestId: string) => Answer
+    // What `deck_occupy` answers for a Session and a Task.
+    occupy?: (session: string, task: number) => Answer
+    // Whether a hook beneath stops a prompt sent with `text`.
+    isDropped?: (text: string) => boolean
   },
 ) => {
   const seen = {
@@ -273,7 +291,9 @@ const engine = (
                 ? ask(++asks)
                 : e.tool === 'deck_recommendation'
                   ? recommendation(e.args!.requestId as string)
-                  : config!
+                  : e.tool === 'deck_occupy'
+                    ? occupy(e.args!.session as string, e.args!.task as number)
+                    : config!
 
     return {
       value: {
@@ -300,7 +320,8 @@ const engine = (
   on('ui.panes', () => ({
     value: panes.map(({ id, isPlaced }) => ({ id, title: id, isShown: isPlaced, isFocused: false, isPlaced })),
   }))
-  on('ui.focus', () => ({}))
+  // The focus event names the Mod's plugin: answered for any plugin.
+  on('ui.focus', { plugin: '*' }, () => ({}))
   on('prompt.read', () => ({ value: { text: draft, cursor: draft.length } }))
   on('prompt.fill', (_, e) => {
     if (!canFill) {
@@ -321,6 +342,7 @@ const engine = (
     return { value: undefined }
   })
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('prompt.submit', (_, e) => (isDropped(e.text) ? { drop: '不发' } : { text: e.text }))
   on('turn.complete', () => ({ text: '' }))
   on('tool.call', () => ({ result: {} }))
   on('command.run', (_, e) => {
@@ -530,7 +552,8 @@ test('the tasks tab lists open Specs and Maps first, then the Tasks by group', a
       '地图',
       '技能',
       '全部 5  ◇ 1  ▶ 0  □ 2  ◆ 2',
-      // The action bar's action.
+      // The action bar's actions: #3 is ready to execute.
+      '执行',
       '详情',
       '◇ Spec #1 规格：里程碑一，Claude Code… 1/4',
       '◇ #3  Pane 布局设计                 可执行',
@@ -884,7 +907,7 @@ test('above the prompt the pane is four rows: top with counts, tabs, action bar,
   // The list's row: Specs and Maps first, then the groups in order, as many
   // as fit, and the chosen filter at its end.
   const items = (await ui.findAll({ type: 'Button' })).map(button => button.text)
-  expect(items.slice(5)).toEqual(['我现在该做什么', '详情', '◇ Spec #1 1/4', '◇ #3 Pane 布局设计', '□ #5 任务列表：按分组展示 Task', '还有 3 个', '全部 5'])
+  expect(items.slice(5)).toEqual(['我现在该做什么', '执行', '详情', '◇ Spec #1 1/4', '◇ #3 Pane 布局设计', '□ #5 任务列表：按分组展示 Task', '还有 3 个', '全部 5'])
   await ui.unmount()
 
   // Narrower, the top gives up the words after the counts, then the Session
@@ -1103,7 +1126,7 @@ test('the map tab shows the first open Spec: its card, the action bar, and its C
   expect(boxes).toContain('◇ 1  ▶ 0  □ 2  ◆ 1')
   expect(boxes).toContain('解锁进度1 / 4 · 25%')
   // The action bar is on the first ready Task, which blocks two others.
-  expect(boxes).toContain('#3  挡着 #5 #7详情')
+  expect(boxes).toContain('#3  挡着 #5 #7执行  详情')
   // A Task hangs under the lowest-numbered Task blocking it, and says what
   // else blocks it; the top level is ready, then closed.
   expect((await texts(ui, 'Button')).filter(text => /^[◇▶□◆├└│ ]/.test(text))).toEqual([
@@ -1280,7 +1303,7 @@ test('above the prompt the map tab grows the pane, the card in one row, and give
   expect(seen.openedRows).toEqual([4, undefined])
   const boxes = await texts(ui, 'Box')
   expect(boxes).toContain('Spec #1 规格：里程碑一，Claude Code 上的 Matt Deck 闭环1 / 4 · 25%  切换')
-  expect(boxes).toContain('#3  挡着 #5 #7详情')
+  expect(boxes).toContain('#3  挡着 #5 #7执行  详情')
   expect((await ui.find({ key: 'task:5' }))?.text).toBe('├─ □ #5 任务列表：按分组展示 Task')
 
   // Into a node's detail and back, the pane stays tall.
@@ -1419,6 +1442,18 @@ const PLUGIN_SKILLS: Answer = {
     skills: [
       { ...SKILL('tdd', '先写测试，再写实现。'), call: '/mattpocock-skills:tdd' },
       { ...SKILL('ask-matt', '问下一步该做什么。'), call: '/mattpocock-skills:ask-matt' },
+    ],
+  },
+}
+
+// The plugin's skills with its /implement.
+const PLUGIN_SKILLS_WITH_IMPLEMENT: Answer = {
+  isError: false,
+  structuredContent: {
+    ...(PLUGIN_SKILLS.structuredContent as { skills: object[] }),
+    skills: [
+      { ...SKILL('implement', '开始做一个 Task。'), call: '/mattpocock-skills:implement' },
+      ...(PLUGIN_SKILLS.structuredContent as { skills: object[] }).skills,
     ],
   },
 }
@@ -1892,7 +1927,7 @@ test('above the prompt the stages take the primary button\'s place in every tab,
   await ui.press({ key: 'tab:next' })
   const boxes = await texts(ui, 'Box')
   expect(boxes).toContain('下一步  任务  地图  技能再问一次')
-  expect(boxes).toContain('下一个成就  ◇ #3 Pane 布局设计   技能 /prototype   阻塞 无全文')
+  expect(boxes).toContain('下一个成就  ◇ #3 Pane 布局设计   技能 /prototype   阻塞 无执行这个 Task e  全文')
   expect(await texts(ui)).toContain('下一步 先画停靠在侧边的线框图，再画输入框上方的。  理由 它挡着 #5、#7、#8，放开 10 个 Task。')
 
   const rows = seen.openedRows.length
@@ -1901,5 +1936,199 @@ test('above the prompt the stages take the primary button\'s place in every tab,
   expect(await texts(ui)).toContain('它挡着 #5、#7、#8，放开 10 个 Task。')
   await ui.press({ key: 'back' })
   expect(seen.openedRows.slice(rows)).toEqual([undefined, 4])
+  await ui.unmount()
+})
+
+// The Execute Prompt of the Task `number`, as the Pane puts it in the prompt
+// box: the Skill Source's /implement on the Task, and the ask to report.
+const executePrompt = (call: string, number: number) =>
+  `${call} #${number}\n\n` +
+  `When you finish, call the tool deck_report for Task #${number}: what you did, ` +
+  'and the Acceptance Evidence for each acceptance criterion with where it comes from. '
+
+test('e on a ready Task puts its Execute Prompt in the prompt box, from the list, the detail and the Map View, and occupies nothing', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  // The action bar is about #3, where the focus lands.
+  expect(await texts(ui, 'Button')).toEqual(expect.arrayContaining(['执行', '详情']))
+  await ui.press({ key: 'execute' })
+  await seen.clock.settle()
+  // A blocked Task has nothing to execute.
+  await focus($, 'task:5')
+  expect(await ui.find({ key: 'execute' })).toBeUndefined()
+  // From the detail's way back.
+  await ui.press({ key: 'task:3' })
+  await seen.clock.settle()
+  await ui.press({ key: 'execute' })
+  await seen.clock.settle()
+  // From the Map View's action bar.
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'tab:map' })
+  await focus($, 'task:3')
+  await ui.press({ key: 'execute' })
+  await seen.clock.settle()
+
+  expect(seen.filled.map(fill => fill.text)).toEqual(Array(3).fill(executePrompt('/mattpocock-skills:implement', 3)))
+  expect(seen.calls.filter(call => call.tool === 'deck_occupy')).toEqual([])
+  await ui.unmount()
+})
+
+test('e on the Recommendation puts the recommended Task\'s Execute Prompt in the prompt box, in both placements', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: DIRECTORY, isError: false }, recommendation: () => RECOMMENDED })
+  await start($)
+  await seen.clock.settle()
+  for (const target of [PANE_TARGET, INLINE]) {
+    const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+    await ui.press({ key: 'tab:next' })
+    if (target === PANE_TARGET) {
+      await ui.press({ key: 'ask' })
+      await turnStart($, 't1', 'Matt Deck Recommendation Request request-1. 快照 1')
+      await turnEnd($, 't1')
+      await seen.clock.settle()
+    }
+    expect((await ui.find({ key: 'execute' }))?.text).toBe('执行这个 Task')
+    await ui.press({ key: 'execute' })
+    await seen.clock.settle()
+    await ui.unmount()
+  }
+
+  expect(seen.filled.map(fill => fill.text)).toEqual(Array(2).fill(executePrompt('/implement', 3)))
+  expect(seen.calls.filter(call => call.tool === 'deck_occupy')).toEqual([])
+})
+
+test('without /implement in the Skill Source, e says so and fills nothing', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, skills: () => PLUGIN_SKILLS })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await ui.press({ key: 'execute' })
+  await seen.clock.settle()
+
+  expect(seen.filled).toEqual([])
+  expect(seen.toasts).toEqual(['Skill Source 里没有 implement 技能，不能预填执行 #3。'])
+  await ui.unmount()
+})
+
+// The person sending `text`, which runs the command `name` with `args`
+// when given.
+const submit = ($: Engine, text: string, command?: { name: string; args: string }) =>
+  $.prompt.submit({ text, ...(command === undefined ? {} : { command }), wait: false, origin: { kind: 'composer' } })
+
+test('a sent /implement with a Task reference occupies the Task for this Session, the Execute Prompt or typed by hand', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT })
+  await start($)
+  await seen.clock.settle()
+  const occupies = () => seen.calls.filter(call => call.tool === 'deck_occupy').map(call => call.args)
+  const execute = executePrompt('/mattpocock-skills:implement', 3).trim()
+
+  await submit($, execute, { name: 'mattpocock-skills:implement', args: execute.slice(execute.indexOf(' ') + 1) })
+  await seen.clock.settle()
+  expect(occupies()).toEqual([{ session: 'a1b2c3d4-session', task: 3 }])
+  // The Tasks are read again to show it.
+  expect(seen.calls.at(-1)?.tool).toBe('deck_tasks')
+
+  for (const args of ['#7', '7 先写测试', 'https://github.com/acme/shop/issues/7']) {
+    await submit($, `/mattpocock-skills:implement ${args}`, { name: 'mattpocock-skills:implement', args })
+  }
+  await seen.clock.settle()
+  expect(occupies().slice(1)).toEqual(Array(3).fill({ session: 'a1b2c3d4-session', task: 7 }))
+})
+
+test('nothing is occupied by a prompt that is not /implement on a Task, or that was not sent', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
+    isDropped: text => text.endsWith('不发'),
+  })
+  await start($)
+  await seen.clock.settle()
+
+  // Another skill on a Task, /implement on no Task, and the text of one
+  // that runs no command.
+  await submit($, '/mattpocock-skills:tdd #3', { name: 'mattpocock-skills:tdd', args: '#3' })
+  await submit($, '/mattpocock-skills:implement 先看看', { name: 'mattpocock-skills:implement', args: '先看看' })
+  await submit($, '帮我 /mattpocock-skills:implement #3')
+  // Stopped by a hook beneath.
+  await submit($, '/mattpocock-skills:implement #3 不发', { name: 'mattpocock-skills:implement', args: '#3 不发' })
+  await seen.clock.settle()
+
+  expect(seen.calls.filter(call => call.tool === 'deck_occupy')).toEqual([])
+})
+
+test('a Task held by another Session stays with it, and the person is told who holds it', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
+    occupy: () => ({ isError: false, structuredContent: { ok: true, occupied: false, occupant: '3f9c21d0-other' } }),
+  })
+  await start($)
+  await seen.clock.settle()
+
+  await submit($, '/mattpocock-skills:implement #3', { name: 'mattpocock-skills:implement', args: '#3' })
+  await seen.clock.settle()
+
+  expect(seen.toasts).toEqual(['#3 正由 Session 3f9c21d0 执行，本 Session 没有登记 Occupancy。'])
+})
+
+// The project with #16 executed by this Session and #17 by another.
+const OCCUPIED = tasks({
+  ready: [task(3, 'Pane 布局设计', { labels: ['ready-for-human'] })],
+  inProgress: [
+    task(16, '命令行', { labels: ['ready-for-agent'], occupant: 'a1b2c3d4-session' }),
+    task(17, '从本仓库安装', { labels: ['ready-for-agent'], occupant: '3f9c21d0-other' }),
+  ],
+})
+
+test('an occupied Task is in progress, with the Session occupying it, and the top names this Session\'s Task', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => OCCUPIED })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  const lines = await texts(ui)
+  expect(lines.join('')).toContain('本 Session ▶ #16 命令行')
+  expect((await ui.find({ key: 'task:16' }))?.text).toMatch(/^▶ #16 命令行 +本 Session$/)
+  expect((await ui.find({ key: 'task:17' }))?.text).toMatch(/^◐ #17 从本仓库安装 +3f9c21d0$/)
+  expect((await ui.find({ type: 'Text', text: '◐' }))?.props).toEqual(expect.objectContaining({ color: 'inactive' }))
+  // Nothing to execute on a Task in progress.
+  for (const row of ['task:16', 'task:17']) {
+    await focus($, row)
+    expect(await ui.find({ key: 'execute' })).toBeUndefined()
+  }
+  await ui.unmount()
+
+  const inline = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  expect((await texts(inline)).join('')).toContain('▶ #16')
+  await focus($, 'task:17')
+  expect((await texts(inline)).join('')).toMatch(/◐ #17 从本仓库安装 +3f9c21d0/)
+  await inline.unmount()
+})
+
+test('a closed Task recommended has nothing to execute', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: DIRECTORY, isError: false },
+    recommendation: () => ({
+      isError: false,
+      structuredContent: {
+        found: true,
+        recommendation: { ...(RECOMMENDED.structuredContent as { recommendation: object }).recommendation, task: 15 },
+      },
+    }),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+  await ui.press({ key: 'ask' })
+  await turnStart($, 't1', 'Matt Deck Recommendation Request request-1. 快照 1')
+  await turnEnd($, 't1')
+  await seen.clock.settle()
+
+  expect(await texts(ui)).toContain('下一个成就')
+  expect(await ui.find({ key: 'execute' })).toBeUndefined()
   await ui.unmount()
 })

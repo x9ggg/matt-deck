@@ -16,7 +16,7 @@ export type Group = 'ready' | 'inProgress' | 'blocked' | 'done'
 
 // A Task as `deck_tasks` lists it: `blockers` are the open Tasks blocking an
 // open one, `blockedBy` every Task it declares a Blocking Edge to, closed
-// ones too.
+// ones too; `occupant` the Session whose Occupancy holds it, or null.
 export type Task = {
   number: number
   title: string
@@ -26,6 +26,7 @@ export type Task = {
   blockers: number[]
   blockedBy: number[]
   closedAt: string | null
+  occupant: string | null
 }
 
 // A Spec or a Map, in no group.
@@ -70,6 +71,12 @@ export type TaskDetail = {
 
 // What `deck_task` answers.
 export type DeckTaskAnswer = { ok: true; task: TaskDetail } | { ok: false; failure: TaskFailure }
+
+// What `deck_occupy` answers: whether the Session's Occupancy was recorded,
+// and the Session holding the Task now; or why the Task cannot be occupied.
+export type DeckOccupyAnswer =
+  | { ok: true; occupied: boolean; occupant: string }
+  | { ok: false; failure: { kind: TaskFailure['kind'] | 'not-open'; message: string } }
 
 // A skill of the Skill Source as `deck_skills` lists it: `call` is how this
 // Session invokes it, `path` its file.

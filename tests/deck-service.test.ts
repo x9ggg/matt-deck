@@ -1,6 +1,7 @@
 // The Deck service's tool interface, called the way the agent or the Pane
 // calls it: a real child process speaking MCP over stdio.
 import { spawn } from 'node:child_process'
+import { mkdtempSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,10 +11,12 @@ import assert from 'node:assert/strict'
 
 const SERVER = join(import.meta.dirname, '..', 'plugin', 'server', 'main.ts')
 
+// Unless a test gives it a HOME of its own, each Deck service keeps its local
+// state in a temporary home, never the user's.
 const startDeck = (cwd: string, env: Record<string, string> = {}) => {
   const child = spawn(process.execPath, [SERVER], {
     cwd,
-    env: { ...process.env, ...env },
+    env: { ...process.env, HOME: mkdtempSync(join(tmpdir(), 'deck-home-')), ...env },
     stdio: ['pipe', 'pipe', 'inherit'],
   })
   const waiting = new Map<number, (message: any) => void>()
@@ -445,10 +448,16 @@ const fakeGh = async () => {
     env: { PATH: dir, FAKE_GH_DIR: dir },
     answer,
     // The issues GitHub's GraphQL API answers, as `gh api graphql --paginate
-    // --slurp` prints them: one page.
-    issues: (nodes: object[]) =>
+    // --slurp` prints them: one page, of the repository `repository`.
+    issues: (nodes: object[], repository = 'acme/shop') =>
       answer({
-        stdout: [{ data: { repository: { issues: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } }],
+        stdout: [
+          {
+            data: {
+              repository: { nameWithOwner: repository, issues: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } },
+            },
+          },
+        ],
       }),
     calls: async (): Promise<{ args: string[]; cwd: string }[]> =>
       (await readFile(join(dir, 'calls.log'), 'utf8'))
@@ -519,7 +528,7 @@ test('deck_tasks groups the Tasks of the Task Source', async t => {
   const { ok, groups } = result.structuredContent
   assert.equal(ok, true)
   assert.deepEqual(numbers(groups.ready), [3, 7])
-  // Occupancy comes later (#10): nothing is in progress yet.
+  // No Session occupies any of them.
   assert.deepEqual(groups.inProgress, [])
   assert.deepEqual(numbers(groups.blocked), [5, 8, 9])
   // The latest closed first.
@@ -533,6 +542,7 @@ test('deck_tasks groups the Tasks of the Task Source', async t => {
     blockers: [3],
     blockedBy: [3],
     closedAt: null,
+    occupant: null,
   })
   assert.deepEqual(groups.done[0].blockers, [])
 })
@@ -732,7 +742,12 @@ test('deck_tasks does not answer from its cache after a read that failed', async
 test('deck_tasks reads every page of issues', async t => {
   const gh = await fakeGh()
   const page = (nodes: object[], hasNextPage: boolean) => ({
-    data: { repository: { issues: { nodes, pageInfo: { hasNextPage, endCursor: hasNextPage ? 'next' : null } } } },
+    data: {
+      repository: {
+        nameWithOwner: 'acme/shop',
+        issues: { nodes, pageInfo: { hasNextPage, endCursor: hasNextPage ? 'next' : null } },
+      },
+    },
   })
   await gh.answer({ stdout: [page([issue({ number: 1 })], true), page([issue({ number: 2 })], false)] })
   const deck = startDeck(await configured(), gh.env)
@@ -1233,4 +1248,135 @@ test('deck_recommend takes the request\'s id, a Task number or null, and the fou
     [true, true, true, true, true],
   )
   assert.deepEqual(read.structuredContent, { found: false })
+})
+
+// Who occupies each Task deck_tasks lists in progress, by number.
+const occupants = (tasks: { number: number; occupant: string | null }[]) =>
+  Object.fromEntries(tasks.map(task => [task.number, task.occupant]))
+
+test('deck_occupy records a Session\'s Occupancy of a Task, which every Deck service of the repository lists in progress', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 1, title: '规格' }),
+    issue({ number: 3, parent: 1 }),
+    issue({ number: 5, blockedBy: [3] }),
+    issue({ number: 7 }),
+  ])
+  const here = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(here.stop)
+  // Another Session, in the same Workspace, and one in another Workspace of
+  // the same repository.
+  const besideDir = await configured()
+  const beside = startDeck(besideDir, { ...gh.env, HOME: user })
+  t.after(beside.stop)
+  const elsewhere = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(elsewhere.stop)
+  // A Deck service reading before the Occupancy keeps its read in its cache.
+  await beside.callTool('deck_tasks')
+
+  const occupied = await here.callTool('deck_occupy', { session: 'session-a', task: 3 })
+  // Different Sessions occupy different Tasks at once, a blocked one too.
+  const other = await elsewhere.callTool('deck_occupy', { session: 'session-b', task: 5 })
+
+  assert.equal(occupied.isError, false)
+  assert.deepEqual(occupied.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
+  assert.deepEqual(other.structuredContent, { ok: true, occupied: true, occupant: 'session-b' })
+  for (const deck of [here, beside, elsewhere]) {
+    const { groups, containers } = (await deck.callTool('deck_tasks')).structuredContent
+    assert.deepEqual(occupants(groups.inProgress), { 3: 'session-a', 5: 'session-b' })
+    assert.deepEqual(numbers(groups.ready), [7])
+    assert.deepEqual(groups.blocked, [])
+    assert.equal(groups.ready[0].occupant, null)
+    assert.deepEqual(containers[0].progress, { closed: 0, inProgress: 1, total: 1 })
+  }
+  // The service reading before the Occupancy answered from its cache, with
+  // the Occupancy all the same: it read the Task Source once, and each
+  // Occupancy read it as it was recorded.
+  assert.equal((await gh.calls()).filter(call => call.cwd === besideDir).length, 1)
+})
+
+test('deck_occupy keeps a Task to one Occupancy, and says which Session holds it', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(deck.stop)
+
+  const first = await deck.callTool('deck_occupy', { session: 'session-a', task: 3 })
+  const again = await deck.callTool('deck_occupy', { session: 'session-a', task: 3 })
+  const second = await deck.callTool('deck_occupy', { session: 'session-b', task: 3 })
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(first.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
+  assert.deepEqual(again.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
+  assert.deepEqual(second.structuredContent, { ok: true, occupied: false, occupant: 'session-a' })
+  assert.deepEqual(occupants(groups.inProgress), { 3: 'session-a' })
+})
+
+test('a closed Task\'s Occupancy is released', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(deck.stop)
+  await deck.callTool('deck_occupy', { session: 'session-a', task: 3 })
+
+  await gh.issues([issue({ number: 3, state: 'CLOSED', closedAt: '2026-11-13T09:00:00Z' })])
+  const closed = (await deck.callTool('deck_tasks', { refresh: true })).structuredContent
+  // Opened again, it is occupied by nobody.
+  await gh.issues([issue({ number: 3 })])
+  const reopened = (await deck.callTool('deck_tasks', { refresh: true })).structuredContent
+  const taken = await deck.callTool('deck_occupy', { session: 'session-b', task: 3 })
+
+  assert.deepEqual(numbers(closed.groups.done), [3])
+  assert.equal(closed.groups.done[0].occupant, null)
+  assert.deepEqual(numbers(reopened.groups.ready), [3])
+  assert.deepEqual(taken.structuredContent, { ok: true, occupied: true, occupant: 'session-b' })
+})
+
+test('an Occupancy belongs to its repository: another repository\'s Task of the same number is not occupied', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })], 'acme/shop')
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(deck.stop)
+  await deck.callTool('deck_occupy', { session: 'session-a', task: 3 })
+
+  await gh.issues([issue({ number: 3 })], 'acme/other')
+  const { groups } = (await deck.callTool('deck_tasks', { refresh: true })).structuredContent
+
+  assert.deepEqual(numbers(groups.ready), [3])
+  assert.deepEqual(groups.inProgress, [])
+})
+
+test('deck_occupy occupies only an open Task of the Task Source, and takes a Session and a Task number', async t => {
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 2, state: 'CLOSED', closedAt: '2026-11-11T05:40:00Z' })])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const closed = await deck.callTool('deck_occupy', { session: 'session-a', task: 2 })
+  const unknown = await deck.callTool('deck_occupy', { session: 'session-a', task: 9 })
+  const malformed = await Promise.all(
+    [{ session: '', task: 3 }, { session: 'session-a', task: '#3' }, { session: 'session-a', task: 0 }, { task: 3 }].map(
+      args => deck.callTool('deck_occupy', args),
+    ),
+  )
+  await gh.answer({ stderr: 'error connecting to api.github.com', exitCode: 1 })
+  const unread = startDeck(await configured(), gh.env)
+  t.after(unread.stop)
+  const offline = await unread.callTool('deck_occupy', { session: 'session-a', task: 3 })
+
+  assert.deepEqual(closed.structuredContent, { ok: false, failure: { kind: 'not-open', message: '#2 is closed' } })
+  assert.deepEqual(unknown.structuredContent, {
+    ok: false,
+    failure: { kind: 'not-open', message: 'the Task Source has no Task #9' },
+  })
+  assert.deepEqual(
+    malformed.map(result => result.isError),
+    [true, true, true, true],
+  )
+  assert.equal(offline.structuredContent.ok, false)
+  assert.equal(offline.structuredContent.failure.kind, 'offline')
 })
