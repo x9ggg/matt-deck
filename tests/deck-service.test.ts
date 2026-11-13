@@ -1,16 +1,20 @@
 // The Deck service's tool interface, called the way the agent or the Pane
 // calls it: a real child process speaking MCP over stdio.
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { DatabaseSync } from 'node:sqlite'
+import { promisify } from 'node:util'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 const SERVER = join(import.meta.dirname, '..', 'plugin', 'server', 'main.ts')
 const FAKE_CLOCK = join(import.meta.dirname, 'fake-clock.ts')
+const CLI = join(import.meta.dirname, '..', 'plugin', 'cli', 'main.ts')
+const exec = promisify(execFile)
 
 // Unless a test gives it a HOME of its own, each Deck service keeps its local
 // state in a temporary home, never the user's.
@@ -508,6 +512,194 @@ const configured = () =>
 
 // What deck_tasks says of each Task, without the fields a test does not look at.
 const numbers = (tasks: { number: number }[]) => tasks.map(task => task.number)
+
+test('deck_inspect reads grouped Tasks and config without creating local state', async t => {
+  const dir = await configured()
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 1, title: '规格' }),
+    issue({ number: 3, parent: 1 }),
+    issue({ number: 5, blockedBy: [3] }),
+    issue({ number: 7, state: 'CLOSED', closedAt: '2026-11-13T09:00:00Z' }),
+  ])
+  const deck = startDeck(dir, { ...gh.env, HOME: user })
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_inspect')
+
+  assert.equal(result?.isError, false)
+  const inspection = result.structuredContent
+  assert.equal(inspection.ok, true)
+  assert.equal(inspection.configured, true)
+  assert.equal(inspection.workspace, dir)
+  assert.equal(inspection.stateFile, join(user, '.matt-deck', 'deck.sqlite'))
+  assert.deepEqual(inspection.config, JSON.parse(await readFile(join(dir, '.matt-deck', 'config.json'), 'utf8')))
+  assert.deepEqual(numbers(inspection.tasks.containers), [1])
+  assert.deepEqual(numbers(inspection.tasks.groups.ready), [3])
+  assert.deepEqual(numbers(inspection.tasks.groups.blocked), [5])
+  assert.deepEqual(numbers(inspection.tasks.groups.done), [7])
+  assert.deepEqual(inspection.tasks.groups.inProgress, [])
+  assert.deepEqual(inspection.occupancies, [])
+  assert.deepEqual(await readdir(user), [])
+})
+
+test('deck_inspect reads older local state without adding missing tables', async t => {
+  const user = await home()
+  await mkdir(join(user, '.matt-deck'))
+  const stateFile = join(user, '.matt-deck', 'deck.sqlite')
+  const db = new DatabaseSync(stateFile)
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(deck.stop)
+  t.after(() => db.close())
+
+  // Before Occupancy existed, local state held only Recommendations.
+  db.exec('CREATE TABLE recommendations (request_id TEXT PRIMARY KEY, recommendation TEXT NOT NULL, reported_at INTEGER NOT NULL)')
+  const beforeOccupancy = await readFile(stateFile)
+  const empty = await deck.callTool('deck_inspect')
+  assert.equal(empty.isError, false)
+  assert.deepEqual(empty.structuredContent.occupancies, [])
+  assert.deepEqual(numbers(empty.structuredContent.tasks.groups.ready), [3])
+  assert.deepEqual(await readFile(stateFile), beforeOccupancy)
+
+  // Occupancy predates heartbeat and execution reports. A Session with no
+  // heartbeat is Orphaned; no report means no Acceptance Evidence.
+  db.exec('CREATE TABLE occupancies (source TEXT NOT NULL, task INTEGER NOT NULL, session TEXT NOT NULL, occupied_at INTEGER NOT NULL, PRIMARY KEY (source, task))')
+  db.prepare('INSERT INTO occupancies VALUES (?, ?, ?, ?)').run('acme/shop', 3, 'old-session', 1)
+  const beforeHeartbeat = await readFile(stateFile)
+  const occupied = await deck.callTool('deck_inspect')
+  assert.equal(occupied.isError, false)
+  assert.deepEqual(occupied.structuredContent.occupancies, [{ task: 3, session: 'old-session', isOrphaned: true }])
+  assert.equal(occupied.structuredContent.tasks.groups.inProgress[0].hasEvidence, false)
+  assert.deepEqual(await readFile(stateFile), beforeHeartbeat)
+})
+
+test('deck_inspect explains an unconfigured workspace without reaching the Task Source', async t => {
+  const dir = await workspace()
+  const user = await home()
+  const gh = await fakeGh()
+  const deck = startDeck(dir, { ...gh.env, HOME: user })
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_inspect')
+
+  assert.equal(result.isError, false)
+  assert.deepEqual(result.structuredContent, {
+    configured: false,
+    workspace: dir,
+    stateFile: join(user, '.matt-deck', 'deck.sqlite'),
+    ok: false,
+    failure: {
+      kind: 'not-configured',
+      message: 'This workspace is not a Configured Project: .matt-deck/config.json does not exist',
+    },
+  })
+  assert.deepEqual(await gh.calls(), [])
+  assert.deepEqual(await readdir(user), [])
+})
+
+test('deck_inspect preserves config and the Pane failure when the Task Source cannot be read', async t => {
+  const dir = await configured()
+  const user = await home()
+  const gh = await fakeGh()
+  const deck = startDeck(dir, { ...gh.env, HOME: user })
+  t.after(deck.stop)
+
+  for (const answer of [
+    { exitCode: 4, stderr: 'Please run gh auth login\n' },
+    { exitCode: 1, stderr: 'error connecting to api.github.com\n' },
+  ]) {
+    await gh.answer(answer)
+    const inspection = await deck.callTool('deck_inspect')
+    const pane = await deck.callTool('deck_tasks')
+    assert.equal(inspection.isError, false)
+    assert.equal(inspection.structuredContent.ok, false)
+    assert.deepEqual(inspection.structuredContent.failure, pane.structuredContent.failure)
+    assert.equal(inspection.structuredContent.configured, true)
+    assert.equal(inspection.structuredContent.config.taskSource.type, 'github-issues')
+    assert.equal(inspection.structuredContent.stateFile, join(user, '.matt-deck', 'deck.sqlite'))
+    assert.equal(inspection.structuredContent.tasks, undefined)
+  }
+  assert.deepEqual(await readdir(user), [])
+})
+
+test('the CLI prints the same inspection from a repository subdirectory and reports failures by exit status', async t => {
+  const dir = await configured()
+  // A worktree has a .git file, rather than a directory.
+  await writeFile(join(dir, '.git'), 'gitdir: /unused/worktree\n')
+  const nested = join(dir, 'packages', 'app')
+  await mkdir(nested, { recursive: true })
+  const gh = await fakeGh()
+  const clock = await fakeClock(Date.UTC(2026, 10, 13, 9, 0))
+  const env = { ...process.env, ...gh.env, ...clock.env, HOME: await home() }
+  const deck = startDeck(nested, env)
+  t.after(deck.stop)
+  await gh.issues([issue({ number: 16, title: '命令行' })])
+  await deck.callTool('deck_occupy', { task: 16, session: 'session-a' })
+  const expected = (await deck.callTool('deck_inspect')).structuredContent
+
+  const result = await exec(process.execPath, ['--import', FAKE_CLOCK, CLI], { cwd: nested, env })
+
+  assert.deepEqual(JSON.parse(result.stdout), expected)
+  assert.equal(expected.workspace, dir)
+  await gh.answer({ exitCode: 4, stderr: 'Please run gh auth login\n' })
+  const failed = (await deck.callTool('deck_inspect')).structuredContent
+  await assert.rejects(exec(process.execPath, [CLI], { cwd: nested, env }), (error: any) => {
+    assert.equal(error.code, 1)
+    assert.deepEqual(JSON.parse(error.stdout), failed)
+    return true
+  })
+})
+
+test('the CLI explains unconfigured and malformed projects and validates arguments before reading', async () => {
+  const dir = await workspace()
+  const gh = await fakeGh()
+  const env = { ...process.env, ...gh.env, HOME: await home() }
+  const run = (args: string[] = []) => exec(process.execPath, [CLI, ...args], { cwd: dir, env })
+
+  assert.match((await run(['--help'])).stdout, /Usage:.*main\.ts/)
+  for (const args of [['release'], ['--help', 'extra']]) {
+    await assert.rejects(run(args), (error: any) => {
+      assert.equal(error.code, 2)
+      assert.match(error.stderr, /Usage:/)
+      assert.equal(error.stdout, '')
+      return true
+    })
+  }
+  await assert.rejects(run(), (error: any) => {
+    assert.equal(error.code, 1)
+    assert.match(JSON.parse(error.stdout).failure.message, /not a Configured Project.*config\.json/)
+    return true
+  })
+  await mkdir(join(dir, '.matt-deck'))
+  await writeFile(join(dir, '.matt-deck', 'config.json'), '{ broken')
+  await assert.rejects(run(), (error: any) => {
+    assert.equal(error.code, 1)
+    assert.match(error.stderr, /\.matt-deck\/config\.json is not valid JSON/)
+    assert.equal(error.stdout, '')
+    return true
+  })
+  assert.deepEqual(await gh.calls(), [])
+})
+
+test('deck_inspect reports corrupt local state instead of showing an empty Occupancy list', async t => {
+  const user = await home()
+  await mkdir(join(user, '.matt-deck'))
+  const stateFile = join(user, '.matt-deck', 'deck.sqlite')
+  await writeFile(stateFile, 'not a SQLite database')
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_inspect')
+
+  assert.equal(result.isError, true)
+  assert.match(result.content[0].text, /not a database/)
+  assert.equal(await readFile(stateFile, 'utf8'), 'not a SQLite database')
+})
 
 test('deck_tasks groups the Tasks of the Task Source', async t => {
   const gh = await fakeGh()
@@ -1568,6 +1760,60 @@ const orphaned = (tasks: { number: number; isOrphaned: boolean }[]) =>
   tasks.filter(task => task.isOrphaned).map(task => task.number)
 
 const MINUTE = 60_000
+
+test('deck_inspect shows shared Occupancy and Orphaned status without settling or changing state', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  const start = Date.UTC(2026, 10, 13, 9, 0)
+  const clock = await fakeClock(start)
+  const env = { ...gh.env, ...clock.env, HOME: user }
+  const writer = startDeck(await configured(), env)
+  const reader = startDeck(await configured(), env)
+  t.after(writer.stop)
+  t.after(reader.stop)
+  await gh.issues([1, 3, 5, 7, 9].map(number => issue({ number })))
+  for (const [task, session] of [[1, 'container'], [3, 'ended'], [5, 'live'], [7, 'never-beat'], [9, 'closed']] as const) {
+    await writer.callTool('deck_occupy', { task, session })
+  }
+  await writer.callTool('deck_end_session', { session: 'ended' })
+  await writer.callTool('deck_heartbeat', { session: 'live' })
+  await writer.callTool('deck_report', { task: 5, session: 'live', result: 'Checked', evidence: [{ text: 'Passed', source: 'tests' }] })
+  // An Occupancy in another Task Source must not leak into this inspection.
+  await gh.issues([issue({ number: 11 })], 'acme/other')
+  await writer.callTool('deck_occupy', { task: 11, session: 'elsewhere' })
+  await gh.issues([
+    issue({ number: 1 }), issue({ number: 3, parent: 1 }), issue({ number: 5 }), issue({ number: 7 }),
+    issue({ number: 9, state: 'CLOSED', closedAt: '2026-11-13T09:00:00Z' }),
+  ])
+  const stateFile = join(user, '.matt-deck', 'deck.sqlite')
+  const before = await readFile(stateFile)
+  await clock.set(start + 3 * MINUTE)
+  const atThree = (await reader.callTool('deck_inspect')).structuredContent
+  await clock.set(start + 3 * MINUTE + 1)
+  const afterThree = (await reader.callTool('deck_inspect')).structuredContent
+
+  assert.deepEqual(atThree.occupancies, [
+    { task: 1, session: 'container', isOrphaned: true },
+    { task: 3, session: 'ended', isOrphaned: true },
+    { task: 5, session: 'live', isOrphaned: false },
+    { task: 7, session: 'never-beat', isOrphaned: true },
+  ])
+  assert.deepEqual(afterThree.occupancies.filter((entry: any) => entry.task === 5), [
+    { task: 5, session: 'live', isOrphaned: true },
+  ])
+  assert.deepEqual(occupants(atThree.tasks.groups.inProgress), { 3: 'ended', 5: 'live', 7: 'never-beat' })
+  assert.equal(atThree.tasks.containers[0].occupant, 'container')
+  assert.equal(atThree.tasks.groups.inProgress.find((task: any) => task.number === 5).hasEvidence, true)
+  assert.equal(atThree.tasks.groups.done[0].occupant, null)
+  assert.deepEqual(await readFile(stateFile), before)
+  assert.deepEqual(await readdir(join(user, '.matt-deck')), ['deck.sqlite'])
+
+  // Reopening it proves the inspection left the closed Task's stored Occupancy intact.
+  await gh.issues([issue({ number: 9 })])
+  const reopened = (await reader.callTool('deck_inspect')).structuredContent
+  assert.deepEqual(reopened.occupancies, [{ task: 9, session: 'closed', isOrphaned: true }])
+  assert.deepEqual(await readFile(stateFile), before)
+})
 
 test('an Occupancy is Orphaned once its Session ends, in the Pane of every Session, and stays in progress', async t => {
   const user = await home()

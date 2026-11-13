@@ -3,12 +3,39 @@
 // heartbeats of the Sessions holding it.
 // Host-agnostic: it knows a home directory, a Task Source's identity and
 // Sessions by their ids.
-import { openState } from './state.ts'
+import type { DatabaseSync } from 'node:sqlite'
+import { hasStateTable, openState, readState } from './state.ts'
 
 // How old a Session's last heartbeat may be before its Occupancies are
 // Orphaned: a Session that vanished without ending shows within minutes.
 // The Sessions beat a few times as often.
 const ORPHANED_AFTER_MS = 180_000
+
+const occupantsIn = (db: DatabaseSync, source: string, now: number) => {
+  // Older state may predate heartbeats. A missing Session has never beat.
+  const sessions = hasStateTable(db, 'sessions')
+    ? 'sessions'
+    : '(SELECT NULL AS session, NULL AS beat_at, NULL AS is_ended)'
+  const rows = db.prepare(
+    `SELECT task, occupancies.session AS session, beat_at, is_ended FROM occupancies LEFT JOIN ${sessions} USING (session) WHERE source = ? ORDER BY task`,
+  ).all(source)
+  return new Map(rows.map(row => [row.task as number, {
+    session: row.session as string,
+    isOrphaned: row.beat_at === null || row.is_ended === 1 || now - (row.beat_at as number) > ORPHANED_AFTER_MS,
+  }]))
+}
+
+// Read without releasing closed Tasks or creating a state file.
+export const readOccupancies = (home: string, source: string, now: number) => {
+  const db = readState(home)
+  if (db === undefined) return new Map<number, { session: string; isOrphaned: boolean }>()
+  try {
+    if (!hasStateTable(db, 'occupancies')) return new Map<number, { session: string; isOrphaned: boolean }>()
+    return occupantsIn(db, source, now)
+  } finally {
+    db.close()
+  }
+}
 
 // Records a heartbeat of `session` at `now`: the Session runs, and its
 // Occupancies are held, an ended one's again too.
@@ -90,21 +117,11 @@ export const release = (home: string, source: string, task: number, session: str
 export const settleOccupancies = (home: string, source: string, open: number[], readAt: number, now: number) => {
   const db = openState(home)
   try {
-    const rows = db
-      .prepare(
-        'SELECT task, occupancies.session AS session, beat_at, is_ended FROM occupancies LEFT JOIN sessions USING (session) WHERE source = ?',
-      )
-      .all(source)
-    const held = new Map<number, { session: string; isOrphaned: boolean }>()
+    const held = occupantsIn(db, source, now)
     const release = db.prepare('DELETE FROM occupancies WHERE source = ? AND task = ? AND occupied_at <= ?')
-    for (const row of rows) {
-      const task = row.task as number
-      if (open.includes(task)) {
-        held.set(task, {
-          session: row.session as string,
-          isOrphaned: row.beat_at === null || row.is_ended === 1 || now - (row.beat_at as number) > ORPHANED_AFTER_MS,
-        })
-      } else {
+    for (const task of held.keys()) {
+      if (!open.includes(task)) {
+        held.delete(task)
         release.run(source, task, readAt)
       }
     }

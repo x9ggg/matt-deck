@@ -1,15 +1,26 @@
 // Task kernel: the local state (ADR-0005), one SQLite file under the user's
 // home shared by every Deck service of this machine: the one the agent calls
 // and the one the Pane reads may be different processes.
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+
+export const statePath = (home: string) => join(home, '.matt-deck', 'deck.sqlite')
+
+export const hasStateTable = (db: DatabaseSync, table: string) =>
+  db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !== undefined
+
+// A diagnostic read must neither create state nor run schema migrations.
+export const readState = (home: string) =>
+  statSync(statePath(home), { throwIfNoEntry: false }) === undefined
+    ? undefined
+    : new DatabaseSync(statePath(home), { readOnly: true })
 
 // Opens the local state under `home`, with every table it holds. The caller
 // closes it.
 export const openState = (home: string) => {
   mkdirSync(join(home, '.matt-deck'), { recursive: true })
-  const db = new DatabaseSync(join(home, '.matt-deck', 'deck.sqlite'))
+  const db = new DatabaseSync(statePath(home))
   db.exec(
     'CREATE TABLE IF NOT EXISTS recommendations (request_id TEXT PRIMARY KEY, recommendation TEXT NOT NULL, reported_at INTEGER NOT NULL)',
   )

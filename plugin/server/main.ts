@@ -4,35 +4,27 @@
 // a caller.
 // Runs on plain Node with no installed packages, so MCP is spoken by hand.
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
+import { inspectProject } from '../kernel/inspect.ts'
 import { beat, endSession, occupy, release, settleOccupancies } from '../kernel/occupancy.ts'
 import { askArgs, readRecommendation, saveRecommendation, snapshotOf } from '../kernel/recommend.ts'
 import { evidencedTasks, readReports, saveReport } from '../kernel/reports.ts'
 import { surveySetup } from '../kernel/setup.ts'
 import { listSkills, readSkill, SkillSourceError } from '../kernel/skills.ts'
 import { githubIssues, listTasks, readTask, TaskSourceError } from '../kernel/tasks.ts'
+import { workspaceAt } from '../kernel/workspace.ts'
 import type { ProjectConfig } from '../kernel/config.ts'
 import type { SourceRead, TaskListFailure } from '../kernel/tasks.ts'
 
 // The Workspace is the checkout the service was started in: the nearest
 // directory at or above the working directory that holds `.git`. Outside a
 // repository it is the working directory itself.
-let workspace = process.cwd()
-for (let dir = workspace; ; dir = dirname(dir)) {
-  if (existsSync(join(dir, '.git'))) {
-    workspace = dir
-    break
-  }
-  if (dir === dirname(dir)) {
-    break
-  }
-}
+const workspace = workspaceAt(process.cwd())
 
 // The last read of the Task Source, answered again for this long to a read
 // that does not ask for a fresh one. A read that fails empties it: the read
@@ -137,6 +129,14 @@ const skillAnswer = async (read: (source: ProjectConfig['skillSource']) => Promi
 }
 
 const tools = {
+  deck_inspect: {
+    description: 'Inspect project config, local state location, grouped Tasks and Occupancy without changing local state.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    run: async (): Promise<ToolResult> => {
+      const result = await inspectProject(workspace, homedir())
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
+    },
+  },
   deck_config: {
     description:
       'Read the Matt Deck project config (.matt-deck/config.json) of the workspace this service was started in.',

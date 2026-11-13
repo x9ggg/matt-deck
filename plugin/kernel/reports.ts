@@ -4,7 +4,7 @@
 // no Acceptance Evidence, closes no Task and leaves the Occupancy as it is.
 // Host-agnostic: it knows a home directory, a Task Source's identity and
 // Sessions by their ids.
-import { openState } from './state.ts'
+import { hasStateTable, openState, readState } from './state.ts'
 
 // One Acceptance Evidence: what shows an acceptance criterion is met, and
 // where it comes from (a test command and its output, a commit, a PR).
@@ -51,8 +51,10 @@ export const readReports = (home: string, source: string, task: number): Report[
 
 // The Tasks of the Task Source some report gave Acceptance Evidence for.
 export const evidencedTasks = (home: string, source: string) => {
-  const db = openState(home)
+  const db = readState(home)
+  if (db === undefined) return new Set<number>()
   try {
+    if (!hasStateTable(db, 'reports')) return new Set<number>()
     const rows = db.prepare("SELECT DISTINCT task FROM reports WHERE source = ? AND evidence <> '[]'").all(source)
 
     return new Set(rows.map(row => row.task as number))

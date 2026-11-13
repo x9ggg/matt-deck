@@ -1,10 +1,11 @@
 // This repository as a plugin source: what an install copies out of it must
 // run as copied, with no `npm install` or build step.
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { cp, mkdtemp, readFile, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { promisify } from 'node:util'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -47,4 +48,18 @@ test('the Deck service answers from a bare copy of the published plugin', async 
   )
 
   assert.deepEqual((await reply).result.structuredContent, { configured: false, workspace })
+
+  // The CLI ships in that same bare copy and needs neither Claude Code nor
+  // installed packages to explain an unconfigured project.
+  await assert.rejects(
+    promisify(execFile)(process.execPath, [join(installed, 'cli', 'main.ts')], { cwd: workspace }),
+    (error: any) => {
+      assert.equal(error.code, 1)
+      const inspection = JSON.parse(error.stdout)
+      assert.equal(inspection.configured, false)
+      assert.equal(inspection.workspace, workspace)
+      assert.match(inspection.failure.message, /not a Configured Project/)
+      return true
+    },
+  )
 })
