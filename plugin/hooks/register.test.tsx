@@ -2648,3 +2648,151 @@ test('a beat that waited for the Deck service while its Session ended is not sen
 
   expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: 'a1b2c3d4-session' }])
 })
+
+// The Mod's state as a real Session keeps it, which a /clear starts over;
+// the test kit's own state keeps it through a /clear.
+const clearableState = (on: On) => {
+  let states = new Map<string, { value: unknown; version: number }>()
+  on('state.get', (_, e) => ({ value: states.get(e.key) ?? { value: undefined, version: 0 } }))
+  on('state.set', (_, e) => {
+    const version = states.get(e.key)?.version ?? 0
+    if (e.ifVersion !== undefined && e.ifVersion !== version) {
+      return { value: { isSet: false, version } }
+    }
+    states.set(e.key, { value: e.value, version: version + 1 })
+
+    return { value: { isSet: true, version: version + 1 } }
+  })
+
+  return { clear: () => void (states = new Map()) }
+}
+
+test('after a /clear the pane shows the Tasks again, its top naming the new Session', async ($, on) => {
+  const state = clearableState(on)
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+
+  // The Mod's state starts over, and the id moves on after the end.
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  state.clear()
+  seen.sessionId = '2c9f224f-cleared'
+  const cleared = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  expect(await texts(cleared)).toEqual(['正在读取项目配置…'])
+  await seen.clock.settle()
+  await cleared.unmount()
+
+  // Drawn again: a write to the state above redraws no Pane in the test kit.
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE_TARGET, surface })
+    expect(await ui.find({ type: 'Text', text: /2c9f224f/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /a1b2c3d4/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', text: /^◆ #/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('after a /clear the Tasks are read on the timer, after a turn and on r, as before, and once each', async ($, on) => {
+  const state = clearableState(on)
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  state.clear()
+  seen.sessionId = '2c9f224f-cleared'
+
+  // Drawn twice, as the host draws a pane again and again: read once.
+  const before = seen.calls.length
+  const first = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  const second = await $.ui.mount({ ...PANE_TARGET, surface: 'desktop' })
+  await seen.clock.settle()
+  await first.unmount()
+  await second.unmount()
+  const reads = () =>
+    seen.calls
+      .slice(before)
+      .filter(call => call.tool !== 'deck_heartbeat')
+      .map(call => [call.tool, call.args])
+  expect(reads()).toEqual([
+    ['deck_config', {}],
+    ['deck_tasks', {}],
+    ['deck_skills', {}],
+  ])
+
+  // One timed read a minute, not two.
+  await seen.clock.advance(60_000)
+  expect(reads().slice(3)).toEqual([['deck_tasks', {}]])
+
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await seen.clock.settle()
+  expect(reads().slice(4)).toEqual([['deck_tasks', { refresh: true }]])
+
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'refresh' })
+  expect(reads().slice(5)).toEqual([
+    ['deck_tasks', { refresh: true }],
+    ['deck_skills', {}],
+  ])
+  await ui.unmount()
+})
+
+test('a /clear whose state starts over before its id moves on is read again once the id has', async ($, on) => {
+  const state = clearableState(on)
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+
+  // The Pane drawn between the two reads the config under the old id.
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  state.clear()
+  const between = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await seen.clock.settle()
+  await between.unmount()
+  seen.sessionId = '2c9f224f-cleared'
+  await turnStart($, 't1')
+  await seen.clock.settle()
+
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /2c9f224f/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: /^◆ #/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a /clear while the pane is closed reads the project config and the Tasks again without it', async ($, on) => {
+  const state = clearableState(on)
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  await $.command.run(DECK_COMMAND)
+
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  state.clear()
+  seen.sessionId = '2c9f224f-cleared'
+  const before = seen.calls.length
+  await turnStart($, 't1')
+  await seen.clock.settle()
+  expect(seen.calls.slice(before).map(call => call.tool).filter(tool => tool !== 'deck_heartbeat')).toEqual([
+    'deck_config',
+    'deck_tasks',
+    'deck_skills',
+  ])
+
+  // The turn's end reads the Tasks past the cache, as before the /clear.
+  await turnEnd($, 't1')
+  await seen.clock.settle()
+  expect(seen.calls.at(-1)).toEqual({ server: SERVER, tool: 'deck_tasks', args: { refresh: true } })
+})
+
+test('after a /clear without a project config the deck command still answers in text', async ($, on) => {
+  const state = clearableState(on)
+  const seen = engine(on, { config: { structuredContent: { configured: false, workspace: WORKSPACE }, isError: false } })
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  state.clear()
+  seen.sessionId = '2c9f224f-cleared'
+
+  const answer = await $.command.run(DECK_COMMAND)
+
+  expect(seen.opened).toEqual([])
+  expect(answer.text).toMatch(/未配置/)
+})

@@ -447,26 +447,62 @@ const startHeartbeat = ($: EngineInterface) => {
   heartbeat = $.clock.every(HEARTBEAT_MS, beat)
 }
 
+// The Session whose project config is being read, and the timer of the timed
+// reads; kept here, not in the Session's state, which a /clear starts over.
+let reading: string | undefined
+let poll: { cancel: () => void } | undefined
+
+// Reads the project config for the Session `sessionId`, then, in a Configured
+// Project, the Tasks and the skills, off the caller so it does not wait on
+// gh. The timed reads start once and go on across a /clear.
+const readSession = async ($: EngineInterface, sessionId: string) => {
+  reading = sessionId
+  try {
+    const config = await loadConfig($)
+    await update($, view, current => ({ ...current, sessionId, config }))
+    if (config.status === 'configured') {
+      $.clock.after(0, () => void loadTasks($, false))
+      $.clock.after(0, () => void loadSkills($))
+      poll ??= $.clock.every(POLL_MS, () => void loadTasks($, false))
+    }
+
+    return config
+  } finally {
+    reading = undefined
+  }
+}
+
+// After a /clear or a resume the process goes on under another id, with no
+// session.start, and its state starts over, the id and the state each at a
+// moment of their own: the project config and the Tasks are read again
+// wherever the state names another Session than the one running, and not
+// while a read is under way.
+const ensureSession = async ($: EngineInterface) => {
+  const sessionId = await $.session.id()
+  if (reading === sessionId) {
+    return
+  }
+  const { sessionId: shown } = await read($, view)
+  if (reading === sessionId || shown === sessionId) {
+    return
+  }
+  await readSession($, sessionId)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({ name: COMMAND, description: '打开或关闭 Matt Deck 的 Pane' })
 
-    const sessionId = await $.session.id()
-    const config = await loadConfig($)
-    await update($, view, current => ({ ...current, sessionId, config }))
+    const config = await readSession($, await $.session.id())
 
     // The Pane opens only where a project config exists; a malformed one
     // opens it to say why.
     if (config.status === 'configured' || config.status === 'error') {
       await $.ui.open(LIST_OPEN)
     }
-    // The Tasks are read off the session's start, so it does not wait on gh.
     if (config.status === 'configured') {
       startHeartbeat($)
-      $.clock.after(0, () => void loadTasks($, false))
-      $.clock.after(0, () => void loadSkills($))
-      $.clock.every(POLL_MS, () => void loadTasks($, false))
     }
 
     return started
@@ -476,6 +512,7 @@ export const register: Register = on => {
   // a request sent is the one whose prompt carries the request.
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
+      $.clock.after(0, () => void ensureSession($))
       await update($, ask, current =>
         current.status === 'sent' && current.requestId !== undefined && e.text.includes(current.requestId)
           ? { ...current, isBusy: true, status: 'running' as const, turnId: e.turnId }
@@ -558,8 +595,11 @@ export const register: Register = on => {
       }
     }
     const ended = await next(e)
-    if (heartbeat !== undefined && (e.reason === 'clear' || e.reason === 'resume')) {
-      startHeartbeat($)
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      if (heartbeat !== undefined) {
+        startHeartbeat($)
+      }
+      $.clock.after(0, () => void ensureSession($))
     }
 
     return ended
@@ -576,7 +616,8 @@ export const register: Register = on => {
 
   on('command.run', { command: COMMAND }, async $ => {
     // The Pane appears only where a project config exists: elsewhere the
-    // command answers in text.
+    // command answers in text. After a /clear it is read first.
+    await ensureSession($)
     const { config } = await read($, view)
     if (config.status === 'unconfigured') {
       return {
@@ -612,6 +653,8 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    // A drawing may not write the state: the check goes after it.
+    $.clock.after(0, () => void ensureSession($))
     const isInline = e.props.placement === 'inline'
     const moveFocus = async (key: string | undefined) => {
       if (key !== undefined) {
