@@ -581,6 +581,113 @@ test('with the Deck service out of reach the pane stays closed and the deck comm
   expect(answer.text).toContain('The deck server failed to start.')
 })
 
+// What `/deck` answers while the project config is being read.
+const WAITING = /项目配置[\s\S]*权限批准[\s\S]*再运行一次 \/deck/
+
+test('without a project config, /deck run during the read opens no pane, then says it is unconfigured', async ($, on) => {
+  const { waiting, release } = gate()
+  const seen = engine(on, {
+    config: { structuredContent: { configured: false, workspace: WORKSPACE }, isError: false },
+    waitFor: tool => (tool === 'deck_config' ? waiting : undefined),
+  })
+  await start($)
+
+  const during = await $.command.run(DECK_COMMAND)
+  expect(during.text).toMatch(WAITING)
+  expect(seen.opened).toEqual([])
+
+  release()
+  await seen.clock.settle()
+  expect(seen.opened).toEqual([])
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(/未配置/)
+  expect(seen.opened).toEqual([])
+  expect(seen.calls.filter(call => call.tool === 'deck_config')).toHaveLength(1)
+})
+
+test('in a Configured Project, /deck run during the read at the start leaves the pane to open once it answers', async ($, on) => {
+  const { waiting, release } = gate()
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => (tool === 'deck_config' ? waiting : undefined),
+  })
+  await start($)
+
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+  await seen.clock.settle()
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+  expect(seen.opened).toEqual([])
+
+  release()
+  await seen.clock.settle()
+  expect(seen.opened).toEqual([PANE])
+  expect(seen.closed).toEqual([])
+  expect(seen.calls.filter(call => call.tool === 'deck_config')).toHaveLength(1)
+  expect(seen.calls.map(call => call.tool)).toContain('deck_heartbeat')
+})
+
+test('/deck run before the read at the start has begun reads once and keeps what the start does', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  // The start's handling is over; its read is still to come off the event.
+  await $.session.start({ cwd: WORKSPACE, surface: 'terminal', isInteractive: true })
+
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+  await seen.clock.settle()
+
+  expect(seen.opened).toEqual([PANE])
+  expect(seen.calls.filter(call => call.tool === 'deck_config')).toHaveLength(1)
+  expect(seen.calls.map(call => call.tool)).toContain('deck_heartbeat')
+})
+
+test('/deck after a /clear with no read under way starts one off the command, and only one', async ($, on) => {
+  const state = clearableState(on)
+  let waiting: Promise<void> | undefined
+  const seen = engine(on, {
+    config: { structuredContent: { configured: false, workspace: WORKSPACE }, isError: false },
+    waitFor: tool => (tool === 'deck_config' ? waiting : undefined),
+  })
+  await start($)
+  // The end's check runs while the id has not yet moved on: nothing to read.
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  await seen.clock.settle()
+  state.clear()
+  seen.sessionId = '2c9f224f-cleared'
+  const blocked = gate()
+  waiting = blocked.waiting
+  const before = seen.calls.length
+
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+  await seen.clock.settle()
+  expect(seen.calls.slice(before).map(call => call.tool)).toEqual(['deck_config'])
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+  blocked.release()
+  await seen.clock.settle()
+
+  expect(seen.calls.slice(before).filter(call => call.tool === 'deck_config')).toHaveLength(1)
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(/未配置/)
+  expect(seen.opened).toEqual([])
+})
+
+test('/deck closes a drawn pane while the project config is read again after a /clear', async ($, on) => {
+  const state = clearableState(on)
+  let waiting: Promise<void> | undefined
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => (tool === 'deck_config' ? waiting : undefined),
+  })
+  await start($)
+  const blocked = gate()
+  waiting = blocked.waiting
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  state.clear()
+  seen.sessionId = '2c9f224f-cleared'
+  await seen.clock.settle()
+
+  expect((await $.command.run(DECK_COMMAND)).text).toBe('Matt Deck 已关闭。')
+  expect(seen.closed).toEqual([PANE])
+  blocked.release()
+  await seen.clock.settle()
+})
+
 test('the deck command draws a pane a narrow terminal left undrawn in a Configured Project', async ($, on) => {
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, isNarrow: true })
   await start($)
@@ -3081,18 +3188,31 @@ test('a /implement sent first after a /clear while the pane is closed occupies t
   expect(callsOf(seen, 'deck_occupy')).toEqual([{ session: '2c9f224f-cleared', task: 3 }])
 })
 
-test('after a /clear without a project config the deck command still answers in text', async ($, on) => {
+test('after a /clear without a project config the deck command answers at once while it is read, then says it is unconfigured', async ($, on) => {
   const state = clearableState(on)
-  const seen = engine(on, { config: { structuredContent: { configured: false, workspace: WORKSPACE }, isError: false } })
+  let waiting: Promise<void> | undefined
+  const seen = engine(on, {
+    config: { structuredContent: { configured: false, workspace: WORKSPACE }, isError: false },
+    waitFor: tool => (tool === 'deck_config' ? waiting : undefined),
+  })
   await start($)
+  const blocked = gate()
+  waiting = blocked.waiting
   await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
   state.clear()
   seen.sessionId = '2c9f224f-cleared'
+  const before = seen.calls.length
 
-  const answer = await $.command.run(DECK_COMMAND)
+  // Answered with the read held: the command does not wait on it.
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+  await seen.clock.settle()
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+  blocked.release()
+  await seen.clock.settle()
 
+  expect(seen.calls.slice(before).filter(call => call.tool === 'deck_config')).toHaveLength(1)
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(/未配置/)
   expect(seen.opened).toEqual([])
-  expect(answer.text).toMatch(/未配置/)
 })
 
 const REPORT = 'mcp__plugin_matt-deck_deck__deck_report'

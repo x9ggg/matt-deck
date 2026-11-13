@@ -615,7 +615,9 @@ export const register: Register = on => {
 
     // Read off the event: a permission hook waiting for the person keeps the
     // read waiting with it, and the Session's prompts wait on this event.
+    // Marked as under way now, so a /deck before it begins does not read too.
     const sessionId = await $.session.id()
+    reading = sessionId
     $.clock.after(0, () => void readSession($, sessionId, true))
 
     return started
@@ -760,10 +762,23 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: COMMAND }, async $ => {
+    // A drawn pane closes, whatever the project config is.
+    if ((await $.ui.panes()).some(pane => pane.id === PANE && pane.isPlaced)) {
+      await $.ui.close({ id: PANE })
+
+      return { text: 'Matt Deck 已关闭。' }
+    }
+
     // The Pane appears only where a project config exists: elsewhere the
-    // command answers in text. After a /clear it is read first.
-    await ensureSession($)
-    const { config } = await read($, view)
+    // command answers in text, and so while it is read, which may wait on a
+    // permission hook. After a /clear the read starts off the command.
+    const sessionId = await $.session.id()
+    const { sessionId: shown, config } = await read($, view)
+    if (reading === sessionId || shown !== sessionId) {
+      $.clock.after(0, () => void ensureSession($))
+
+      return { text: 'Matt Deck 还在读取项目配置，这次读取可能在等权限批准。读到之后再运行一次 /deck。' }
+    }
     if (config.status === 'unconfigured') {
       return {
         text: `Matt Deck 未配置：${config.workspace}/.matt-deck/config.json 不存在。运行 /matt-deck:configure 配置之后新开一个 Session，Pane 会自动出现。`,
@@ -773,14 +788,8 @@ export const register: Register = on => {
       return { text: `Matt Deck 不可用，Deck 服务未连接：${config.message}` }
     }
 
-    // A pane opened unasked on a narrow terminal is open but undrawn: the
-    // command draws it rather than closing it.
-    const isDrawn = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isPlaced)
-    if (isDrawn) {
-      await $.ui.close({ id: PANE })
-
-      return { text: 'Matt Deck 已关闭。' }
-    }
+    // Opens a closed pane, and draws one a narrow terminal left open but
+    // undrawn when it opened unasked.
     const opened = await $.ui.open(LIST_OPEN)
 
     return { text: opened.isPlaced ? 'Matt Deck 已打开。' : `Matt Deck 暂未显示：${opened.reason}` }
