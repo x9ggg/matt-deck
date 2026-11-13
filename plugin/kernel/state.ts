@@ -18,6 +18,11 @@ export const openState = (home: string) => {
   db.exec(
     'CREATE TABLE IF NOT EXISTS occupancies (source TEXT NOT NULL, task INTEGER NOT NULL, session TEXT NOT NULL, occupied_at INTEGER NOT NULL, PRIMARY KEY (source, task))',
   )
+  // Each Session's last heartbeat, and whether it has ended since: what
+  // tells an Occupancy held from one that is Orphaned.
+  db.exec(
+    'CREATE TABLE IF NOT EXISTS sessions (session TEXT PRIMARY KEY, beat_at INTEGER NOT NULL, is_ended INTEGER NOT NULL)',
+  )
 
   return db
 }

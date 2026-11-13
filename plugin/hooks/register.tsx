@@ -38,6 +38,10 @@ const COMMAND = 'deck'
 // read for less than this, so each timed read reaches the Task Source.
 const POLL_MS = 60_000
 
+// How often the Session tells the Deck service it runs. The Deck service
+// holds a Session's Occupancies Orphaned after three minutes without one.
+const HEARTBEAT_MS = 60_000
+
 // The Deck service's tools as the agent calls them: after any of them the
 // Pane reads the Tasks again.
 const DECK_TOOL = /^mcp__plugin_matt-deck_deck__deck_/
@@ -287,18 +291,16 @@ const takeOverTask = async ($: EngineInterface, number: number, from: string, su
   await loadTasks($, false)
 }
 
-// Releases this Session's Occupancy of the Task `number`, so that another
-// Session can take it. One that passed to another Session since stays.
-const releaseTask = async ($: EngineInterface, number: number) => {
+// Releases the Occupancy `session` holds of the Task `number`, this
+// Session's or an Orphaned one's, so that another Session can take it. One
+// that passed to another Session since stays.
+const releaseTask = async ($: EngineInterface, number: number, session: string) => {
   const deck = await $.mcp.connect('deck')
   let answer: DeckReleaseAnswer
   if (!deck.isConnected) {
     answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
   } else {
-    const result = await $.mcp.call(deck.server, 'deck_release', {
-      task: number,
-      session: (await read($, view)).sessionId,
-    })
+    const result = await $.mcp.call(deck.server, 'deck_release', { task: number, session })
     answer = result.isError
       ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
       : JSON.parse(result.content[0]!.text!)
@@ -306,7 +308,7 @@ const releaseTask = async ($: EngineInterface, number: number) => {
   if (!answer.ok) {
     $.ui.toast(`#${number} 的 Occupancy 没有释放：${answer.failure.message}`)
   } else if (!answer.released) {
-    $.ui.toast(`#${number} 的 Occupancy 已不在本 Session 上，没有释放。`)
+    $.ui.toast(`#${number} 的 Occupancy 已转给别的 Session，没有释放。`)
   }
   await loadTasks($, false)
 }
@@ -422,6 +424,35 @@ const answerRequest = async ($: EngineInterface, requestId: string, text: string
 
 const isConfigured = async ($: EngineInterface) => (await read($, view)).config.status === 'configured'
 
+// Tells the Deck service that the Session runs, or that the Session
+// `session` has ended. Not heard, it holds the Session's Occupancies
+// Orphaned once its last heartbeat is too old.
+const tellDeck = async ($: EngineInterface, tool: 'deck_heartbeat' | 'deck_end_session', session: string) => {
+  const deck = await $.mcp.connect('deck')
+  if (deck.isConnected) {
+    await $.mcp.call(deck.server, tool, { session })
+  }
+}
+
+// The Session's heartbeat, from the start of a Session in a Configured
+// Project; kept here, not in the Session's state, which a /clear starts
+// over. Each beat names the Session's id as it is then, but never `ended`,
+// the id a /clear or a resume has just ended: a beat would hold its
+// Occupancies again.
+let heartbeat: { cancel: () => void } | undefined
+const startHeartbeat = ($: EngineInterface, ended?: string) => {
+  heartbeat?.cancel()
+  const beat = () =>
+    void (async () => {
+      const session = await $.session.id()
+      if (session !== ended) {
+        await tellDeck($, 'deck_heartbeat', session)
+      }
+    })()
+  $.clock.after(0, beat)
+  heartbeat = $.clock.every(HEARTBEAT_MS, beat)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -438,6 +469,7 @@ export const register: Register = on => {
     }
     // The Tasks are read off the session's start, so it does not wait on gh.
     if (config.status === 'configured') {
+      startHeartbeat($)
       $.clock.after(0, () => void loadTasks($, false))
       $.clock.after(0, () => void loadSkills($))
       $.clock.every(POLL_MS, () => void loadTasks($, false))
@@ -513,13 +545,23 @@ export const register: Register = on => {
     return entered
   })
 
-  // A /clear ends the conversation the held request was for: it is dropped.
+  // The Session ends: its Occupancies are Orphaned. A /clear ends the
+  // conversation the held request was for: it is dropped. After a /clear or
+  // a resume the process goes on under another id, with no session.start:
+  // the heartbeat starts again, under that one.
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear') {
       await update($, ask, current => (current.status === 'held' ? { ...current, status: 'none' as const } : current))
     }
+    if (heartbeat !== undefined) {
+      await tellDeck($, 'deck_end_session', e.sessionId)
+    }
+    const ended = await next(e)
+    if (heartbeat !== undefined && (e.reason === 'clear' || e.reason === 'resume')) {
+      startHeartbeat($, e.sessionId)
+    }
 
-    return next(e)
+    return ended
   })
 
   on('tool.call', { tool: DECK_TOOL }, async ($, e, next) => {
@@ -698,7 +740,7 @@ export const register: Register = on => {
         void (async () => {
           await backToRow(await update($, nav, current => ({ ...current, takeover: undefined })))
         })(),
-      release: number => void releaseTask($, number),
+      release: (number, session) => void releaseTask($, number, session),
       cycleFilter: () =>
         void update($, nav, current => ({
           ...current,

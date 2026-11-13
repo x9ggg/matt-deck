@@ -16,7 +16,8 @@ export type Group = 'ready' | 'inProgress' | 'blocked' | 'done'
 
 // A Task as `deck_tasks` lists it: `blockers` are the open Tasks blocking an
 // open one, `blockedBy` every Task it declares a Blocking Edge to, closed
-// ones too; `occupant` the Session whose Occupancy holds it, or null.
+// ones too; `occupant` the Session whose Occupancy holds it, or null, and
+// `isOrphaned` whether that Session has ended while the Task is open.
 export type Task = {
   number: number
   title: string
@@ -27,6 +28,7 @@ export type Task = {
   blockedBy: number[]
   closedAt: string | null
   occupant: string | null
+  isOrphaned: boolean
 }
 
 // A Spec or a Map, in no group.

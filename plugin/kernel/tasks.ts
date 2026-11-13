@@ -57,7 +57,8 @@ export type Group = 'ready' | 'inProgress' | 'blocked' | 'done'
 // A Task as the kernel lists it. `parent` is its Spec or Map, `blockers` the
 // open Tasks blocking an open one, `blockedBy` every Task it declares a
 // Blocking Edge to, closed ones too, by number. `occupant` is the Session
-// whose Occupancy holds it, or null.
+// whose Occupancy holds it, or null; `isOrphaned` says that Session has
+// ended while the Task is open.
 export type Task = {
   number: number
   title: string
@@ -68,6 +69,7 @@ export type Task = {
   blockedBy: number[]
   closedAt: string | null
   occupant: string | null
+  isOrphaned: boolean
 }
 
 // A Spec or a Map: a Task with Child Tasks, or a Map with none yet. `group`
@@ -112,7 +114,11 @@ const groupOf = (task: Task): Group => {
 
 // The Tasks of a read of the Task Source, read at `fetchedAt`, grouped with
 // the Occupancies of its open Tasks, `occupants`, by Task number.
-export const listTasks = (source: SourceRead, fetchedAt: number, occupants: ReadonlyMap<number, string>): TaskList => {
+export const listTasks = (
+  source: SourceRead,
+  fetchedAt: number,
+  occupants: ReadonlyMap<number, { session: string; isOrphaned: boolean }>,
+): TaskList => {
   const read = [...source.tasks].sort((a, b) => a.number - b.number)
   const isOpen = new Map(read.map(task => [task.number, task.isOpen]))
   const tasks = read.map(({ blockedBy, isMap, ...task }) => ({
@@ -126,7 +132,8 @@ export const listTasks = (source: SourceRead, fetchedAt: number, occupants: Read
       // so it does not block.
       blockers: task.isOpen ? blockedBy.filter(number => isOpen.get(number) === true).sort((a, b) => a - b) : [],
       blockedBy: blockedBy.filter(number => isOpen.has(number)).sort((a, b) => a - b),
-      occupant: task.isOpen ? (occupants.get(task.number) ?? null) : null,
+      occupant: task.isOpen ? (occupants.get(task.number)?.session ?? null) : null,
+      isOrphaned: task.isOpen && occupants.get(task.number)?.isOrphaned === true,
     } as Task,
   }))
 

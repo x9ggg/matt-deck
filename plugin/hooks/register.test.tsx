@@ -32,6 +32,7 @@ const task = (number: number, title: string, more: { blockers?: number[]; [field
   blockedBy: more.blockers ?? ([] as number[]),
   closedAt: null as string | null,
   occupant: null as string | null,
+  isOrphaned: false,
   ...more,
 })
 
@@ -264,12 +265,14 @@ const engine = (
     toasts: [] as string[],
     // The commands the Mod ran, as the person typing them.
     ran: [] as { command: string; args: string }[],
+    // The id `$.session.id()` answers: a /clear moves it on.
+    sessionId: 'a1b2c3d4-session',
   }
   let asks = 0
   let panes: { id: string; isPlaced: boolean }[] = []
 
   seen.clock = mock.clock(on, { now: NOW })
-  on('session.id', () => ({ value: 'a1b2c3d4-session' }))
+  on('session.id', () => ({ value: seen.sessionId }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
   on('mcp.connect', () => ({
@@ -2205,7 +2208,7 @@ test('a release of an Occupancy that passed to another Session says it released 
   await ui.press({ key: 'release' })
   await seen.clock.settle()
 
-  expect(seen.toasts).toEqual(['#16 的 Occupancy 已不在本 Session 上，没有释放。'])
+  expect(seen.toasts).toEqual(['#16 的 Occupancy 已转给别的 Session，没有释放。'])
   await ui.unmount()
 })
 
@@ -2439,4 +2442,142 @@ test('a closed Task recommended has nothing to execute', async ($, on) => {
   expect(await texts(ui)).toContain('下一个成就')
   expect(await ui.find({ key: 'execute' })).toBeUndefined()
   await ui.unmount()
+})
+
+// The calls of a tool the Mod made, by their arguments.
+const callsOf = (seen: { calls: { tool: string; args?: Record<string, unknown> }[] }, tool: string) =>
+  seen.calls.filter(call => call.tool === tool).map(call => call.args)
+
+test('in a Configured Project the Session beats as it starts and every minute, and says it ended as it ends', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: 'a1b2c3d4-session' }])
+
+  await seen.clock.advance(60_000)
+  expect(callsOf(seen, 'deck_heartbeat')).toHaveLength(2)
+
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  expect(callsOf(seen, 'deck_end_session')).toEqual([{ session: 'a1b2c3d4-session' }])
+})
+
+test('outside a Configured Project the Session neither beats nor says it ended', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: { configured: false, workspace: WORKSPACE }, isError: false } })
+  await start($)
+  await seen.clock.advance(60_000)
+
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+
+  expect(callsOf(seen, 'deck_heartbeat')).toEqual([])
+  expect(callsOf(seen, 'deck_end_session')).toEqual([])
+})
+
+test('a /clear ends the Session it was, and the Session beats on under its new id alone', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+
+  // The process goes on under a new id, and no session.start fires for it.
+  seen.sessionId = '2c9f224f-cleared'
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  await seen.clock.settle()
+  expect(callsOf(seen, 'deck_end_session')).toEqual([{ session: 'a1b2c3d4-session' }])
+  expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: 'a1b2c3d4-session' }, { session: '2c9f224f-cleared' }])
+
+  // Once a minute, not twice.
+  await seen.clock.advance(60_000)
+  expect(callsOf(seen, 'deck_heartbeat').slice(2)).toEqual([{ session: '2c9f224f-cleared' }])
+})
+
+const ORPHANED = tasks({
+  inProgress: [
+    task(16, '命令行', { labels: ['ready-for-agent'], occupant: 'a1b2c3d4-session' }),
+    task(4, '核对 Pane 的生命周期', { labels: ['ready-for-human'], occupant: '9043fe32-ended', isOrphaned: true }),
+  ],
+})
+
+test('an Orphaned Task stays in progress with ▲ and Orphaned, and its action bar takes it over or releases it', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => ORPHANED })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  expect((await ui.find({ key: 'task:4' }))?.text).toMatch(/^▲ #4 +核对 Pane 的生命周期 +Orphaned$/)
+  expect((await ui.find({ type: 'Text', text: '▲' }))?.props).toEqual(expect.objectContaining({ color: 'warning' }))
+  // Not this Session's Task, though nobody else runs it.
+  expect((await texts(ui)).join('')).toContain('本 Session ▶ #16 命令行')
+  await focus($, 'task:4')
+  expect((await ui.find({ key: 'takeover' }))?.text).toBe('接管')
+  expect((await ui.find({ key: 'release' }))?.text).toBe('释放')
+  // Two actions: no o docked, enter drills in all the same.
+  expect(await ui.find({ key: 'open' })).toBeUndefined()
+  expect(await ui.find({ key: 'execute' })).toBeUndefined()
+  // The detail's way back has both.
+  await ui.press({ key: 'task:4' })
+  await seen.clock.settle()
+  const actions = (await ui.findAll({ type: 'Button' })).map(button => button.key)
+  expect(actions).toEqual(expect.arrayContaining(['back', 'takeover', 'release']))
+  await ui.unmount()
+
+  const inline = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  await inline.press({ key: 'back' })
+  await focus($, 'task:4')
+  expect((await texts(inline)).join('')).toMatch(/▲ #4  核对 Pane 的生命周期   Orphaned   ready-for-human/)
+  expect((await inline.findAll({ type: 'Button' })).map(button => button.key)).toEqual(
+    expect.arrayContaining(['takeover', 'release', 'open']),
+  )
+  await inline.unmount()
+})
+
+test('x releases an Orphaned Occupancy at once, from the Session that held it', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => ORPHANED })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await focus($, 'task:4')
+
+  await ui.press({ key: 'release' })
+  await seen.clock.settle()
+
+  expect(callsOf(seen, 'deck_release')).toEqual([{ task: 4, session: '9043fe32-ended' }])
+  expect(seen.toasts).toEqual([])
+  await ui.unmount()
+})
+
+test('t on an Orphaned Task asks to confirm that its Session has ended, then takes it over and prefills it', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => ORPHANED,
+    skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await focus($, 'task:4')
+
+  await ui.press({ key: 'takeover' })
+  await seen.clock.settle()
+  const lines = await texts(ui)
+  expect(lines.join('\n')).toContain('▲ #4 的 Session 已结束')
+  expect(lines).toContain('接管会把 Occupancy 转给本 Session。')
+  expect(callsOf(seen, 'deck_occupy')).toEqual([])
+
+  await ui.press({ key: 'takeover:confirm' })
+  await seen.clock.settle()
+  expect(callsOf(seen, 'deck_occupy')).toEqual([{ session: 'a1b2c3d4-session', task: 4, takeOver: '9043fe32-ended' }])
+  expect(seen.filled.map(fill => fill.text)).toEqual([executePrompt('/mattpocock-skills:implement', 4)])
+  await ui.unmount()
+})
+
+test('after a /clear no beat names the Session it ended, though the id moves on only later', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  await seen.clock.settle()
+  seen.sessionId = '2c9f224f-cleared'
+  await seen.clock.advance(60_000)
+
+  expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: 'a1b2c3d4-session' }, { session: '2c9f224f-cleared' }])
 })

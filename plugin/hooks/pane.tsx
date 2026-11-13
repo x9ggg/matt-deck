@@ -55,8 +55,9 @@ export type Actions = {
   askTakeOver: (number: number) => void
   takeOver: (number: number, from: string) => void
   cancelTakeOver: () => void
-  // Releases this Session's Occupancy of the Task `number`.
-  release: (number: number) => void
+  // Releases the Occupancy `session` holds of the Task `number`: this
+  // Session's, or an Orphaned one's.
+  release: (number: number, session: string) => void
   // Asks what to do now; cancels the request held; shows the whole answer
   // above the prompt, or goes back from it.
   ask: () => void
@@ -176,7 +177,8 @@ const closedTime = (closedAt: string) => {
 }
 
 // The status word at a Task row's right end; in progress, the Session
-// occupying it: this one, `session`, or another by its id's start.
+// occupying it: this one, `session`, or another by its id's start; or that
+// it is Orphaned.
 const statusOf = (task: Task, group: Group, session: string) => {
   switch (group) {
     case 'ready':
@@ -188,7 +190,7 @@ const statusOf = (task: Task, group: Group, session: string) => {
     case 'done':
       return task.closedAt === null ? '已解锁' : closedTime(task.closedAt)
     case 'inProgress':
-      return task.occupant === session ? '本 Session' : task.occupant!.slice(0, 8)
+      return task.isOrphaned ? 'Orphaned' : task.occupant === session ? '本 Session' : task.occupant!.slice(0, 8)
   }
 }
 
@@ -314,11 +316,21 @@ export const drawPane = (
       {GLYPH[group]}
     </Text>
   )
-  // A Task's glyph: its group's, but ◐ in progress for another Session.
-  const isOthers = (task: Task, group: Group) => group === 'inProgress' && task.occupant !== view.sessionId
-  const glyphText = (task: Task, group: Group) => (isOthers(task, group) ? '◐' : GLYPH[group])
+  // A Task's glyph: its group's, but in progress ▲ when Orphaned and ◐ for
+  // another Session.
+  const isOrphaned = (task: Task, group: Group) => group === 'inProgress' && task.isOrphaned
+  const isOthers = (task: Task, group: Group) =>
+    group === 'inProgress' && !task.isOrphaned && task.occupant !== view.sessionId
+  const glyphText = (task: Task, group: Group) =>
+    isOrphaned(task, group) ? '▲' : isOthers(task, group) ? '◐' : GLYPH[group]
   const taskGlyph = (task: Task, group: Group, dim = false) =>
-    isOthers(task, group) ? <Text color="inactive">◐</Text> : glyph(group, dim)
+    isOrphaned(task, group) ? (
+      <Text color="warning">▲</Text>
+    ) : isOthers(task, group) ? (
+      <Text color="inactive">◐</Text>
+    ) : (
+      glyph(group, dim)
+    )
   const status = (task: Task, group: Group) => statusOf(task, group, view.sessionId)
   // This Session's Task in progress, for the top.
   const executing = list?.groups.inProgress.find(task => task.occupant === view.sessionId)
@@ -412,28 +424,40 @@ export const drawPane = (
 
   // The action bar's actions, at its right end, and the columns they take
   // with the gap before them: a ready Task is executed, one in progress
-  // released, this Session's, or taken over, another's; a Spec or Map opens
-  // its Map View as well.
+  // released, this Session's, or taken over, another's, and an Orphaned one
+  // either; a Spec or Map opens its Map View as well. Docked, a row with two
+  // actions leaves out o, which enter does all the same.
   const executeButton = (number: number) => (
     <Button key="execute" plain hotkey="e" label="执行" onPress={() => actions.execute(number)} />
+  )
+  const releaseButton = (task: Task) => (
+    <Button key="release" plain hotkey="x" label="释放" onPress={() => actions.release(task.number, task.occupant!)} />
+  )
+  const takeOverButton = (task: Task) => (
+    <Button key="takeover" plain hotkey="t" label="接管" onPress={() => actions.askTakeOver(task.number)} />
   )
   const taskAction = (task: Task, group: Group) =>
     group === 'ready'
       ? { text: 'e: 执行', button: executeButton(task.number) }
       : group !== 'inProgress'
         ? undefined
-        : task.occupant === view.sessionId
+        : task.isOrphaned
           ? {
-              text: 'x: 释放',
-              button: <Button key="release" plain hotkey="x" label="释放" onPress={() => actions.release(task.number)} />,
-            }
-          : {
-              text: 't: 接管',
+              text: 't: 接管  x: 释放',
+              isTwo: true,
               button: (
-                <Button key="takeover" plain hotkey="t" label="接管" onPress={() => actions.askTakeOver(task.number)} />
+                <Box flexDirection="row">
+                  {takeOverButton(task)}
+                  <Text>{'  '}</Text>
+                  {releaseButton(task)}
+                </Box>
               ),
             }
+          : task.occupant === view.sessionId
+            ? { text: 'x: 释放', button: releaseButton(task) }
+            : { text: 't: 接管', button: takeOverButton(task) }
   const rowAction = (row: Row) => ('group' in row ? taskAction(row.task, row.group) : undefined)
+  const isOpenShown = (row: Row) => isInline || rowAction(row)?.isTwo !== true
   const rowActions = (row: Row) => (
     <Box flexDirection="row">
       {rowAction(row) !== undefined && (
@@ -448,22 +472,37 @@ export const drawPane = (
           <Text>{'  '}</Text>
         </Box>
       )}
-      <Button key="open" plain hotkey="o" label="详情" onPress={() => actions.openTask(numberOf(row))} />
+      {isOpenShown(row) && (
+        <Button key="open" plain hotkey="o" label="详情" onPress={() => actions.openTask(numberOf(row))} />
+      )}
     </Box>
   )
   const actionsWidth = (row: Row) =>
-    2 + width('container' in row ? 'm: 地图  o: 详情' : `${rowAction(row) === undefined ? '' : `${rowAction(row)!.text}  `}o: 详情`)
+    2 +
+    width(
+      'container' in row
+        ? 'm: 地图  o: 详情'
+        : [rowAction(row)?.text, isOpenShown(row) ? 'o: 详情' : undefined].filter(text => text !== undefined).join('  '),
+    )
 
-  // The Task another Session holds that the person is asked to take over,
-  // while it is still that Session's; and the asking, in the action bar's
-  // place: docked a box, above the prompt the title with the keys and a row
-  // saying what taking over does.
+  // The Task another Session holds, or an Orphaned one, that the person is
+  // asked to take over, while it still is; and the asking, in the action
+  // bar's place: docked a box, above the prompt the title with the keys and
+  // a row saying what taking over does.
   const takingOver =
     nav.takeover === undefined
       ? undefined
-      : list?.groups.inProgress.find(task => task.number === nav.takeover && task.occupant !== view.sessionId)
+      : list?.groups.inProgress.find(
+          task => task.number === nav.takeover && (task.isOrphaned || task.occupant !== view.sessionId),
+        )
   const takeOverConfirm = (task: Task) => {
-    const title = <Text color="warning">◐ #{task.number} 正由 Session {task.occupant!.slice(0, 8)} 执行</Text>
+    const title = (
+      <Text color="warning">
+        {task.isOrphaned
+          ? `▲ #${task.number} 的 Session 已结束`
+          : `◐ #${task.number} 正由 Session ${task.occupant!.slice(0, 8)} 执行`}
+      </Text>
+    )
     const note = <Text>接管会把 Occupancy 转给本 Session。</Text>
     const keys = (
       <Box flexDirection="row">
@@ -1592,7 +1631,9 @@ export const drawPane = (
   // it, after taking it over when another Session holds it.
   const isRecommendedClosed = listed.some(task => task.number === recommendation?.task && !task.isOpen)
   const isRecommendedOthers =
-    list?.groups.inProgress.some(task => task.number === recommendation?.task && task.occupant !== view.sessionId) === true
+    list?.groups.inProgress.some(
+      task => task.number === recommendation?.task && (task.isOrphaned || task.occupant !== view.sessionId),
+    ) === true
   const recommendedTakeOver = takingOver !== undefined && takingOver.number === recommendation?.task ? takingOver : undefined
   const executeRecommended =
     recommendation?.task == null || isRecommendedClosed ? undefined : (

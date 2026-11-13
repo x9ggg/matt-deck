@@ -12,8 +12,9 @@ export const snapshotOf = (list: TaskList) => {
     const labels = task.labels.length > 0 ? ` [${task.labels.join(', ')}]` : ''
     const parent = task.parent !== null ? ` (in #${task.parent})` : ''
     const blockers = task.blockers.length > 0 ? `, blocked by ${task.blockers.map(number => `#${number}`).join(' ')}` : ''
+    const orphaned = task.isOrphaned ? ', Orphaned: its Session has ended' : ''
 
-    return `- #${task.number} ${task.title}${labels}${parent}${blockers}`
+    return `- #${task.number} ${task.title}${labels}${parent}${blockers}${orphaned}`
   }
   const section = (title: string, lines: string[]) => (lines.length > 0 ? [`${title}:`, ...lines] : [`${title}: none`])
   const done = list.groups.done.length

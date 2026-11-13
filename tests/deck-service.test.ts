@@ -10,11 +10,12 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 const SERVER = join(import.meta.dirname, '..', 'plugin', 'server', 'main.ts')
+const FAKE_CLOCK = join(import.meta.dirname, 'fake-clock.ts')
 
 // Unless a test gives it a HOME of its own, each Deck service keeps its local
 // state in a temporary home, never the user's.
 const startDeck = (cwd: string, env: Record<string, string> = {}) => {
-  const child = spawn(process.execPath, [SERVER], {
+  const child = spawn(process.execPath, ['--import', FAKE_CLOCK, SERVER], {
     cwd,
     env: { ...process.env, HOME: mkdtempSync(join(tmpdir(), 'deck-home-')), ...env },
     stdio: ['pipe', 'pipe', 'inherit'],
@@ -543,6 +544,7 @@ test('deck_tasks groups the Tasks of the Task Source', async t => {
     blockedBy: [3],
     closedAt: null,
     occupant: null,
+    isOrphaned: false,
   })
   assert.deepEqual(groups.done[0].blockers, [])
 })
@@ -1497,4 +1499,157 @@ test('deck_release releases any Session\'s Occupancy, and the Task goes back to 
   // Released, the Task can be occupied by any Session.
   const again = await elsewhere.callTool('deck_occupy', { session: 'session-b', task: 3 })
   assert.deepEqual(again.structuredContent, { ok: true, occupied: true, occupant: 'session-b' })
+})
+
+// A clock every Deck service given its `env` reads, which `set` moves.
+const fakeClock = async (start: number) => {
+  const file = join(await mkdtemp(join(tmpdir(), 'deck-clock-')), 'now')
+  const set = (now: number) => writeFile(file, String(now))
+  await set(start)
+
+  return { env: { FAKE_CLOCK_FILE: file }, set }
+}
+
+// Which Tasks deck_tasks lists in progress as Orphaned, by number.
+const orphaned = (tasks: { number: number; isOrphaned: boolean }[]) =>
+  tasks.filter(task => task.isOrphaned).map(task => task.number)
+
+const MINUTE = 60_000
+
+test('an Occupancy is Orphaned once its Session ends, in the Pane of every Session, and stays in progress', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 })])
+  const clock = await fakeClock(Date.UTC(2026, 10, 13, 9, 0))
+  const env = { ...gh.env, ...clock.env, HOME: user }
+  const ending = startDeck(await configured(), env)
+  t.after(ending.stop)
+  const other = startDeck(await configured(), env)
+  t.after(other.stop)
+  await ending.callTool('deck_heartbeat', { session: 'session-a' })
+  await other.callTool('deck_heartbeat', { session: 'session-b' })
+  await ending.callTool('deck_occupy', { session: 'session-a', task: 3 })
+  await other.callTool('deck_occupy', { session: 'session-b', task: 5 })
+  const before = (await other.callTool('deck_tasks')).structuredContent
+
+  const ended = await ending.callTool('deck_end_session', { session: 'session-a' })
+  const after = (await other.callTool('deck_tasks')).structuredContent
+  const malformed = await Promise.all(
+    [{}, { session: '' }, { session: 7 }].flatMap(args => [
+      other.callTool('deck_heartbeat', args),
+      other.callTool('deck_end_session', args),
+    ]),
+  )
+
+  assert.deepEqual(orphaned(before.groups.inProgress), [])
+  assert.deepEqual(ended, { content: [{ type: 'text', text: 'Recorded.' }], isError: false })
+  // Still in progress, held by the Session that ended: it waits on the person.
+  assert.deepEqual(occupants(after.groups.inProgress), { 3: 'session-a', 5: 'session-b' })
+  assert.deepEqual(orphaned(after.groups.inProgress), [3])
+  assert.deepEqual(numbers(after.groups.ready), [])
+  assert.deepEqual(
+    malformed.map(result => result.isError),
+    [true, true, true, true, true, true],
+  )
+})
+
+test('an Occupancy is Orphaned once its Session\'s heartbeat is three minutes old, and is held again when it beats', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 })])
+  const start = Date.UTC(2026, 10, 13, 9, 0)
+  const clock = await fakeClock(start)
+  const deck = startDeck(await configured(), { ...gh.env, ...clock.env, HOME: user })
+  t.after(deck.stop)
+  await deck.callTool('deck_heartbeat', { session: 'session-a' })
+  await deck.callTool('deck_heartbeat', { session: 'session-b' })
+  await deck.callTool('deck_occupy', { session: 'session-a', task: 3 })
+  await deck.callTool('deck_occupy', { session: 'session-b', task: 5 })
+  const inProgress = async () => (await deck.callTool('deck_tasks')).structuredContent.groups.inProgress
+
+  // session-b goes on beating; session-a vanishes without ending.
+  await clock.set(start + 2 * MINUTE)
+  await deck.callTool('deck_heartbeat', { session: 'session-b' })
+  await clock.set(start + 3 * MINUTE)
+  const atThree = await inProgress()
+  await clock.set(start + 3 * MINUTE + 1)
+  const pastThree = await inProgress()
+  // Back, say from a machine's sleep, it beats again.
+  await deck.callTool('deck_heartbeat', { session: 'session-a' })
+  const back = await inProgress()
+
+  assert.deepEqual(orphaned(atThree), [])
+  assert.deepEqual(orphaned(pastThree), [3])
+  assert.deepEqual(occupants(pastThree), { 3: 'session-a', 5: 'session-b' })
+  assert.deepEqual(orphaned(back), [])
+})
+
+test('an Occupancy of a Session that never beat is Orphaned', async t => {
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+  await deck.callTool('deck_occupy', { session: 'session-a', task: 3 })
+
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(orphaned(groups.inProgress), [3])
+})
+
+test('an Orphaned Occupancy is taken over or released as any other, and released when its Task closes', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 }), issue({ number: 7 })])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(deck.stop)
+  for (const task of [3, 5, 7]) {
+    await deck.callTool('deck_occupy', { session: 'session-a', task })
+  }
+  await deck.callTool('deck_end_session', { session: 'session-a' })
+  await deck.callTool('deck_heartbeat', { session: 'session-b' })
+
+  const taken = await deck.callTool('deck_occupy', { session: 'session-b', task: 3, takeOver: 'session-a' })
+  const released = await deck.callTool('deck_release', { task: 5, session: 'session-a' })
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 }), issue({ number: 7, state: 'CLOSED', closedAt: '2026-11-13T09:00:00Z' })])
+  const { groups } = (await deck.callTool('deck_tasks', { refresh: true })).structuredContent
+
+  assert.deepEqual(taken.structuredContent, { ok: true, occupied: true, occupant: 'session-b' })
+  assert.deepEqual(released.structuredContent, { ok: true, released: true })
+  // Taken over, it is the beating Session's and no longer Orphaned.
+  assert.deepEqual(occupants(groups.inProgress), { 3: 'session-b' })
+  assert.deepEqual(orphaned(groups.inProgress), [])
+  assert.deepEqual(numbers(groups.ready), [5])
+  assert.deepEqual(numbers(groups.done), [7])
+  assert.equal(groups.done[0].occupant, null)
+})
+
+test('deck_ask tells the agent which Task in progress is Orphaned', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  await skillFile(join(user, '.claude', 'skills'), 'ask-matt', '问下一步该做什么。')
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3, title: '命令行' }), issue({ number: 4, title: '核对 Pane 的生命周期' })])
+  const deck = startDeck(dir, { ...gh.env, HOME: user })
+  t.after(deck.stop)
+  await deck.callTool('deck_heartbeat', { session: 'session-a' })
+  await deck.callTool('deck_occupy', { session: 'session-a', task: 3 })
+  await deck.callTool('deck_occupy', { session: 'session-b', task: 4 })
+  await deck.callTool('deck_end_session', { session: 'session-b' })
+
+  const { requestId, args } = (await deck.callTool('deck_ask')).structuredContent
+
+  assert.equal(
+    args,
+    askArgs(
+      requestId,
+      [
+        'Specs and Maps: none',
+        'Ready: none',
+        'In progress:',
+        '- #3 命令行',
+        '- #4 核对 Pane 的生命周期, Orphaned: its Session has ended',
+        'Blocked: none',
+        'Done: 0 Tasks closed',
+      ].join('\n'),
+    ),
+  )
 })

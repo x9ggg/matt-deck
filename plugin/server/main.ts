@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
-import { occupy, release, settleOccupancies } from '../kernel/occupancy.ts'
+import { beat, endSession, occupy, release, settleOccupancies } from '../kernel/occupancy.ts'
 import { askArgs, readRecommendation, saveRecommendation, snapshotOf } from '../kernel/recommend.ts'
 import { surveySetup } from '../kernel/setup.ts'
 import { listSkills, readSkill, SkillSourceError } from '../kernel/skills.ts'
@@ -53,8 +53,9 @@ const readSource = async (refresh: boolean) => {
   return cachedRead
 }
 
-// The Tasks of a read, with the Occupancies of its open Tasks; those of the
-// others are released, unless they were recorded after the read began.
+// The Tasks of a read, with the Occupancies of its open Tasks, Orphaned or
+// not as of now; those of the others are released, unless they were recorded
+// after the read began.
 const tasksOf = ({ source, fetchedAt }: { source: SourceRead; fetchedAt: number }) =>
   listTasks(
     source,
@@ -64,6 +65,7 @@ const tasksOf = ({ source, fetchedAt }: { source: SourceRead; fetchedAt: number 
       source.identity,
       source.tasks.filter(task => task.isOpen).map(task => task.number),
       fetchedAt,
+      Date.now(),
     ),
   )
 
@@ -271,6 +273,42 @@ const tools = {
       }
 
       return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
+    },
+  },
+  deck_heartbeat: {
+    description:
+      'For the Pane: record that a Session is running, every minute or so. A Session that stops beating, or ends, leaves its Occupancies Orphaned.',
+    inputSchema: {
+      type: 'object',
+      properties: { session: { type: 'string', minLength: 1, description: 'The id of the Session.' } },
+      required: ['session'],
+      additionalProperties: false,
+    },
+    run: async ({ session }: any): Promise<ToolResult> => {
+      if (typeof session !== 'string' || session === '') {
+        return { content: [{ type: 'text', text: 'deck_heartbeat takes the id of a Session' }], isError: true }
+      }
+      beat(homedir(), session, Date.now())
+
+      return { content: [{ type: 'text', text: 'Recorded.' }], isError: false }
+    },
+  },
+  deck_end_session: {
+    description:
+      'For the Pane: record that a Session has ended. Its Occupancies of open Tasks are Orphaned until it beats again, or the person takes them over or releases them.',
+    inputSchema: {
+      type: 'object',
+      properties: { session: { type: 'string', minLength: 1, description: 'The id of the Session.' } },
+      required: ['session'],
+      additionalProperties: false,
+    },
+    run: async ({ session }: any): Promise<ToolResult> => {
+      if (typeof session !== 'string' || session === '') {
+        return { content: [{ type: 'text', text: 'deck_end_session takes the id of a Session' }], isError: true }
+      }
+      endSession(homedir(), session, Date.now())
+
+      return { content: [{ type: 'text', text: 'Recorded.' }], isError: false }
     },
   },
   deck_task: {
