@@ -49,6 +49,13 @@ export type Actions = {
   // Prompt of the Task `number` there.
   prefill: (text: string) => void
   execute: (number: number) => void
+  // Asks to confirm taking over the Task `number` from the Session holding
+  // it; takes it over, confirmed, and executes it; gives up the asking.
+  askTakeOver: (number: number) => void
+  takeOver: (number: number) => void
+  cancelTakeOver: () => void
+  // Releases this Session's Occupancy of the Task `number`.
+  release: (number: number) => void
   // Asks what to do now; cancels the request held; shows the whole answer
   // above the prompt, or goes back from it.
   ask: () => void
@@ -403,16 +410,34 @@ export const drawPane = (
     ])
 
   // The action bar's actions, at its right end, and the columns they take
-  // with the gap before them: a Spec or Map opens its Map View as well.
-  const isExecutable = (row: Row) => 'group' in row && row.group === 'ready'
+  // with the gap before them: a ready Task is executed, one in progress
+  // released, this Session's, or taken over, another's; a Spec or Map opens
+  // its Map View as well.
   const executeButton = (number: number) => (
     <Button key="execute" plain hotkey="e" label="执行" onPress={() => actions.execute(number)} />
   )
+  const taskAction = (task: Task, group: Group) =>
+    group === 'ready'
+      ? { text: 'e: 执行', button: executeButton(task.number) }
+      : group !== 'inProgress'
+        ? undefined
+        : task.occupant === view.sessionId
+          ? {
+              text: 'x: 释放',
+              button: <Button key="release" plain hotkey="x" label="释放" onPress={() => actions.release(task.number)} />,
+            }
+          : {
+              text: 't: 接管',
+              button: (
+                <Button key="takeover" plain hotkey="t" label="接管" onPress={() => actions.askTakeOver(task.number)} />
+              ),
+            }
+  const rowAction = (row: Row) => ('group' in row ? taskAction(row.task, row.group) : undefined)
   const rowActions = (row: Row) => (
     <Box flexDirection="row">
-      {isExecutable(row) && (
+      {rowAction(row) !== undefined && (
         <Box flexDirection="row">
-          {executeButton(numberOf(row))}
+          {rowAction(row)!.button}
           <Text>{'  '}</Text>
         </Box>
       )}
@@ -426,7 +451,45 @@ export const drawPane = (
     </Box>
   )
   const actionsWidth = (row: Row) =>
-    2 + width('container' in row ? 'm: 地图  o: 详情' : isExecutable(row) ? 'e: 执行  o: 详情' : 'o: 详情')
+    2 + width('container' in row ? 'm: 地图  o: 详情' : `${rowAction(row) === undefined ? '' : `${rowAction(row)!.text}  `}o: 详情`)
+
+  // The Task another Session holds that the person is asked to take over,
+  // while it is still that Session's; and the asking, in the action bar's
+  // place: docked a box, above the prompt the title with the keys and a row
+  // saying what taking over does.
+  const takingOver =
+    nav.takeover === undefined
+      ? undefined
+      : list?.groups.inProgress.find(task => task.number === nav.takeover && task.occupant !== view.sessionId)
+  const takeOverConfirm = (task: Task) => {
+    const title = <Text color="warning">◐ #{task.number} 正由 Session {task.occupant!.slice(0, 8)} 执行</Text>
+    const note = <Text>接管会把 Occupancy 转给本 Session。</Text>
+    const keys = (
+      <Box flexDirection="row">
+        <Button key="takeover:confirm" plain hotkey="t" label="接管" onPress={() => actions.takeOver(task.number)} />
+        <Text>{'  '}</Text>
+        <Button key="takeover:cancel" plain hotkey="c" label="取消" onPress={actions.cancelTakeOver} />
+      </Box>
+    )
+
+    return isInline ? (
+      <Box flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between">
+          {title}
+          {keys}
+        </Box>
+        {note}
+      </Box>
+    ) : (
+      <Box borderStyle="single" borderColor="warning" flexDirection="column">
+        {title}
+        {note}
+        {keys}
+      </Box>
+    )
+  }
+  // The rows the asking takes beyond the action bar's one.
+  const takeOverRows = takingOver === undefined ? 0 : isInline ? 1 : 4
 
   // What the action bar says of a row before its actions: a Task's triage
   // label, or what is given in its place; a Spec's or Map's Child Tasks by
@@ -705,12 +768,12 @@ export const drawPane = (
     // the blank line under it; and under the reason of a failed read, which
     // is its rows, its title and its border.
     const failureRows = tasks.status === 'failed' ? reasonRows(tasks.failure).length + 3 : 0
-    const room = Math.max(3, props.scroll.bodyRows - 7 - failureRows)
+    const room = Math.max(3, props.scroll.bodyRows - 7 - failureRows - takeOverRows)
 
     return (
       <Box flexDirection="column">
         {head}
-        {actionBar(focused!)}
+        {takingOver === undefined ? actionBar(focused!) : takeOverConfirm(takingOver)}
         <Text> </Text>
         {paged(units, room, nav.page)}
       </Box>
@@ -799,6 +862,9 @@ export const drawPane = (
       )
     }
 
+    if (takingOver !== undefined) {
+      return takeOverConfirm(takingOver)
+    }
     const labelOf = (row: Row) =>
       'container' in row
         ? `${GLYPH[row.container.group]} ${row.container.kind === 'spec' ? 'Spec' : 'Map'} #${row.container.number} ${progressText(row.container)}`
@@ -1080,13 +1146,13 @@ export const drawPane = (
     // and the reason of a failed read.
     const failureRows =
       tasks.status === 'failed' ? (isInline ? 2 : reasonRows(tasks.failure).length + 3) : 0
-    const room = Math.max(3, props.scroll.bodyRows - (isInline ? 5 : 12) - failureRows)
+    const room = Math.max(3, props.scroll.bodyRows - (isInline ? 5 : 12) - failureRows - takeOverRows)
 
     return (
       <Box flexDirection="column">
         {failure}
         {card}
-        {bar}
+        {takingOver === undefined ? bar : takeOverConfirm(takingOver)}
         {paged(units, room, nav.mapPage ?? 0)}
       </Box>
     )
@@ -1206,8 +1272,13 @@ export const drawPane = (
       ]
     })()
 
-    // The Task's actions, as in the action bar: a ready Task is executed.
-    const canExecute = entry !== undefined && entry.kind === undefined && entry.group === 'ready'
+    // The Task's action, as in the action bar; asked to take it over, the
+    // asking under the way back.
+    // The way back keeps no t of its own beside the asking's.
+    const action =
+      entry === undefined || entry.kind !== undefined || takingOver?.number === number
+        ? undefined
+        : taskAction(entry.task, entry.group)
 
     return (
       <Box flexDirection="column">
@@ -1216,12 +1287,13 @@ export const drawPane = (
             <Button key="back" plain hotkey="b" label="返回" onPress={actions.back} />
             <Text>
               {'  '}
-              {cut(crumbs, columns - width('b: 返回  ') - (canExecute ? 2 + width('e: 执行') : 0))}
+              {cut(crumbs, columns - width('b: 返回  ') - (action === undefined ? 0 : 2 + width(action.text)))}
             </Text>
           </Box>
-          {canExecute && executeButton(number)}
+          {action?.button}
         </Box>
         <Text color="subtle">{'─'.repeat(columns)}</Text>
+        {takingOver?.number === number && takeOverConfirm(takingOver)}
         {body}
       </Box>
     )
@@ -1515,8 +1587,12 @@ export const drawPane = (
     )),
   ]
   const unreported = ['没有收到 deck_recommend 的回报。', '下面是这一回合的回答原文。']
-  // The screen's primary button once an open Task is recommended: execute it.
+  // The screen's primary button once an open Task is recommended: execute
+  // it, after taking it over when another Session holds it.
   const isRecommendedClosed = listed.some(task => task.number === recommendation?.task && !task.isOpen)
+  const isRecommendedOthers =
+    list?.groups.inProgress.some(task => task.number === recommendation?.task && task.occupant !== view.sessionId) === true
+  const recommendedTakeOver = takingOver !== undefined && takingOver.number === recommendation?.task ? takingOver : undefined
   const executeRecommended =
     recommendation?.task == null || isRecommendedClosed ? undefined : (
       <Box flexDirection="row">
@@ -1525,7 +1601,9 @@ export const drawPane = (
           variant="primary"
           hotkey="e"
           label="执行这个 Task"
-          onPress={() => actions.execute(recommendation.task!)}
+          onPress={() =>
+            isRecommendedOthers ? actions.askTakeOver(recommendation.task!) : actions.execute(recommendation.task!)
+          }
         />
         <Text color="inactive"> e</Text>
       </Box>
@@ -1558,7 +1636,7 @@ export const drawPane = (
         {ask.answer !== undefined && 'recommendation' in ask.answer ? (
           <Box borderStyle="single" borderColor="inactive" flexDirection="column">
             {recommendationRows(ask.answer.recommendation)}
-            {executeRecommended}
+            {recommendedTakeOver === undefined && executeRecommended}
           </Box>
         ) : (
           <Box flexDirection="column">
@@ -1570,7 +1648,7 @@ export const drawPane = (
             <Text> </Text>
           </Box>
         )}
-        {askButton}
+        {recommendedTakeOver === undefined ? askButton : takeOverConfirm(recommendedTakeOver)}
       </Box>
     )
   }
@@ -1588,9 +1666,10 @@ export const drawPane = (
                 {'  '}下一步 / {recommendation !== undefined ? 'Recommendation' : '回答原文'}
               </Text>
             </Box>
-            {executeRecommended}
+            {recommendedTakeOver === undefined && executeRecommended}
           </Box>
           <Text color="subtle">{'─'.repeat(columns)}</Text>
+          {recommendedTakeOver !== undefined && takeOverConfirm(recommendedTakeOver)}
           {ask.answer !== undefined && 'recommendation' in ask.answer ? (
             recommendationRows(ask.answer.recommendation)
           ) : (
@@ -1598,6 +1677,9 @@ export const drawPane = (
           )}
         </Box>
       )
+    }
+    if (recommendedTakeOver !== undefined) {
+      return takeOverConfirm(recommendedTakeOver)
     }
     const showAll = <Button key="answer" plain hotkey="o" label="全文" onPress={() => actions.showAnswer(true)} />
     const [actionRow, listRow] =

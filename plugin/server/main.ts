@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
-import { occupy, settleOccupancies } from '../kernel/occupancy.ts'
+import { occupy, release, settleOccupancies } from '../kernel/occupancy.ts'
 import { askArgs, readRecommendation, saveRecommendation, snapshotOf } from '../kernel/recommend.ts'
 import { surveySetup } from '../kernel/setup.ts'
 import { listSkills, readSkill, SkillSourceError } from '../kernel/skills.ts'
@@ -172,7 +172,7 @@ const tools = {
   },
   deck_occupy: {
     description:
-      'For the Pane: record that a Session executes a Task, as the prompt starting it is sent. A Task held by another Session stays with it; the answer names the Session holding it.',
+      'For the Pane: record that a Session executes a Task, as the prompt starting it is sent. A Task held by another Session stays with it unless takeOver moves it; the answer names the Session holding it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -182,23 +182,28 @@ const tools = {
           type: 'string',
           description: 'The repository a link to the Task named, as owner/name, when the Task was referred to by a link.',
         },
+        takeOver: {
+          type: 'boolean',
+          description: 'Move the Occupancy from the Session holding the Task to this one; only after the person confirmed.',
+        },
       },
       required: ['session', 'task'],
       additionalProperties: false,
     },
-    run: async ({ session, task, repository }: any): Promise<ToolResult> => {
+    run: async ({ session, task, repository, takeOver }: any): Promise<ToolResult> => {
       if (
         typeof session !== 'string' ||
         session === '' ||
         !Number.isInteger(task) ||
         task < 1 ||
-        (repository !== undefined && typeof repository !== 'string')
+        (repository !== undefined && typeof repository !== 'string') ||
+        (takeOver !== undefined && typeof takeOver !== 'boolean')
       ) {
         return {
           content: [
             {
               type: 'text',
-              text: 'deck_occupy takes the id of a Session, the number of a Task, and the repository a link to it named, if any',
+              text: 'deck_occupy takes the id of a Session, the number of a Task, the repository a link to it named, if any, and whether to take it over',
             },
           ],
           isError: true,
@@ -217,9 +222,37 @@ const tools = {
           const message = found === undefined ? `the Task Source has no Task #${task}` : `#${task} is closed`
           answer = { ok: false, failure: { kind: 'not-open', message } }
         } else {
-          const occupant = occupy(homedir(), source.identity, task, session, Date.now())
+          const occupant = occupy(homedir(), source.identity, task, session, Date.now(), takeOver === true)
           answer = { ok: true, occupied: occupant === session, occupant }
         }
+      } catch (error: any) {
+        if (!(error instanceof TaskSourceError)) {
+          throw error
+        }
+        answer = { ok: false, failure: { kind: error.kind, message: error.message } }
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
+    },
+  },
+  deck_release: {
+    description:
+      'For the Pane: release the Occupancy of a Task, whichever Session holds it, so that another Session can execute it.',
+    inputSchema: {
+      type: 'object',
+      properties: { task: { type: 'integer', minimum: 1, description: 'The Task\'s number.' } },
+      required: ['task'],
+      additionalProperties: false,
+    },
+    run: async ({ task }: any): Promise<ToolResult> => {
+      if (!Number.isInteger(task) || task < 1) {
+        return { content: [{ type: 'text', text: 'deck_release takes the number of a Task, a whole number from 1' }], isError: true }
+      }
+      let answer: object
+      try {
+        // The Task Source's identity only: a read from the cache names it.
+        const { source } = await readSource(false)
+        answer = { ok: true, released: release(homedir(), source.identity, task) }
       } catch (error: any) {
         if (!(error instanceof TaskSourceError)) {
           throw error

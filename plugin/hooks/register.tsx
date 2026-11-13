@@ -10,6 +10,7 @@ import type {
   DeckConfigAnswer,
   DeckOccupyAnswer,
   DeckRecommendationAnswer,
+  DeckReleaseAnswer,
   DeckSkillAnswer,
   DeckSkillsAnswer,
   DeckTaskAnswer,
@@ -231,6 +232,66 @@ const implementCall = async ($: EngineInterface) => {
   const { skills } = await read($, view)
 
   return skills.status === 'loaded' ? skills.skills.find(skill => skill.name === IMPLEMENT)?.call : undefined
+}
+
+// Puts the Execute Prompt of the Task `number` in the prompt box: the Skill
+// Source's /implement on the Task, and the ask to report the result and its
+// Acceptance Evidence through deck_report.
+const executeTask = async ($: EngineInterface, number: number, surface: RenderSurface) => {
+  const call = await implementCall($)
+  if (call === undefined) {
+    $.ui.toast(`Skill Source 里没有 ${IMPLEMENT} 技能，不能预填执行 #${number}。`)
+    return
+  }
+  const text =
+    `${call} #${number}\n\n` +
+    `When you finish, call the tool deck_report for Task #${number}: what you did, ` +
+    'and the Acceptance Evidence for each acceptance criterion with where it comes from.'
+  await prefill($, text, surface)
+}
+
+// Takes the Task `number` over from the Session holding it, as the person
+// confirmed, and puts its Execute Prompt in the prompt box.
+const takeOverTask = async ($: EngineInterface, number: number, surface: RenderSurface) => {
+  const deck = await $.mcp.connect('deck')
+  let answer: DeckOccupyAnswer
+  if (!deck.isConnected) {
+    answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
+  } else {
+    const result = await $.mcp.call(deck.server, 'deck_occupy', {
+      session: (await read($, view)).sessionId,
+      task: number,
+      takeOver: true,
+    })
+    answer = result.isError
+      ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
+      : JSON.parse(result.content[0]!.text!)
+  }
+  if (answer.ok) {
+    await executeTask($, number, surface)
+  } else {
+    $.ui.toast(`#${number} 没有接管：${answer.failure.message}`)
+  }
+  await loadTasks($, false)
+}
+
+// Releases the Occupancy of the Task `number`, so that another Session can
+// take it.
+const releaseTask = async ($: EngineInterface, number: number) => {
+  const deck = await $.mcp.connect('deck')
+  let answer: DeckReleaseAnswer
+  if (!deck.isConnected) {
+    answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
+  } else {
+    const result = await $.mcp.call(deck.server, 'deck_release', { task: number })
+    answer = result.isError
+      ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
+      : JSON.parse(result.content[0]!.text!)
+  }
+  if (!answer.ok) {
+    $.ui.toast(`#${number} 的 Occupancy 没有释放：${answer.failure.message}`)
+  }
+  await loadTasks($, false)
 }
 
 // Records this Session's Occupancy of the Task `number`, as a prompt
@@ -506,6 +567,12 @@ export const register: Register = on => {
       }
       await moveFocus(focus)
     }
+    // Back onto the row of the tasks tab's or the Map View's list the focus
+    // was on; in a detail onto the way back, and on the Recommendation onto
+    // executing it.
+    const backToRow = async (at: Nav) => {
+      await moveFocus(at.detail?.from === at.tab ? 'back' : at.tab === 'next' ? 'execute' : at.focus)
+    }
     const showTab = async (tab: Tab) => {
       const before = await read($, nav)
       // A tab left from a detail, or from the list to switch the Map View,
@@ -518,6 +585,7 @@ export const register: Register = on => {
         switching: false,
         mapPage: 0,
         isAnswerShown: false,
+        takeover: undefined,
       }))
       // Above the prompt the map tab is as tall as a detail.
       const wasTall =
@@ -574,7 +642,7 @@ export const register: Register = on => {
           const after = await update($, nav, current => {
             const path = current.detail?.path.slice(0, -1) ?? []
 
-            return { ...current, detail: path.length === 0 ? undefined : { from: current.detail!.from, path } }
+            return { ...current, takeover: undefined, detail: path.length === 0 ? undefined : { from: current.detail!.from, path } }
           })
           if (after.detail === undefined) {
             await toList(after.tab, after.focus)
@@ -595,21 +663,25 @@ export const register: Register = on => {
           await toList('skills', after.focus)
         })(),
       prefill: text => void prefill($, text, e.surface),
-      execute: number =>
+      execute: number => void executeTask($, number, e.surface),
+      // Asking to take over, the focus goes onto cancelling, so that enter
+      // does not take it over; once it is answered, back onto the list's row.
+      askTakeOver: number =>
         void (async () => {
-          const call = await implementCall($)
-          if (call === undefined) {
-            $.ui.toast(`Skill Source 里没有 ${IMPLEMENT} 技能，不能预填执行 #${number}。`)
-            return
-          }
-          // The Execute Prompt: /implement on the Task, and the ask to report
-          // the result and its Acceptance Evidence through deck_report.
-          const text =
-            `${call} #${number}\n\n` +
-            `When you finish, call the tool deck_report for Task #${number}: what you did, ` +
-            'and the Acceptance Evidence for each acceptance criterion with where it comes from.'
-          await prefill($, text, e.surface)
+          await update($, nav, current => ({ ...current, takeover: number }))
+          await moveFocus('takeover:cancel')
         })(),
+      takeOver: number =>
+        void (async () => {
+          const after = await update($, nav, current => ({ ...current, takeover: undefined }))
+          await takeOverTask($, number, e.surface)
+          await backToRow(after)
+        })(),
+      cancelTakeOver: () =>
+        void (async () => {
+          await backToRow(await update($, nav, current => ({ ...current, takeover: undefined })))
+        })(),
+      release: number => void releaseTask($, number),
       cycleFilter: () =>
         void update($, nav, current => ({
           ...current,

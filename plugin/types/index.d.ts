@@ -78,6 +78,9 @@ export type DeckOccupyAnswer =
   | { ok: true; occupied: boolean; occupant: string }
   | { ok: false; failure: { kind: TaskFailure['kind'] | 'not-open'; message: string } }
 
+// What `deck_release` answers: whether the Task had an Occupancy to release.
+export type DeckReleaseAnswer = { ok: true; released: boolean } | { ok: false; failure: TaskFailure }
+
 // A skill of the Skill Source as `deck_skills` lists it: `call` is how this
 // Session invokes it, `path` its file.
 export type Skill = { name: string; call: string; description: string; path: string }
@@ -191,8 +194,10 @@ export type Filter = 'all' | Group
 // tab shows, `switching` whether it lists them to switch, `mapPage` the page
 // of what it shows. `skill` is the skill the skills tab drilled into, and
 // `skillsPage` that tab's page. `isAnswerShown`: above the prompt, the
-// next tab shows the whole answer of the request.
+// next tab shows the whole answer of the request. `takeover` is the Task
+// another Session holds that the person is asked to confirm taking over.
 export type Nav = {
+  takeover?: number
   isAnswerShown?: boolean
   tab: Tab
   filter: Filter

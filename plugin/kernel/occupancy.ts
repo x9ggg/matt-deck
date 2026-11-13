@@ -5,14 +5,31 @@
 import { openState } from './state.ts'
 
 // Records `session`'s Occupancy of the Task `task`, unless another Session
-// holds one; answers the Session that holds it now.
-export const occupy = (home: string, source: string, task: number, session: string, now: number) => {
+// holds one and `takeOver` does not move it to `session`; answers the
+// Session that holds it now.
+export const occupy = (home: string, source: string, task: number, session: string, now: number, takeOver: boolean) => {
   const db = openState(home)
   try {
-    db.prepare('INSERT OR IGNORE INTO occupancies VALUES (?, ?, ?, ?)').run(source, task, session, now)
+    db.prepare(`INSERT OR ${takeOver ? 'REPLACE' : 'IGNORE'} INTO occupancies VALUES (?, ?, ?, ?)`).run(
+      source,
+      task,
+      session,
+      now,
+    )
     const row = db.prepare('SELECT session FROM occupancies WHERE source = ? AND task = ?').get(source, task)
 
     return row!.session as string
+  } finally {
+    db.close()
+  }
+}
+
+// Releases the Occupancy of the Task `task`, whichever Session holds it;
+// answers whether there was one.
+export const release = (home: string, source: string, task: number) => {
+  const db = openState(home)
+  try {
+    return db.prepare('DELETE FROM occupancies WHERE source = ? AND task = ?').run(source, task).changes > 0
   } finally {
     db.close()
   }

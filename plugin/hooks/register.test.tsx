@@ -225,6 +225,7 @@ const engine = (
     ask = asked,
     recommendation = () => ({ isError: false, structuredContent: { found: false } }),
     occupy = session => ({ isError: false, structuredContent: { ok: true, occupied: true, occupant: session } }),
+    release = () => ({ isError: false, structuredContent: { ok: true, released: true } }),
     isDropped = () => false,
   }: {
     config: Answer | undefined
@@ -245,6 +246,8 @@ const engine = (
     recommendation?: (requestId: string) => Answer
     // What `deck_occupy` answers for a Session and a Task.
     occupy?: (session: string, task: number) => Answer
+    // What `deck_release` answers for a Task.
+    release?: (task: number) => Answer
     // Whether a hook beneath stops a prompt sent with `text`.
     isDropped?: (text: string) => boolean
   },
@@ -293,7 +296,9 @@ const engine = (
                   ? recommendation(e.args!.requestId as string)
                   : e.tool === 'deck_occupy'
                     ? occupy(e.args!.session as string, e.args!.task as number)
-                    : config!
+                    : e.tool === 'deck_release'
+                      ? release(e.args!.task as number)
+                      : config!
 
     return {
       value: {
@@ -2112,6 +2117,230 @@ test('an occupied Task is in progress, with the Session occupying it, and the to
   await focus($, 'task:17')
   expect((await texts(inline)).join('')).toMatch(/◐ #17 从本仓库安装 +3f9c21d0/)
   await inline.unmount()
+})
+
+test('on a Task in progress the action bar and the detail release this Session\'s, and take over another\'s', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => OCCUPIED })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  const actions = async () => (await ui.findAll({ type: 'Button' })).map(button => button.key)
+
+  await focus($, 'task:16')
+  expect((await ui.find({ key: 'release' }))?.text).toBe('释放')
+  expect(await ui.find({ key: 'takeover' })).toBeUndefined()
+  await focus($, 'task:17')
+  expect((await ui.find({ key: 'takeover' }))?.text).toBe('接管')
+  expect(await ui.find({ key: 'release' })).toBeUndefined()
+  // The detail's way back has the same.
+  await ui.press({ key: 'task:17' })
+  await seen.clock.settle()
+  expect(await actions()).toEqual(expect.arrayContaining(['back', 'takeover']))
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'task:16' })
+  await seen.clock.settle()
+  expect(await actions()).toEqual(expect.arrayContaining(['back', 'release']))
+  await ui.unmount()
+
+  const inline = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  await inline.press({ key: 'back' })
+  await focus($, 'task:17')
+  expect((await inline.find({ key: 'takeover' }))?.text).toBe('接管')
+  await inline.unmount()
+})
+
+test('x releases this Session\'s Occupancy, and the Tasks are read again to show it', async ($, on) => {
+  let list = OCCUPIED
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => list })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await focus($, 'task:16')
+  list = tasks({
+    ready: [task(3, 'Pane 布局设计'), task(16, '命令行')],
+    inProgress: [task(17, '从本仓库安装', { occupant: '3f9c21d0-other' })],
+  })
+  await ui.press({ key: 'release' })
+  await seen.clock.settle()
+
+  expect(seen.calls.filter(call => call.tool === 'deck_release').map(call => call.args)).toEqual([{ task: 16 }])
+  expect(seen.calls.at(-1)?.tool).toBe('deck_tasks')
+  expect((await ui.find({ key: 'task:16' }))?.text).toMatch(/^◇ #16 命令行 +可执行$/)
+  expect((await texts(ui)).join('')).toContain('本 Session 没有在执行 Task')
+  await ui.unmount()
+})
+
+test('a release the Deck service refuses says why', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => OCCUPIED,
+    release: () => ({ isError: false, structuredContent: { ok: false, failure: { kind: 'offline', message: '连不上 GitHub' } } }),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await focus($, 'task:16')
+  await ui.press({ key: 'release' })
+  await seen.clock.settle()
+
+  expect(seen.toasts).toEqual(['#16 的 Occupancy 没有释放：连不上 GitHub'])
+  await ui.unmount()
+})
+
+// What the take-over confirmation of #17 says, docked.
+const TAKEOVER_LINES = ['◐ #17 正由 Session 3f9c21d0 执行', '接管会把 Occupancy 转给本 Session。']
+
+test('t on another Session\'s Task asks to confirm; c leaves everything as it was', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => OCCUPIED,
+    skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await focus($, 'task:17')
+  await ui.press({ key: 'takeover' })
+  await seen.clock.settle()
+
+  // In the action bar's place, the list under it as it was.
+  const lines = await texts(ui)
+  expect(lines.join('\n')).toContain(TAKEOVER_LINES[0])
+  expect(lines).toContain(TAKEOVER_LINES[1])
+  expect((await ui.find({ key: 'takeover:confirm' }))?.text).toBe('接管')
+  expect((await ui.find({ key: 'takeover:cancel' }))?.text).toBe('取消')
+  expect(await ui.find({ key: 'open' })).toBeUndefined()
+  expect((await ui.find({ key: 'task:17' }))?.text).toMatch(/^◐ #17 从本仓库安装 +3f9c21d0$/)
+
+  await ui.press({ key: 'takeover:cancel' })
+  await seen.clock.settle()
+  // From the detail: the asking under the way back, with no second t beside it.
+  await ui.press({ key: 'task:17' })
+  await seen.clock.settle()
+  await ui.press({ key: 'takeover' })
+  expect((await texts(ui)).join('\n')).toContain(TAKEOVER_LINES[0])
+  expect(await ui.find({ key: 'takeover' })).toBeUndefined()
+  expect(await ui.find({ key: 'takeover:confirm' })).toBeDefined()
+  // Going back gives the asking up.
+  await ui.press({ key: 'back' })
+  await seen.clock.settle()
+  expect((await texts(ui)).join('\n')).not.toContain(TAKEOVER_LINES[0])
+  await seen.clock.settle()
+
+  expect((await texts(ui)).join('\n')).not.toContain(TAKEOVER_LINES[0])
+  expect((await ui.find({ key: 'takeover' }))?.text).toBe('接管')
+  expect(seen.calls.filter(call => call.tool === 'deck_occupy')).toEqual([])
+  expect(seen.filled).toEqual([])
+  await ui.unmount()
+})
+
+test('a confirmed take-over moves the Occupancy to this Session, then puts the Execute Prompt in the prompt box', async ($, on) => {
+  let list = OCCUPIED
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => list,
+    skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await focus($, 'task:17')
+  await ui.press({ key: 'takeover' })
+  list = tasks({
+    inProgress: [
+      task(16, '命令行', { occupant: 'a1b2c3d4-session' }),
+      task(17, '从本仓库安装', { occupant: 'a1b2c3d4-session' }),
+    ],
+  })
+  await ui.press({ key: 'takeover:confirm' })
+  await seen.clock.settle()
+
+  expect(seen.calls.filter(call => call.tool === 'deck_occupy').map(call => call.args)).toEqual([
+    { session: 'a1b2c3d4-session', task: 17, takeOver: true },
+  ])
+  expect(seen.filled.map(fill => fill.text)).toEqual([executePrompt('/mattpocock-skills:implement', 17)])
+  expect((await texts(ui)).join('\n')).not.toContain(TAKEOVER_LINES[0])
+  expect((await ui.find({ key: 'task:17' }))?.text).toMatch(/^▶ #17 从本仓库安装 +本 Session$/)
+  await ui.unmount()
+})
+
+test('a take-over the Deck service refuses says why and fills nothing', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => OCCUPIED,
+    skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
+    occupy: () => ({ isError: false, structuredContent: { ok: false, failure: { kind: 'not-open', message: '#17 is closed' } } }),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await focus($, 'task:17')
+  await ui.press({ key: 'takeover' })
+  await ui.press({ key: 'takeover:confirm' })
+  await seen.clock.settle()
+
+  expect(seen.toasts).toEqual(['#17 没有接管：#17 is closed'])
+  expect(seen.filled).toEqual([])
+  await ui.unmount()
+})
+
+test('above the prompt the take-over confirmation is the third row with its keys and the fourth saying what it does', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => OCCUPIED })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+
+  await focus($, 'task:17')
+  await ui.press({ key: 'takeover' })
+  await seen.clock.settle()
+
+  const lines = await texts(ui)
+  expect(lines.join('\n')).toContain(TAKEOVER_LINES[0])
+  expect(lines).toContain(TAKEOVER_LINES[1])
+  expect(await ui.find({ key: 'takeover:confirm' })).toBeDefined()
+  // Two rows, not a box.
+  expect((await ui.findAll({ type: 'Box' })).filter(box => box.props.borderStyle !== undefined)).toEqual([])
+  await ui.unmount()
+})
+
+test('e on the Recommendation of another Session\'s Task asks to take it over first, from the next tab', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: DIRECTORY, isError: false },
+    tasks: () => OCCUPIED,
+    recommendation: () => ({
+      isError: false,
+      structuredContent: {
+        found: true,
+        recommendation: { ...(RECOMMENDED.structuredContent as { recommendation: object }).recommendation, task: 17 },
+      },
+    }),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+  await ui.press({ key: 'ask' })
+  await turnStart($, 't1', 'Matt Deck Recommendation Request request-1. 快照 1')
+  await turnEnd($, 't1')
+  await seen.clock.settle()
+
+  await ui.press({ key: 'execute' })
+  await seen.clock.settle()
+  expect(seen.filled).toEqual([])
+  expect((await texts(ui)).join('\n')).toContain(TAKEOVER_LINES[0])
+
+  await ui.press({ key: 'takeover:confirm' })
+  await seen.clock.settle()
+  expect(seen.calls.filter(call => call.tool === 'deck_occupy').map(call => call.args)).toEqual([
+    { session: 'a1b2c3d4-session', task: 17, takeOver: true },
+  ])
+  expect(seen.filled.map(fill => fill.text)).toEqual([executePrompt('/implement', 17)])
+  await ui.unmount()
 })
 
 test('a closed Task recommended has nothing to execute', async ($, on) => {
