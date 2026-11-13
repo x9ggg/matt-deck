@@ -42,6 +42,10 @@ for (let dir = workspace; ; dir = dirname(dir)) {
 const TASKS_CACHE_MS = 15_000
 let cachedRead: { source: SourceRead; fetchedAt: number } | undefined
 
+// The Task Source's identity as the last read named it. It outlives the
+// cache: a report is kept by it while the Task Source cannot be read.
+let knownIdentity: string | undefined
+
 // The Task Source as read last, or read now when `refresh` asks for it or
 // the cache is too old. Throws a TaskSourceError.
 const readSource = async (refresh: boolean) => {
@@ -49,6 +53,7 @@ const readSource = async (refresh: boolean) => {
   if (refresh || cachedRead === undefined || now - cachedRead.fetchedAt >= TASKS_CACHE_MS) {
     cachedRead = undefined
     cachedRead = { source: await githubIssues(workspace).read(), fetchedAt: now }
+    knownIdentity = cachedRead.source.identity
   }
 
   return cachedRead
@@ -406,9 +411,10 @@ const tools = {
       }
       let answer: object
       try {
-        // The Task Source's identity only: a read from the cache names it.
-        const { source } = await readSource(false)
-        saveReport(homedir(), source.identity, task, { session, reportedAt: Date.now(), result, evidence })
+        // The Task Source's identity only: the last read named it, and no
+        // read is needed again; a first read names it otherwise.
+        const identity = knownIdentity ?? (await readSource(false)).source.identity
+        saveReport(homedir(), identity, task, { session, reportedAt: Date.now(), result, evidence })
         answer = { ok: true }
       } catch (error: any) {
         if (!(error instanceof TaskSourceError)) {

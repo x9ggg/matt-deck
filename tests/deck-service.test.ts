@@ -1715,6 +1715,26 @@ test('deck_report keeps each report of a Task with its Session and time, which e
   assert.equal(groups.done[0].hasEvidence, false)
 })
 
+test('deck_report keeps a report while the Task Source cannot be read, once a read has named it', async t => {
+  const gh = await fakeGh()
+  const clock = await fakeClock(Date.UTC(2026, 10, 11, 14, 2))
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await configured(), { ...gh.env, ...clock.env })
+  t.after(deck.stop)
+  await deck.callTool('deck_tasks')
+  // Past the cache, and GitHub out of reach.
+  await clock.set(Date.UTC(2026, 10, 11, 14, 3))
+  await gh.answer({ exitCode: 1, stderr: 'error connecting to api.github.com\n' })
+
+  const reported = await deck.callTool('deck_report', { session: 'session-a', task: 3, result: '做完了。', evidence: EVIDENCE })
+
+  assert.deepEqual(reported.structuredContent, { ok: true })
+  await gh.answer({ stdout: viewed({ number: 3 }) })
+  assert.deepEqual((await deck.callTool('deck_task', { number: 3 })).structuredContent.reports, [
+    { session: 'session-a', reportedAt: Date.UTC(2026, 10, 11, 14, 3), result: '做完了。', evidence: EVIDENCE },
+  ])
+})
+
 test('deck_report takes a Task, a result, Acceptance Evidence each with where it comes from, and the Session', async t => {
   const gh = await fakeGh()
   await gh.issues([issue({ number: 3 })])

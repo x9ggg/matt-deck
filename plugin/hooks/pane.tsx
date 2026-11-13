@@ -172,10 +172,10 @@ const STAGE_NOTE: Partial<Record<RequestStatus, string>> = {
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
-// A closing time as the list writes it, in the local time zone: `11-11 14:07`;
-// a report's time the same.
-const closedTime = (closedAt: string | number) => {
-  const date = new Date(closedAt)
+// A time as the Pane writes it, in the local time zone: `11-11 14:07`. A
+// Task's closing time, and a report's.
+const shortTime = (at: string | number) => {
+  const date = new Date(at)
 
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
@@ -192,7 +192,7 @@ const statusOf = (task: Task, group: Group, session: string) => {
         ? `被 ${task.blockers.map(number => `#${number}`).join(' ')} 阻塞`
         : (task.labels.find(label => label === 'needs-triage' || label === 'needs-info') ?? '')
     case 'done':
-      return task.closedAt === null ? '已解锁' : closedTime(task.closedAt)
+      return task.closedAt === null ? '已解锁' : shortTime(task.closedAt)
     case 'inProgress':
       return task.isOrphaned ? 'Orphaned' : task.occupant === session ? '本 Session' : task.occupant!.slice(0, 8)
   }
@@ -1254,7 +1254,7 @@ export const drawPane = (
       const time =
         task.closedAt === null
           ? `更新 ${pad(updated.getMonth() + 1)}-${pad(updated.getDate())}`
-          : closedTime(task.closedAt)
+          : shortTime(task.closedAt)
       const meta = [...(label === undefined ? [] : [label]), task.assignees.join(', ') || '未指派', time].join(' · ')
       const parent = entry?.task.parent == null ? undefined : list?.containers.find(c => c.number === entry.task.parent)
       const blockers = (entry?.task.blockers ?? []).flatMap(blocker => {
@@ -1334,7 +1334,7 @@ export const drawPane = (
               ...(index === 0 ? [] : [<Text> </Text>]),
               <Box flexDirection="row" justifyContent="space-between">
                 <Text>Session {report.session.slice(0, 8)}</Text>
-                <Text>{closedTime(report.reportedAt)}</Text>
+                <Text>{shortTime(report.reportedAt)}</Text>
               </Box>,
               <Text>{report.result}</Text>,
               ...report.evidence.map(evidence => (
