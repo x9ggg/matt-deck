@@ -1335,6 +1335,48 @@ test('a closed Task\'s Occupancy is released', async t => {
   assert.deepEqual(taken.structuredContent, { ok: true, occupied: true, occupant: 'session-b' })
 })
 
+test('a read older than an Occupancy does not release it', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const early = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(early.stop)
+  const late = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(late.stop)
+  // One Deck service reads before the Task is there, and keeps that read in
+  // its cache.
+  await early.callTool('deck_tasks')
+
+  await gh.issues([issue({ number: 3 }), issue({ number: 4 })])
+  await late.callTool('deck_occupy', { session: 'session-b', task: 4 })
+  await early.callTool('deck_tasks')
+  const { groups } = (await late.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(occupants(groups.inProgress), { 4: 'session-b' })
+})
+
+test('deck_occupy occupies a Task a link refers to only in the Task Source\'s repository', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 })], 'acme/shop')
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(deck.stop)
+
+  const other = await deck.callTool('deck_occupy', { session: 'session-a', task: 5, repository: 'acme/other' })
+  // GitHub takes a repository's owner and name in any case.
+  const same = await deck.callTool('deck_occupy', { session: 'session-a', task: 3, repository: 'Acme/Shop' })
+  const malformed = await deck.callTool('deck_occupy', { session: 'session-a', task: 3, repository: 7 })
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(other.structuredContent, {
+    ok: false,
+    failure: { kind: 'not-open', message: '#5 of acme/other is not a Task of the Task Source, acme/shop' },
+  })
+  assert.deepEqual(same.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
+  assert.equal(malformed.isError, true)
+  assert.deepEqual(occupants(groups.inProgress), { 3: 'session-a' })
+})
+
 test('an Occupancy belongs to its repository: another repository\'s Task of the same number is not occupied', async t => {
   const user = await home()
   const gh = await fakeGh()

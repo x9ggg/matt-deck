@@ -47,8 +47,8 @@ const FILTERS: Filter[] = ['all', 'ready', 'inProgress', 'blocked', 'done']
 const IMPLEMENT = 'implement'
 
 // A Task reference as the first word of /implement's arguments: `#12`, `12`,
-// or a link ending in `/issues/12`.
-const TASK_REFERENCE = /^(?:#?(\d+)|\S*\/issues\/(\d+))$/
+// or a link ending in `owner/name/issues/12`, which names its repository.
+const TASK_REFERENCE = /^(?:#?(\d+)|\S*?([^/\s]+\/[^/\s]+)\/issues\/(\d+))$/
 
 const view = atom(
   { plugin: 'matt-deck', key: 'view' } as const,
@@ -234,15 +234,21 @@ const implementCall = async ($: EngineInterface) => {
 }
 
 // Records this Session's Occupancy of the Task `number`, as a prompt
-// executing it is sent, and shows it. A Task another Session holds stays
-// with it: the person is told.
-const occupyTask = async ($: EngineInterface, number: number) => {
+// executing it is sent, and shows it. `repository` is the one a link to the
+// Task named: the Deck service occupies nothing in a repository that is not
+// the Task Source's. A Task another Session holds stays with it: the person
+// is told.
+const occupyTask = async ($: EngineInterface, number: number, repository: string | undefined) => {
   const deck = await $.mcp.connect('deck')
   let answer: DeckOccupyAnswer
   if (!deck.isConnected) {
     answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
   } else {
-    const result = await $.mcp.call(deck.server, 'deck_occupy', { session: (await read($, view)).sessionId, task: number })
+    const result = await $.mcp.call(deck.server, 'deck_occupy', {
+      session: (await read($, view)).sessionId,
+      task: number,
+      repository,
+    })
     answer = result.isError
       ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
       : JSON.parse(result.content[0]!.text!)
@@ -422,8 +428,8 @@ export const register: Register = on => {
     }
     const reference = (e.command.args.trim().split(/\s+/)[0] ?? '').match(TASK_REFERENCE)
     if (reference !== null && (await implementCall($)) === `/${e.command.name}`) {
-      const number = Number(reference[1] ?? reference[2])
-      $.clock.after(0, () => void occupyTask($, number))
+      const number = Number(reference[1] ?? reference[3])
+      $.clock.after(0, () => void occupyTask($, number, reference[2]))
     }
 
     return entered

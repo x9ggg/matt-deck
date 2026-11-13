@@ -54,7 +54,7 @@ const readSource = async (refresh: boolean) => {
 }
 
 // The Tasks of a read, with the Occupancies of its open Tasks; those of the
-// others are released.
+// others are released, unless they were recorded after the read began.
 const tasksOf = ({ source, fetchedAt }: { source: SourceRead; fetchedAt: number }) =>
   listTasks(
     source,
@@ -63,6 +63,7 @@ const tasksOf = ({ source, fetchedAt }: { source: SourceRead; fetchedAt: number 
       homedir(),
       source.identity,
       source.tasks.filter(task => task.isOpen).map(task => task.number),
+      fetchedAt,
     ),
   )
 
@@ -177,14 +178,29 @@ const tools = {
       properties: {
         session: { type: 'string', minLength: 1, description: 'The id of the Session executing the Task.' },
         task: { type: 'integer', minimum: 1, description: 'The Task\'s number.' },
+        repository: {
+          type: 'string',
+          description: 'The repository a link to the Task named, as owner/name, when the Task was referred to by a link.',
+        },
       },
       required: ['session', 'task'],
       additionalProperties: false,
     },
-    run: async ({ session, task }: any): Promise<ToolResult> => {
-      if (typeof session !== 'string' || session === '' || !Number.isInteger(task) || task < 1) {
+    run: async ({ session, task, repository }: any): Promise<ToolResult> => {
+      if (
+        typeof session !== 'string' ||
+        session === '' ||
+        !Number.isInteger(task) ||
+        task < 1 ||
+        (repository !== undefined && typeof repository !== 'string')
+      ) {
         return {
-          content: [{ type: 'text', text: 'deck_occupy takes the id of a Session and the number of a Task' }],
+          content: [
+            {
+              type: 'text',
+              text: 'deck_occupy takes the id of a Session, the number of a Task, and the repository a link to it named, if any',
+            },
+          ],
           isError: true,
         }
       }
@@ -193,7 +209,11 @@ const tools = {
         // Read now, past the cache: a Task closed a moment ago is not occupied.
         const { source } = await readSource(true)
         const found = source.tasks.find(each => each.number === task)
-        if (found === undefined || !found.isOpen) {
+        // GitHub takes a repository's owner and name in any case.
+        if (repository !== undefined && repository.toLowerCase() !== source.identity.toLowerCase()) {
+          const message = `#${task} of ${repository} is not a Task of the Task Source, ${source.identity}`
+          answer = { ok: false, failure: { kind: 'not-open', message } }
+        } else if (found === undefined || !found.isOpen) {
           const message = found === undefined ? `the Task Source has no Task #${task}` : `#${task} is closed`
           answer = { ok: false, failure: { kind: 'not-open', message } }
         } else {

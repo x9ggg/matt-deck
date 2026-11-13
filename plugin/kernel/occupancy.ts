@@ -18,20 +18,23 @@ export const occupy = (home: string, source: string, task: number, session: stri
   }
 }
 
-// The Occupancies of the Task Source's open Tasks, by Task number. Those of
-// every other Task are released: a Task closed, or no longer in the source.
-export const settleOccupancies = (home: string, source: string, open: number[]) => {
+// The Occupancies of the Task Source's open Tasks, `open`, by Task number,
+// as a read begun at `readAt` found them. Those of every other Task are
+// released: a Task closed, or no longer in the source. One recorded after the
+// read began stays: it was recorded on a later read, which found its Task
+// open.
+export const settleOccupancies = (home: string, source: string, open: number[], readAt: number) => {
   const db = openState(home)
   try {
     const rows = db.prepare('SELECT task, session FROM occupancies WHERE source = ?').all(source)
     const held = new Map<number, string>()
-    const release = db.prepare('DELETE FROM occupancies WHERE source = ? AND task = ?')
+    const release = db.prepare('DELETE FROM occupancies WHERE source = ? AND task = ? AND occupied_at <= ?')
     for (const row of rows) {
       const task = row.task as number
       if (open.includes(task)) {
         held.set(task, row.session as string)
       } else {
-        release.run(source, task)
+        release.run(source, task, readAt)
       }
     }
 

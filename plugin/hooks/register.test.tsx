@@ -2035,7 +2035,13 @@ test('a sent /implement with a Task reference occupies the Task for this Session
     await submit($, `/mattpocock-skills:implement ${args}`, { name: 'mattpocock-skills:implement', args })
   }
   await seen.clock.settle()
-  expect(occupies().slice(1)).toEqual(Array(3).fill({ session: 'a1b2c3d4-session', task: 7 }))
+  // A link says which repository it is in: the Deck service checks it is the
+  // Task Source's.
+  expect(occupies().slice(1)).toEqual([
+    { session: 'a1b2c3d4-session', task: 7 },
+    { session: 'a1b2c3d4-session', task: 7 },
+    { session: 'a1b2c3d4-session', task: 7, repository: 'acme/shop' },
+  ])
 })
 
 test('nothing is occupied by a prompt that is not /implement on a Task, or that was not sent', async ($, on) => {
