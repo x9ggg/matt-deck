@@ -2783,6 +2783,27 @@ test('a /clear while the pane is closed reads the project config and the Tasks a
   expect(seen.calls.at(-1)).toEqual({ server: SERVER, tool: 'deck_tasks', args: { refresh: true } })
 })
 
+test('a /implement sent first after a /clear while the pane is closed occupies the Task for the new Session', async ($, on) => {
+  const state = clearableState(on)
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT })
+  await start($)
+  await seen.clock.settle()
+  await $.command.run(DECK_COMMAND)
+
+  // The state starts over after the end's own check, and no Pane is drawn.
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  await seen.clock.settle()
+  state.clear()
+  seen.sessionId = '2c9f224f-cleared'
+
+  // The prompt is sent before its turn starts.
+  await submit($, '/mattpocock-skills:implement #3', { name: 'mattpocock-skills:implement', args: '#3' })
+  await turnStart($, 't1', '/mattpocock-skills:implement #3')
+  await seen.clock.settle()
+
+  expect(callsOf(seen, 'deck_occupy')).toEqual([{ session: '2c9f224f-cleared', task: 3 }])
+})
+
 test('after a /clear without a project config the deck command still answers in text', async ($, on) => {
   const state = clearableState(on)
   const seen = engine(on, { config: { structuredContent: { configured: false, workspace: WORKSPACE }, isError: false } })

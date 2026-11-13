@@ -561,16 +561,35 @@ export const register: Register = on => {
 
   // A prompt sent that runs /implement on a Task starts executing it: the
   // Execute Prompt, or the same typed by hand. The Occupancy is recorded
-  // once the prompt has entered, never for one stopped on the way.
+  // once the prompt has entered, never for one stopped on the way. The
+  // first prompt after a /clear is sent before its turn starts, so the state
+  // may still be the one started over: the project config and the skills
+  // are read for the Session running before /implement is looked up.
   on('prompt.submit', async ($, e, next) => {
     const entered = await next(e)
     if (entered.drop !== undefined || e.command === undefined) {
       return entered
     }
     const reference = (e.command.args.trim().split(/\s+/)[0] ?? '').match(TASK_REFERENCE)
-    if (reference !== null && (await implementCall($)) === `/${e.command.name}`) {
-      const number = Number(reference[1] ?? reference[3])
-      $.clock.after(0, () => void occupyTask($, number, reference[2]))
+    if (reference !== null) {
+      const sent = `/${e.command.name}`
+      $.clock.after(
+        0,
+        () =>
+          void (async () => {
+            const sessionId = await $.session.id()
+            if ((await read($, view)).sessionId !== sessionId) {
+              await readSession($, sessionId)
+            }
+            const { config, skills } = await read($, view)
+            if (config.status === 'configured' && skills.status === 'loading') {
+              await loadSkills($)
+            }
+            if ((await implementCall($)) === sent) {
+              await occupyTask($, Number(reference[1] ?? reference[3]), reference[2])
+            }
+          })(),
+      )
     }
 
     return entered
