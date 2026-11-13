@@ -209,6 +209,9 @@ const turnStart = ($: Engine, turnId: string, text = '你好') => $.turn.start({
 const turnEnd = ($: Engine, turnId: string, answer = '') =>
   $.turn.complete({ answer, durationMs: 1, isAborted: false, turnId, reason: 'answer' })
 
+// The clock of the fake engine the current test made.
+let clock: MockClock
+
 // A fake engine: the Deck service answering `deck_config` with `config`, or
 // out of reach when there is none, and `deck_tasks` with what `tasks` gives
 // at each call; a clock that moves only when the test moves it; and a pane
@@ -283,6 +286,7 @@ const engine = (
   let panes: { id: string; isPlaced: boolean }[] = []
 
   seen.clock = mock.clock(on, { now: NOW })
+  clock = seen.clock
   on('session.id', () => ({ value: seen.sessionId }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
@@ -409,7 +413,14 @@ const DECK_COMMAND = {
   presentation: { isFullscreen: false, columns: 80 },
 } as const
 
-const start = ($: Engine) => $.session.start({ cwd: WORKSPACE, surface: 'terminal', isInteractive: true })
+// A Session starting, and what it starts off the event running as far as it
+// can: the read of the project config and what follows it.
+const start = async ($: Engine) => {
+  const started = await $.session.start({ cwd: WORKSPACE, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+
+  return started
+}
 
 // The person moving the focus onto an element of the pane.
 const focus = ($: Engine, element: string) =>
@@ -473,7 +484,7 @@ test('a read of the project config not answered after ten seconds says what it m
     config: { structuredContent: CONFIGURED, isError: false },
     waitFor: tool => (tool === 'deck_config' ? waiting : undefined),
   })
-  const starting = start($)
+  await start($)
   const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
 
   await seen.clock.advance(9_000)
@@ -483,12 +494,28 @@ test('a read of the project config not answered after ten seconds says what it m
   expect(await texts(ui)).toEqual(UNANSWERED)
 
   release()
-  await starting
   await seen.clock.settle()
   const lines = await texts(ui)
   expect(lines).toContain('shop')
   expect(lines).not.toContain(UNANSWERED[0])
   await ui.unmount()
+})
+
+test('the start of a Session does not wait on the read of the project config, and the pane opens once it answers', async ($, on) => {
+  const { waiting, release } = gate()
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => (tool === 'deck_config' ? waiting : undefined),
+  })
+
+  await start($)
+  expect(seen.calls.map(call => call.tool)).toEqual(['deck_config'])
+  expect(seen.opened).toEqual([])
+
+  release()
+  await seen.clock.settle()
+  expect(seen.opened).toEqual([PANE])
+  expect(seen.calls.map(call => call.tool)).toContain('deck_heartbeat')
 })
 
 test('a read of the Tasks not answered after ten seconds says the same in place of the notice, in both placements', async ($, on) => {
@@ -1060,7 +1087,11 @@ test('above the prompt a failed read leaves the first row without counts, even w
 })
 
 test('above the prompt the pane is four rows while the Tasks are being read', async ($, on) => {
-  engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  const { waiting, release } = gate()
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => (tool === 'deck_tasks' ? waiting : undefined),
+  })
   await start($)
   const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
 
@@ -1068,6 +1099,8 @@ test('above the prompt the pane is four rows while the Tasks are being read', as
   const lines = await texts(ui)
   expect(lines.slice(lines.indexOf('正在读取 Task…'))).toEqual(['正在读取 Task…', ' '])
   await ui.unmount()
+  release()
+  await seen.clock.settle()
 })
 
 test('above the prompt the action bar names a Spec once, then its progress and its Child Tasks by group', async ($, on) => {

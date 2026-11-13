@@ -541,20 +541,29 @@ let poll: { cancel: () => void } | undefined
 
 // Reads the project config for the Session `sessionId`, then, in a Configured
 // Project, the Tasks and the skills, off the caller so it does not wait on
-// gh. The timed reads start once and go on across a /clear.
-const readSession = async ($: EngineInterface, sessionId: string) => {
+// gh. The timed reads start once and go on across a /clear. At the start of
+// a Session the Pane opens where a project config exists, a malformed one to
+// say why, before the Tasks are read: the first read is the baseline of the
+// unlocks.
+const readSession = async ($: EngineInterface, sessionId: string, isStart = false) => {
   unlocks = freshUnlocks()
   reading = sessionId
   try {
     const config = await loadConfig($)
     await update($, view, current => ({ ...current, sessionId, config }))
+    if (isStart && (config.status === 'configured' || config.status === 'error')) {
+      await $.ui.open(LIST_OPEN)
+      // The engine does not pass this Mod's own open through its ui.open.
+      isPaneOpen = true
+    }
     if (config.status === 'configured') {
       $.clock.after(0, () => void loadTasks($, false))
       $.clock.after(0, () => void loadSkills($))
       poll ??= $.clock.every(POLL_MS, () => void loadTasks($, false))
+      if (isStart) {
+        startHeartbeat($)
+      }
     }
-
-    return config
   } finally {
     reading = undefined
   }
@@ -604,16 +613,10 @@ export const register: Register = on => {
     const started = await next(e)
     await $.command.register({ name: COMMAND, description: '打开或关闭 Matt Deck 的 Pane' })
 
-    const config = await readSession($, await $.session.id())
-
-    // The Pane opens only where a project config exists; a malformed one
-    // opens it to say why.
-    if (config.status === 'configured' || config.status === 'error') {
-      await $.ui.open(LIST_OPEN)
-    }
-    if (config.status === 'configured') {
-      startHeartbeat($)
-    }
+    // Read off the event: a permission hook waiting for the person keeps the
+    // read waiting with it, and the Session's prompts wait on this event.
+    const sessionId = await $.session.id()
+    $.clock.after(0, () => void readSession($, sessionId, true))
 
     return started
   })
