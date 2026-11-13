@@ -36,6 +36,7 @@ export type Task = {
 // A Spec or a Map, in no group.
 export type Container = Task & {
   kind: 'spec' | 'map'
+  isPendingCloseout: boolean
   group: Group
   children: number[]
   progress: { closed: number; inProgress: number; total: number }

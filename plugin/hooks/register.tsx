@@ -223,9 +223,9 @@ const loadSkillText = async ($: EngineInterface, name: string) => {
 // Puts `text` in the prompt box for the person to send. A draft there is
 // never overwritten: the person is told instead. Where the host cannot fill
 // the box, the text goes on the clipboard.
-const prefill = async ($: EngineInterface, text: string, surface: RenderSurface) => {
+const prefill = async ($: EngineInterface, text: string, surface: RenderSurface, key = 'e') => {
   if ((await $.prompt.read()).text.trim() !== '') {
-    $.ui.toast(`输入框里已有草稿，没有覆盖。清空后再按 e：${text}`)
+    $.ui.toast(`输入框里已有草稿，没有覆盖。清空后再按 ${key}：${text}`)
     return
   }
   if ((await $.prompt.fill({ text: `${text} ` })).isFilled) {
@@ -256,6 +256,28 @@ const executeTask = async ($: EngineInterface, number: number, surface: RenderSu
     `When you finish, call the tool deck_report for Task #${number}: what you did, ` +
     'and the Acceptance Evidence for each acceptance criterion with where it comes from.'
   await prefill($, text, surface)
+}
+
+// Adapted from the reference project's specComplete template, pinned by
+// Spec #1 at 5d90182 (config/prompts/map-advancement.yaml). Here the output
+// is a check for the user to decide on, never a request to close the Spec.
+const closeoutSpec = async ($: EngineInterface, number: number, surface: RenderSurface) => {
+  const { tasks } = await read($, view)
+  const spec = tasks.status === 'loading' ? undefined : tasks.list?.containers.find(task => task.number === number)
+  if (spec?.isPendingCloseout !== true) {
+    $.ui.toast(`#${number} 当前不处于待收尾核对状态。`)
+    return
+  }
+  const text =
+    `请对当前项目的 Spec #${number} 做收尾核对。Pane 显示 Child Task 已全部关闭` +
+    `（${spec.progress.closed}/${spec.progress.total}），这只是触发条件，不是完成或验收通过的证据。\n\n` +
+    '先重新读取 Spec 及其全部 Child Task 的正文、评论和当前状态。对照 Spec 的每条用户故事与验收条件，' +
+    '逐条核对 Child Task 的交付、最终代码、测试或运行结果，并列出可复核的 Acceptance Evidence 及出处；' +
+    '不要只依赖关闭状态或任务自述。说明改动所在的分支、提交或工作区及仓库检查结果，' +
+    '区分已验证、未验证和不满足的条目。以“不做”或“重复”关闭的 Child Task，说明原承诺如何满足以及是否有用户确认。\n\n' +
+    '在本 Session 中说明核对结论、剩余缺口、对应的 Spec 条目和建议下一步。' +
+    '本次只核对并报告，不关闭 Spec，也不自动重开或修改任何 Task；是否关闭 Spec 由用户决定。'
+  await prefill($, text, surface, 'k')
 }
 
 // Takes the Task `number` over from the Session `from`, as the person
@@ -802,6 +824,7 @@ export const register: Register = on => {
         })(),
       prefill: text => void prefill($, text, e.surface),
       execute: number => void executeTask($, number, e.surface),
+      closeout: number => void closeoutSpec($, number, e.surface),
       // Asking to take over, the focus goes onto cancelling, so that enter
       // does not take it over; once it is answered, back onto the list's row.
       askTakeOver: number =>

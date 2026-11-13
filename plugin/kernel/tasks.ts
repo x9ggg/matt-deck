@@ -80,6 +80,9 @@ export type Task = {
 // is where it would stand as a Task; `progress` counts its Child Tasks.
 export type Container = Task & {
   kind: 'spec' | 'map'
+  // Only an open Spec whose Child Tasks are all closed. This says nothing
+  // about acceptance and never changes its Task Status.
+  isPendingCloseout: boolean
   group: Group
   children: number[]
   progress: { closed: number; inProgress: number; total: number }
@@ -155,7 +158,14 @@ export const listTasks = (
         total: children.length,
       }
       const kind = isMap ? 'map' : 'spec'
-      containers.push({ ...task, kind, group: groupOf(task), children: children.map(child => child.number), progress })
+      containers.push({
+        ...task,
+        kind,
+        isPendingCloseout: kind === 'spec' && task.isOpen && progress.closed === progress.total,
+        group: groupOf(task),
+        children: children.map(child => child.number),
+        progress,
+      })
     } else {
       groups[groupOf(task)].push(task)
     }

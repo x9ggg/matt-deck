@@ -49,6 +49,8 @@ export type Actions = {
   // Prompt of the Task `number` there.
   prefill: (text: string) => void
   execute: (number: number) => void
+  // Puts a Pending Closeout Spec's check in the prompt box, without sending.
+  closeout: (number: number) => void
   // Asks to confirm taking over the Task `number` from the Session holding
   // it; takes it over from `from`, the Session the asking named, and
   // executes it; gives up the asking.
@@ -226,6 +228,9 @@ const childCounts = (list: TaskList, container: Container) =>
 
 const progressText = (container: Container) => `${container.progress.closed}/${container.progress.total}`
 
+const CLOSEOUT = '待收尾核对'
+const containerGlyphText = (container: Container) => (container.isPendingCloseout ? '◈' : GLYPH[container.group])
+
 export const drawPane = (
   el: El,
   props: RenderPropsOf['Pane'],
@@ -320,6 +325,8 @@ export const drawPane = (
       {GLYPH[group]}
     </Text>
   )
+  const containerGlyph = (container: Container) =>
+    container.isPendingCloseout ? <Text color="warning">◈</Text> : glyph(container.group)
   // A Task's glyph: its group's, but in progress ▲ when Orphaned and ◐ for
   // another Session.
   const isOrphaned = (task: Task, group: Group) => group === 'inProgress' && task.isOrphaned
@@ -434,6 +441,18 @@ export const drawPane = (
   const executeButton = (number: number) => (
     <Button key="execute" plain hotkey="e" label="执行" onPress={() => actions.execute(number)} />
   )
+  const closeoutButton = (number: number, primary = false) => (
+    <Button
+      key={`closeout:${number}`}
+      plain={primary ? undefined : true}
+      variant={primary ? 'primary' : undefined}
+      hotkey="k"
+      label="收尾核对"
+      onPress={() => actions.closeout(number)}
+    >
+      <Text color="warning">收尾核对</Text>
+    </Button>
+  )
   const releaseButton = (task: Task) => (
     <Button key="release" plain hotkey="x" label="释放" onPress={() => actions.release(task.number, task.occupant!)} />
   )
@@ -460,7 +479,12 @@ export const drawPane = (
           : task.occupant === view.sessionId
             ? { text: 'x: 释放', button: releaseButton(task) }
             : { text: 't: 接管', button: takeOverButton(task) }
-  const rowAction = (row: Row) => ('group' in row ? taskAction(row.task, row.group) : undefined)
+  const rowAction = (row: Row) =>
+    'group' in row
+      ? taskAction(row.task, row.group)
+      : row.container.isPendingCloseout
+        ? { text: 'k: 收尾核对', button: closeoutButton(row.container.number), isTwo: true }
+        : undefined
   const isOpenShown = (row: Row) => isInline || rowAction(row)?.isTwo !== true
   const rowActions = (row: Row) => (
     <Box flexDirection="row">
@@ -484,9 +508,9 @@ export const drawPane = (
   const actionsWidth = (row: Row) =>
     2 +
     width(
-      'container' in row
-        ? 'm: 地图  o: 详情'
-        : [rowAction(row)?.text, isOpenShown(row) ? 'o: 详情' : undefined].filter(text => text !== undefined).join('  '),
+      [rowAction(row)?.text, 'container' in row ? 'm: 地图' : undefined, isOpenShown(row) ? 'o: 详情' : undefined]
+        .filter(text => text !== undefined)
+        .join('  '),
     )
 
   // The Task another Session holds, or an Orphaned one, that the person is
@@ -553,7 +577,7 @@ export const drawPane = (
       {'container' in row ? (
         <Box flexDirection="row">
           <Text>{numbered(row.container.number)}</Text>
-          {childCountItems(row.container)}
+          {row.container.isPendingCloseout ? <Text color="warning">{CLOSEOUT}</Text> : childCountItems(row.container)}
         </Box>
       ) : (
         <Box flexDirection="row">
@@ -577,24 +601,26 @@ export const drawPane = (
     if ('container' in row) {
       const { container } = row
       const head = `${container.kind === 'spec' ? 'Spec' : 'Map'} #${container.number} `
-      const tail = `   ${progressText(container)}   `
-      const countsWidth = width(
-        childCounts(list!, container)
-          .map(({ group, count }) => `${GLYPH[group]} ${count}`)
-          .join('  '),
-      )
+      const tail = container.isPendingCloseout ? `   ${CLOSEOUT}` : `   ${progressText(container)}   `
+      const countsWidth = container.isPendingCloseout
+        ? 0
+        : width(
+            childCounts(list!, container)
+              .map(({ group, count }) => `${GLYPH[group]} ${count}`)
+              .join('  '),
+          )
 
       return (
         <Box flexDirection="row" justifyContent="space-between">
           <Box flexDirection="row">
-            {glyph(container.group)}
+            {containerGlyph(container)}
             <Text>
               {' '}
               {head}
               {cut(container.title, columns - 2 - width(head) - width(tail) - countsWidth - actionsWidth(row))}
               {tail}
             </Text>
-            {childCountItems(container)}
+            {!container.isPendingCloseout && childCountItems(container)}
           </Box>
           {rowActions(row)}
         </Box>
@@ -641,7 +667,7 @@ export const drawPane = (
 
       return (
         <Button key={row.key} plain autoFocus={isLanding ? true : undefined} onPress={onPress}>
-          {glyph(container.group)}
+          {containerGlyph(container)}
           <Text>{head}</Text>
           <Text color="inactive">{number}</Text>
           <Text>
@@ -926,7 +952,7 @@ export const drawPane = (
     }
     const labelOf = (row: Row) =>
       'container' in row
-        ? `${GLYPH[row.container.group]} ${row.container.kind === 'spec' ? 'Spec' : 'Map'} #${row.container.number} ${progressText(row.container)}`
+        ? `${containerGlyphText(row.container)} ${row.container.kind === 'spec' ? 'Spec' : 'Map'} #${row.container.number} ${progressText(row.container)}`
         : `${glyphText(row.task, row.group)} #${row.task.number} ${cut(row.task.title, 28)}`
 
     return (
@@ -938,7 +964,7 @@ export const drawPane = (
               key: row.key,
               label: labelOf(row),
               draw: [
-                'container' in row ? glyph(row.container.group) : taskGlyph(row.task, row.group, row.group === 'blocked'),
+                'container' in row ? containerGlyph(row.container) : taskGlyph(row.task, row.group, row.group === 'blocked'),
                 <Text dimColor={'group' in row && row.group === 'blocked'}>{labelOf(row).slice(1)}</Text>,
               ],
               isLanding: row === landing,
@@ -1134,7 +1160,64 @@ export const drawPane = (
     const switcher = choices.length > 1 && (
       <Button key="switch" plain hotkey="s" label="切换" onPress={() => actions.openSwitch(mapped.number)} />
     )
-    const card = isInline ? (
+    const closeoutTitle = `◈ Spec #${mapped.number} · ${CLOSEOUT}`
+    const closeoutNote = 'Child Task 已全部解锁，Spec 还没关闭。'
+    const closeoutLines = mapped.isPendingCloseout && !isInline
+      ? [
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text color="warning">{closeoutTitle}</Text>
+            {switcher}
+          </Box>,
+          <Text>{cut(mapped.title, columns - 2)}</Text>,
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text>解锁进度</Text>
+            <Text>{progress}</Text>
+          </Box>,
+          progressBar(mapped, columns - 2, ''),
+          <Text>{closeoutNote}</Text>,
+          <Box flexDirection="row">
+            {closeoutButton(mapped.number, true)}
+            <Text color="inactive"> k</Text>
+          </Box>,
+        ]
+      : []
+    const card = mapped.isPendingCloseout ? (
+      isInline ? (
+        <Box flexDirection="column">
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text color="warning">
+              {closeoutTitle}
+              {'  '}
+              {cut(mapped.title, columns - width(closeoutTitle) - 4 - width(progress) - (switcher ? width('  s: 切换') : 0))}
+            </Text>
+            <Box flexDirection="row">
+              <Text>{progress}</Text>
+              {switcher && <Text>{'  '}</Text>}
+              {switcher}
+            </Box>
+          </Box>
+          {progressBar(mapped, columns, '')}
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text>{closeoutNote}</Text>
+            {closeoutButton(mapped.number)}
+          </Box>
+        </Box>
+      ) : (
+        <Box flexDirection="column">
+          <Text color="warning">{' ' + '╌'.repeat(columns - 2) + ' '}</Text>
+          {closeoutLines.map(line => (
+            <Box flexDirection="row">
+              <Text color="warning">╎</Text>
+              <Box width={columns - 2} flexDirection="column">
+                {line}
+              </Box>
+              <Text color="warning">╎</Text>
+            </Box>
+          ))}
+          <Text color="warning">{' ' + '╌'.repeat(columns - 2) + ' '}</Text>
+        </Box>
+      )
+    ) : isInline ? (
       <Box flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between">
           <Text>
@@ -1202,10 +1285,14 @@ export const drawPane = (
         : actionBar(containerRow(focusedContainer))
     // Room under the fixed rows: docked, the top four and the card's seven;
     // above the prompt, the top two and the card's two; and the action bar,
-    // and the reason of a failed read.
+    // and the reason of a failed read. Pending Closeout adds one card row
+    // in either placement.
     const failureRows =
       tasks.status === 'failed' ? (isInline ? 2 : reasonRows(tasks.failure).length + 3) : 0
-    const room = Math.max(3, props.scroll.bodyRows - (isInline ? 5 : 12) - failureRows - takeOverRows)
+    const room = Math.max(
+      3,
+      props.scroll.bodyRows - (isInline ? 5 : 12) - Number(mapped.isPendingCloseout) - failureRows - takeOverRows,
+    )
 
     return (
       <Box flexDirection="column">
@@ -1823,13 +1910,14 @@ export const drawPane = (
     // words after the counts, the Session, the freshness. A failed read
     // leaves the row without counts, with a list read before it or not.
     const hasCounts = list !== undefined && tasks.status !== 'failed'
+    const doneGlyph = list?.containers.some(container => container.isPendingCloseout) ? '◈' : GLYPH.done
     const right = width(freshness.text) + 2 + 7
     const countsText = (words: boolean) =>
       !hasCounts
         ? ''
         : `   ${GROUPS.slice(0, 3)
             .map(group => `${GLYPH[group]} ${counts[group]}${words ? ` ${GROUP_TITLE[group]}` : ''}`)
-            .join('  ')}  ◆ ${counts.done}/${total}`
+            .join('  ')}  ${doneGlyph} ${counts.done}/${total}`
     const executingText = executing === undefined ? '' : `  ▶ #${executing.number}`
     const fits = (words: boolean, withSession: boolean, withFreshness: boolean) =>
       width(project) + (withSession ? 3 + session.length : 0) + width(executingText) + width(countsText(words)) + 1 <=
@@ -1862,7 +1950,7 @@ export const drawPane = (
               GROUPS.map(group => (
                 <Box flexDirection="row">
                   <Text>{group === 'ready' ? '   ' : '  '}</Text>
-                  {glyph(group)}
+                  {group === 'done' ? <Text color="warning">{doneGlyph}</Text> : glyph(group)}
                   <Text>
                     {' '}
                     {group === 'done' ? `${counts.done}/${total}` : counts[group]}

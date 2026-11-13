@@ -40,6 +40,7 @@ const task = (number: number, title: string, more: { blockers?: number[]; [field
 const spec = (number: number, title: string, children: number[], progress: object, more: object = {}) => ({
   ...task(number, title),
   kind: 'spec',
+  isPendingCloseout: false,
   group: 'ready',
   children,
   progress,
@@ -2957,5 +2958,181 @@ test('a report on a Task whose detail was read shows in it at once, read again p
   await $.tool.call({ tool: REPORT, task: 3, result: '做完了。', evidence: [] })
   await seen.clock.settle()
   expect(seen.calls.filter(call => call.tool === 'deck_task').map(call => call.args)).toEqual([{ number: 2 }, { number: 2 }])
+  await ui.unmount()
+})
+
+const CLOSEOUT_PROJECT = tasks({
+  containers: [
+    spec(1, '规格：交付一个 Pane', [2, 3], { closed: 2, inProgress: 0, total: 2 }, { isPendingCloseout: true }),
+  ],
+  done: [2, 3].map(number => task(number, `Child Task ${number}`, { parent: 1, isOpen: false })),
+})
+
+test('Pending Closeout stays first outside the groups, and its list row and Map View offer k in both placements', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => CLOSEOUT_PROJECT,
+  })
+  await start($)
+  await seen.clock.settle()
+
+  for (const target of [PANE_TARGET, INLINE]) {
+    const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+    await ui.press({ key: 'tab:tasks' })
+    await focus($, 'task:1')
+    expect((await ui.find({ key: 'task:1' }))?.text).toMatch(/^◈ Spec #1/)
+    expect((await ui.find({ key: 'closeout:1' }))?.props.hotkey).toBe('k')
+    expect((await ui.find({ key: 'closeout:1' }))?.props.plain).toBe(true)
+    expect(await texts(ui, 'Box')).toEqual(expect.arrayContaining([expect.stringContaining('待收尾核对')]))
+    const buttons = await texts(ui, 'Button')
+    expect(buttons.findIndex(text => text.startsWith('◈ Spec #1'))).toBeLessThan(
+      buttons.findIndex(text => text.startsWith('◆ #2')),
+    )
+    expect(buttons).toEqual(expect.arrayContaining([expect.stringMatching(/^全部 2(?:  |$)/)]))
+    expect(await ui.find({ key: 'execute' })).toBeUndefined()
+
+    await ui.press({ key: 'map' })
+    expect(await texts(ui)).toEqual(expect.arrayContaining([
+      expect.stringContaining('◈ Spec #1 · 待收尾核对'),
+      '2 / 2 · 100%',
+      'Child Task 已全部解锁，Spec 还没关闭。',
+    ]))
+    expect((await ui.find({ key: 'closeout:1' }))?.props.hotkey).toBe('k')
+    expect((await ui.find({ key: 'closeout:1' }))?.props.variant).toBe(target === PANE_TARGET ? 'primary' : undefined)
+    expect((await ui.find({ type: 'Text', text: /^━+$/ }))?.props.color).toBe('warning')
+    if (target === PANE_TARGET) {
+      expect((await ui.find({ type: 'Text', text: /^ ╌+ $/ }))?.props.color).toBe('warning')
+    } else {
+      expect(await texts(ui)).toContain('◈')
+      expect(await texts(ui)).toContain(' 2/2')
+    }
+    await ui.unmount()
+  }
+})
+
+test('k prefills a Spec closeout check from the list and Map View, never sending it or occupying the Spec', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => CLOSEOUT_PROJECT,
+  })
+  await start($)
+  await seen.clock.settle()
+
+  for (const target of [PANE_TARGET, INLINE]) {
+    const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+    await ui.press({ key: 'tab:tasks' })
+    await focus($, 'task:1')
+    await ui.press({ key: 'closeout:1' })
+    await seen.clock.settle()
+    await ui.press({ key: 'map' })
+    await ui.press({ key: 'closeout:1' })
+    await seen.clock.settle()
+    await ui.unmount()
+  }
+
+  expect(seen.filled).toHaveLength(4)
+  const prompt = seen.filled[0]!.text
+  expect(prompt).toContain('Spec #1')
+  expect(prompt).toContain('2/2')
+  expect(prompt).toContain('每条用户故事与验收条件')
+  expect(prompt).toContain('Acceptance Evidence 及出处')
+  expect(prompt).toContain('核对结论、剩余缺口')
+  expect(prompt).toContain('不关闭 Spec')
+  expect(prompt).toContain('是否关闭 Spec 由用户决定')
+  expect(prompt).not.toContain('/implement')
+  expect(seen.filled.every(fill => fill.text === prompt && fill.mode === 'replace')).toBe(true)
+  expect(seen.ran).toEqual([])
+  expect(seen.calls.filter(call => call.tool === 'deck_occupy')).toEqual([])
+  // Even when the person later sends the check it is not an Execute Prompt.
+  await $.prompt.submit({ text: prompt, origin: { kind: 'composer' }, wait: false })
+  await seen.clock.settle()
+  expect(seen.calls.filter(call => call.tool === 'deck_occupy')).toEqual([])
+})
+
+test('k preserves an existing draft and names k as the way to try again', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => CLOSEOUT_PROJECT,
+    draft: '先别收尾，我还要看一下',
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await focus($, 'task:1')
+  await ui.press({ key: 'closeout:1' })
+  await seen.clock.settle()
+  expect(seen.filled).toEqual([])
+  expect(seen.copied).toEqual([])
+  expect(seen.toasts).toEqual([expect.stringMatching(/^输入框里已有草稿，没有覆盖。清空后再按 k：/)])
+  expect(seen.ran).toEqual([])
+  await ui.unmount()
+})
+
+test('k copies the closeout check and says so when the host cannot prefill', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => CLOSEOUT_PROJECT,
+    canFill: false,
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  await ui.press({ key: 'tab:map' })
+  await ui.press({ key: 'closeout:1' })
+  await seen.clock.settle()
+  expect(seen.filled).toEqual([])
+  expect(seen.copied).toEqual([expect.stringContaining('Spec #1')])
+  expect(seen.toasts).toEqual([`不能预填输入框，已复制到剪贴板：${seen.copied[0]}`])
+  expect(seen.ran).toEqual([])
+  await ui.unmount()
+})
+
+test('a reopened Child Task removes Pending Closeout, and a closed Spec leaves the front of the list and has no closeout action', async ($, on) => {
+  let answer = CLOSEOUT_PROJECT
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => answer,
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  for (const isOpen of [true, false]) {
+    answer = tasks({
+      containers: [spec(1, '规格：交付一个 Pane', [2, 3], { closed: isOpen ? 1 : 2, inProgress: 0, total: 2 }, { isOpen })],
+      ready: isOpen ? [task(3, 'Child Task 3', { parent: 1 })] : [],
+      done: (isOpen ? [2] : [2, 3]).map(number => task(number, `Child Task ${number}`, { parent: 1, isOpen: false })),
+    })
+    await ui.press({ key: 'tab:tasks' })
+    await ui.press({ key: 'refresh' })
+    await seen.clock.settle()
+    await focus($, 'task:1')
+    expect((await ui.find({ key: 'task:1' })) !== undefined).toBe(isOpen)
+    expect(await ui.find({ key: 'closeout:1' })).toBeUndefined()
+    expect(await texts(ui)).not.toContain('待收尾核对')
+    await ui.press({ key: 'tab:map' })
+    expect(await ui.find({ key: 'closeout:1' })).toBeUndefined()
+    expect(await texts(ui)).not.toContain('◈ Spec #1 · 待收尾核对')
+  }
+  await ui.unmount()
+})
+
+test('a Map with all Child Tasks closed has no Pending Closeout entry', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => tasks({
+      ...CLOSEOUT_PROJECT.structuredContent.groups,
+      containers: [spec(1, '探索已得到决定', [2, 3], { closed: 2, inProgress: 0, total: 2 }, { kind: 'map' })],
+    }),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await focus($, 'task:1')
+  expect((await ui.find({ key: 'task:1' }))?.text).toMatch(/^◇ Map #1/)
+  expect(await ui.find({ key: 'closeout:1' })).toBeUndefined()
+  await ui.press({ key: 'map' })
+  expect(await ui.find({ key: 'closeout:1' })).toBeUndefined()
+  expect(await texts(ui)).not.toContain('待收尾核对')
   await ui.unmount()
 })

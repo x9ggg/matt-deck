@@ -656,6 +656,56 @@ test('deck_tasks lists Specs and Maps apart from the groups, each with its Child
   assert.equal(groups.ready.find((task: any) => task.number === 40).parent, null)
 })
 
+test('deck_tasks marks only open Specs with every Child Task closed as Pending Closeout, without closing them', async t => {
+  const gh = await fakeGh()
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+  const read = async (specState: 'OPEN' | 'CLOSED', childState: 'OPEN' | 'CLOSED') => {
+    await gh.issues([
+      issue({ number: 1, state: specState }),
+      issue({ number: 2, parent: 1, state: 'CLOSED' }),
+      issue({ number: 3, parent: 1, state: childState }),
+      issue({ number: 10, labels: ['wayfinder:map'] }),
+      issue({ number: 11, parent: 10, state: 'CLOSED' }),
+      issue({ number: 20, labels: ['wayfinder:map'] }),
+      issue({ number: 30 }),
+    ])
+    const result = await deck.callTool('deck_tasks', { refresh: true })
+    assert.equal(result.isError, false)
+    assert.equal(result.structuredContent.ok, true)
+
+    return result.structuredContent
+  }
+
+  const open = await read('OPEN', 'OPEN')
+  assert.equal(open.containers[0].isPendingCloseout, false)
+  const pending = await read('OPEN', 'CLOSED')
+  assert.deepEqual(
+    pending.containers.map(({ number, isOpen, isPendingCloseout }: any) => ({ number, isOpen, isPendingCloseout })),
+    [
+      { number: 1, isOpen: true, isPendingCloseout: true },
+      { number: 10, isOpen: true, isPendingCloseout: false },
+      { number: 20, isOpen: true, isPendingCloseout: false },
+    ],
+  )
+  assert.deepEqual(pending.containers[0].progress, { closed: 2, inProgress: 0, total: 2 })
+  // Containers stay outside every group; a Task without children is no Spec.
+  assert.deepEqual(numbers(pending.groups.ready), [30])
+  assert.deepEqual(numbers(pending.groups.done), [2, 3, 11])
+  assert.deepEqual(pending.groups.inProgress, [])
+  assert.deepEqual(pending.groups.blocked, [])
+  assert.equal((await deck.callTool('deck_tasks')).structuredContent.containers[0].isOpen, true)
+
+  const reopened = await read('OPEN', 'OPEN')
+  assert.equal(reopened.containers[0].isPendingCloseout, false)
+  const closed = await read('CLOSED', 'CLOSED')
+  assert.equal(closed.containers[0].isPendingCloseout, false)
+  assert.equal(closed.containers[0].isOpen, false)
+  // All source access is read-only, including after entering Pending Closeout.
+  assert.ok((await gh.calls()).every(call => call.args[0] === 'api' && call.args[1] === 'graphql' &&
+    call.args.some(arg => arg.startsWith('query=query('))))
+})
+
 test('deck_tasks says why the Task Source cannot be read', async t => {
   const cases = [
     {
