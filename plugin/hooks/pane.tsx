@@ -50,9 +50,10 @@ export type Actions = {
   prefill: (text: string) => void
   execute: (number: number) => void
   // Asks to confirm taking over the Task `number` from the Session holding
-  // it; takes it over, confirmed, and executes it; gives up the asking.
+  // it; takes it over from `from`, the Session the asking named, and
+  // executes it; gives up the asking.
   askTakeOver: (number: number) => void
-  takeOver: (number: number) => void
+  takeOver: (number: number, from: string) => void
   cancelTakeOver: () => void
   // Releases this Session's Occupancy of the Task `number`.
   release: (number: number) => void
@@ -466,7 +467,7 @@ export const drawPane = (
     const note = <Text>接管会把 Occupancy 转给本 Session。</Text>
     const keys = (
       <Box flexDirection="row">
-        <Button key="takeover:confirm" plain hotkey="t" label="接管" onPress={() => actions.takeOver(task.number)} />
+        <Button key="takeover:confirm" plain hotkey="t" label="接管" onPress={() => actions.takeOver(task.number, task.occupant!)} />
         <Text>{'  '}</Text>
         <Button key="takeover:cancel" plain hotkey="c" label="取消" onPress={actions.cancelTakeOver} />
       </Box>

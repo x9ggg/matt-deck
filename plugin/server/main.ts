@@ -172,7 +172,7 @@ const tools = {
   },
   deck_occupy: {
     description:
-      'For the Pane: record that a Session executes a Task, as the prompt starting it is sent. A Task held by another Session stays with it unless takeOver moves it; the answer names the Session holding it.',
+      'For the Pane: record that a Session executes a Task, as the prompt starting it is sent. A Task held by another Session stays with it unless takeOver names that Session; the answer names the Session holding it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -183,8 +183,10 @@ const tools = {
           description: 'The repository a link to the Task named, as owner/name, when the Task was referred to by a link.',
         },
         takeOver: {
-          type: 'boolean',
-          description: 'Move the Occupancy from the Session holding the Task to this one; only after the person confirmed.',
+          type: 'string',
+          minLength: 1,
+          description:
+            'The id of the Session to move the Task\'s Occupancy from, to this one; only after the person confirmed taking it over from that Session. Held by a third Session by now, the Task stays with it.',
         },
       },
       required: ['session', 'task'],
@@ -197,13 +199,13 @@ const tools = {
         !Number.isInteger(task) ||
         task < 1 ||
         (repository !== undefined && typeof repository !== 'string') ||
-        (takeOver !== undefined && typeof takeOver !== 'boolean')
+        (takeOver !== undefined && (typeof takeOver !== 'string' || takeOver === ''))
       ) {
         return {
           content: [
             {
               type: 'text',
-              text: 'deck_occupy takes the id of a Session, the number of a Task, the repository a link to it named, if any, and whether to take it over',
+              text: 'deck_occupy takes the id of a Session, the number of a Task, the repository a link to it named, if any, and the id of the Session to take it over from, if any',
             },
           ],
           isError: true,
@@ -222,7 +224,7 @@ const tools = {
           const message = found === undefined ? `the Task Source has no Task #${task}` : `#${task} is closed`
           answer = { ok: false, failure: { kind: 'not-open', message } }
         } else {
-          const occupant = occupy(homedir(), source.identity, task, session, Date.now(), takeOver === true)
+          const occupant = occupy(homedir(), source.identity, task, session, Date.now(), takeOver)
           answer = { ok: true, occupied: occupant === session, occupant }
         }
       } catch (error: any) {
@@ -237,22 +239,30 @@ const tools = {
   },
   deck_release: {
     description:
-      'For the Pane: release the Occupancy of a Task, whichever Session holds it, so that another Session can execute it.',
+      'For the Pane: release the Occupancy a Session holds of a Task, this Session\'s or another\'s, so that another Session can execute it. Held by a different Session by now, the Task stays with it.',
     inputSchema: {
       type: 'object',
-      properties: { task: { type: 'integer', minimum: 1, description: 'The Task\'s number.' } },
-      required: ['task'],
+      properties: {
+        task: { type: 'integer', minimum: 1, description: 'The Task\'s number.' },
+        session: { type: 'string', minLength: 1, description: 'The id of the Session holding the Task.' },
+      },
+      required: ['task', 'session'],
       additionalProperties: false,
     },
-    run: async ({ task }: any): Promise<ToolResult> => {
-      if (!Number.isInteger(task) || task < 1) {
-        return { content: [{ type: 'text', text: 'deck_release takes the number of a Task, a whole number from 1' }], isError: true }
+    run: async ({ task, session }: any): Promise<ToolResult> => {
+      if (!Number.isInteger(task) || task < 1 || typeof session !== 'string' || session === '') {
+        return {
+          content: [
+            { type: 'text', text: 'deck_release takes the number of a Task, a whole number from 1, and the id of the Session holding it' },
+          ],
+          isError: true,
+        }
       }
       let answer: object
       try {
         // The Task Source's identity only: a read from the cache names it.
         const { source } = await readSource(false)
-        answer = { ok: true, released: release(homedir(), source.identity, task) }
+        answer = { ok: true, released: release(homedir(), source.identity, task, session) }
       } catch (error: any) {
         if (!(error instanceof TaskSourceError)) {
           throw error

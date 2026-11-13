@@ -2164,7 +2164,9 @@ test('x releases this Session\'s Occupancy, and the Tasks are read again to show
   await ui.press({ key: 'release' })
   await seen.clock.settle()
 
-  expect(seen.calls.filter(call => call.tool === 'deck_release').map(call => call.args)).toEqual([{ task: 16 }])
+  expect(seen.calls.filter(call => call.tool === 'deck_release').map(call => call.args)).toEqual([
+    { task: 16, session: 'a1b2c3d4-session' },
+  ])
   expect(seen.calls.at(-1)?.tool).toBe('deck_tasks')
   expect((await ui.find({ key: 'task:16' }))?.text).toMatch(/^◇ #16 命令行 +可执行$/)
   expect((await texts(ui)).join('')).toContain('本 Session 没有在执行 Task')
@@ -2186,6 +2188,24 @@ test('a release the Deck service refuses says why', async ($, on) => {
   await seen.clock.settle()
 
   expect(seen.toasts).toEqual(['#16 的 Occupancy 没有释放：连不上 GitHub'])
+  await ui.unmount()
+})
+
+test('a release of an Occupancy that passed to another Session says it released nothing', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => OCCUPIED,
+    release: () => ({ isError: false, structuredContent: { ok: true, released: false } }),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await focus($, 'task:16')
+  await ui.press({ key: 'release' })
+  await seen.clock.settle()
+
+  expect(seen.toasts).toEqual(['#16 的 Occupancy 已不在本 Session 上，没有释放。'])
   await ui.unmount()
 })
 
@@ -2260,7 +2280,7 @@ test('a confirmed take-over moves the Occupancy to this Session, then puts the E
   await seen.clock.settle()
 
   expect(seen.calls.filter(call => call.tool === 'deck_occupy').map(call => call.args)).toEqual([
-    { session: 'a1b2c3d4-session', task: 17, takeOver: true },
+    { session: 'a1b2c3d4-session', task: 17, takeOver: '3f9c21d0-other' },
   ])
   expect(seen.filled.map(fill => fill.text)).toEqual([executePrompt('/mattpocock-skills:implement', 17)])
   expect((await texts(ui)).join('\n')).not.toContain(TAKEOVER_LINES[0])
@@ -2287,6 +2307,59 @@ test('a take-over the Deck service refuses says why and fills nothing', async ($
   expect(seen.toasts).toEqual(['#17 没有接管：#17 is closed'])
   expect(seen.filled).toEqual([])
   await ui.unmount()
+})
+
+test('a take-over of a Task that passed to a third Session says who holds it and fills nothing', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => OCCUPIED,
+    skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
+    occupy: () => ({ isError: false, structuredContent: { ok: true, occupied: false, occupant: '77e0aa15-third' } }),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await focus($, 'task:17')
+  await ui.press({ key: 'takeover' })
+  await ui.press({ key: 'takeover:confirm' })
+  await seen.clock.settle()
+
+  expect(seen.toasts).toEqual(['#17 已改由 Session 77e0aa15 执行，没有接管。'])
+  expect(seen.filled).toEqual([])
+  await ui.unmount()
+})
+
+// A take-over confirmed where the Execute Prompt could not follow.
+const takeOverUnfollowed = async ($: Engine, on: On, options: { skills: () => Answer; draft?: string }) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => OCCUPIED, ...options })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await focus($, 'task:17')
+  await ui.press({ key: 'takeover' })
+  await ui.press({ key: 'takeover:confirm' })
+  await seen.clock.settle()
+
+  expect(seen.calls.filter(call => call.tool === 'deck_occupy')).toEqual([])
+  expect(seen.filled).toEqual([])
+  expect((await ui.find({ key: 'takeover' }))?.text).toBe('接管')
+  await ui.unmount()
+
+  return seen.toasts
+}
+
+test('without /implement in the Skill Source, a confirmed take-over leaves the Occupancy where it is and says so', async ($, on) => {
+  expect(await takeOverUnfollowed($, on, { skills: () => PLUGIN_SKILLS })).toEqual([
+    'Skill Source 里没有 implement 技能，没有接管 #17。',
+  ])
+})
+
+test('with a draft in the prompt box, a confirmed take-over leaves the Occupancy where it is and says so', async ($, on) => {
+  expect(
+    await takeOverUnfollowed($, on, { skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT, draft: '先看一下 #7 的' }),
+  ).toEqual(['输入框里已有草稿，没有接管 #17。清空后再接管。'])
 })
 
 test('above the prompt the take-over confirmation is the third row with its keys and the fourth saying what it does', async ($, on) => {
@@ -2337,7 +2410,7 @@ test('e on the Recommendation of another Session\'s Task asks to take it over fi
   await ui.press({ key: 'takeover:confirm' })
   await seen.clock.settle()
   expect(seen.calls.filter(call => call.tool === 'deck_occupy').map(call => call.args)).toEqual([
-    { session: 'a1b2c3d4-session', task: 17, takeOver: true },
+    { session: 'a1b2c3d4-session', task: 17, takeOver: '3f9c21d0-other' },
   ])
   expect(seen.filled.map(fill => fill.text)).toEqual([executePrompt('/implement', 17)])
   await ui.unmount()

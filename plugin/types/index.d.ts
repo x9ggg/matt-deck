@@ -78,7 +78,8 @@ export type DeckOccupyAnswer =
   | { ok: true; occupied: boolean; occupant: string }
   | { ok: false; failure: { kind: TaskFailure['kind'] | 'not-open'; message: string } }
 
-// What `deck_release` answers: whether the Task had an Occupancy to release.
+// What `deck_release` answers: whether the Session held an Occupancy of the
+// Task to release.
 export type DeckReleaseAnswer = { ok: true; released: boolean } | { ok: false; failure: TaskFailure }
 
 // A skill of the Skill Source as `deck_skills` lists it: `call` is how this

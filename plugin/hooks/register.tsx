@@ -250,9 +250,19 @@ const executeTask = async ($: EngineInterface, number: number, surface: RenderSu
   await prefill($, text, surface)
 }
 
-// Takes the Task `number` over from the Session holding it, as the person
-// confirmed, and puts its Execute Prompt in the prompt box.
-const takeOverTask = async ($: EngineInterface, number: number, surface: RenderSurface) => {
+// Takes the Task `number` over from the Session `from`, as the person
+// confirmed, and puts its Execute Prompt in the prompt box. Where the prompt
+// could not follow, no /implement to call or a draft in the box, the
+// Occupancy stays where it is; so does one a third Session holds by now.
+const takeOverTask = async ($: EngineInterface, number: number, from: string, surface: RenderSurface) => {
+  if ((await implementCall($)) === undefined) {
+    $.ui.toast(`Skill Source 里没有 ${IMPLEMENT} 技能，没有接管 #${number}。`)
+    return
+  }
+  if ((await $.prompt.read()).text.trim() !== '') {
+    $.ui.toast(`输入框里已有草稿，没有接管 #${number}。清空后再接管。`)
+    return
+  }
   const deck = await $.mcp.connect('deck')
   let answer: DeckOccupyAnswer
   if (!deck.isConnected) {
@@ -261,35 +271,42 @@ const takeOverTask = async ($: EngineInterface, number: number, surface: RenderS
     const result = await $.mcp.call(deck.server, 'deck_occupy', {
       session: (await read($, view)).sessionId,
       task: number,
-      takeOver: true,
+      takeOver: from,
     })
     answer = result.isError
       ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
       : JSON.parse(result.content[0]!.text!)
   }
-  if (answer.ok) {
-    await executeTask($, number, surface)
-  } else {
+  if (!answer.ok) {
     $.ui.toast(`#${number} 没有接管：${answer.failure.message}`)
+  } else if (!answer.occupied) {
+    $.ui.toast(`#${number} 已改由 Session ${answer.occupant.slice(0, 8)} 执行，没有接管。`)
+  } else {
+    await executeTask($, number, surface)
   }
   await loadTasks($, false)
 }
 
-// Releases the Occupancy of the Task `number`, so that another Session can
-// take it.
+// Releases this Session's Occupancy of the Task `number`, so that another
+// Session can take it. One that passed to another Session since stays.
 const releaseTask = async ($: EngineInterface, number: number) => {
   const deck = await $.mcp.connect('deck')
   let answer: DeckReleaseAnswer
   if (!deck.isConnected) {
     answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
   } else {
-    const result = await $.mcp.call(deck.server, 'deck_release', { task: number })
+    const result = await $.mcp.call(deck.server, 'deck_release', {
+      task: number,
+      session: (await read($, view)).sessionId,
+    })
     answer = result.isError
       ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
       : JSON.parse(result.content[0]!.text!)
   }
   if (!answer.ok) {
     $.ui.toast(`#${number} 的 Occupancy 没有释放：${answer.failure.message}`)
+  } else if (!answer.released) {
+    $.ui.toast(`#${number} 的 Occupancy 已不在本 Session 上，没有释放。`)
   }
   await loadTasks($, false)
 }
@@ -671,10 +688,10 @@ export const register: Register = on => {
           await update($, nav, current => ({ ...current, takeover: number }))
           await moveFocus('takeover:cancel')
         })(),
-      takeOver: number =>
+      takeOver: (number, from) =>
         void (async () => {
           const after = await update($, nav, current => ({ ...current, takeover: undefined }))
-          await takeOverTask($, number, e.surface)
+          await takeOverTask($, number, from, e.surface)
           await backToRow(after)
         })(),
       cancelTakeOver: () =>

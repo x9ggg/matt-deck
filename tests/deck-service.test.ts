@@ -1423,57 +1423,74 @@ test('deck_occupy occupies only an open Task of the Task Source, and takes a Ses
   assert.equal(offline.structuredContent.failure.kind, 'offline')
 })
 
-test('deck_occupy with takeOver moves a Task\'s Occupancy to this Session, which every Deck service of the repository lists', async t => {
+test('deck_occupy with takeOver moves the Occupancy of the Session it names to this Session, which every Deck service of the repository lists', async t => {
   const user = await home()
   const gh = await fakeGh()
-  await gh.issues([issue({ number: 3 }), issue({ number: 5 })])
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 }), issue({ number: 7 })])
   const here = startDeck(await configured(), { ...gh.env, HOME: user })
   t.after(here.stop)
   const elsewhere = startDeck(await configured(), { ...gh.env, HOME: user })
   t.after(elsewhere.stop)
   await elsewhere.callTool('deck_occupy', { session: 'session-b', task: 3 })
+  await elsewhere.callTool('deck_occupy', { session: 'session-c', task: 7 })
 
-  const taken = await here.callTool('deck_occupy', { session: 'session-a', task: 3, takeOver: true })
+  const taken = await here.callTool('deck_occupy', { session: 'session-a', task: 3, takeOver: 'session-b' })
   // A Task nobody holds is occupied as without takeOver.
-  const free = await here.callTool('deck_occupy', { session: 'session-a', task: 5, takeOver: true })
-  const malformed = await here.callTool('deck_occupy', { session: 'session-a', task: 3, takeOver: 'yes' })
+  const free = await here.callTool('deck_occupy', { session: 'session-a', task: 5, takeOver: 'session-b' })
+  // One that passed to a third Session since the person saw it stays there.
+  const passed = await here.callTool('deck_occupy', { session: 'session-a', task: 7, takeOver: 'session-b' })
+  const malformed = await Promise.all(
+    [true, ''].map(takeOver => here.callTool('deck_occupy', { session: 'session-a', task: 3, takeOver })),
+  )
 
   assert.deepEqual(taken.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
   assert.deepEqual(free.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
-  assert.equal(malformed.isError, true)
+  assert.deepEqual(passed.structuredContent, { ok: true, occupied: false, occupant: 'session-c' })
+  assert.deepEqual(
+    malformed.map(result => result.isError),
+    [true, true],
+  )
   for (const deck of [here, elsewhere]) {
     const { groups } = (await deck.callTool('deck_tasks')).structuredContent
-    assert.deepEqual(occupants(groups.inProgress), { 3: 'session-a', 5: 'session-a' })
+    assert.deepEqual(occupants(groups.inProgress), { 3: 'session-a', 5: 'session-a', 7: 'session-c' })
   }
 })
 
 test('deck_release releases any Session\'s Occupancy, and the Task goes back to the group it belongs in', async t => {
   const user = await home()
   const gh = await fakeGh()
-  await gh.issues([issue({ number: 3 }), issue({ number: 5, blockedBy: [3] }), issue({ number: 7 })])
+  await gh.issues([issue({ number: 3 }), issue({ number: 5, blockedBy: [3] }), issue({ number: 7 }), issue({ number: 9 })])
   const here = startDeck(await configured(), { ...gh.env, HOME: user })
   t.after(here.stop)
   const elsewhere = startDeck(await configured(), { ...gh.env, HOME: user })
   t.after(elsewhere.stop)
   await here.callTool('deck_occupy', { session: 'session-a', task: 3 })
   await elsewhere.callTool('deck_occupy', { session: 'session-b', task: 5 })
+  await elsewhere.callTool('deck_occupy', { session: 'session-b', task: 9 })
 
-  const own = await here.callTool('deck_release', { task: 3 })
+  const own = await here.callTool('deck_release', { task: 3, session: 'session-a' })
   // Another Session's: every Session is the same person's.
-  const others = await here.callTool('deck_release', { task: 5 })
-  const unoccupied = await here.callTool('deck_release', { task: 7 })
-  const malformed = await Promise.all([{ task: '#3' }, { task: 0 }, {}].map(args => here.callTool('deck_release', args)))
+  const others = await here.callTool('deck_release', { task: 5, session: 'session-b' })
+  const unoccupied = await here.callTool('deck_release', { task: 7, session: 'session-a' })
+  // One that passed to another Session since the person saw it stays there.
+  const passed = await here.callTool('deck_release', { task: 9, session: 'session-a' })
+  const malformed = await Promise.all(
+    [{ task: '#3', session: 'session-a' }, { task: 0, session: 'session-a' }, { task: 3 }, { task: 3, session: '' }, {}].map(args =>
+      here.callTool('deck_release', args),
+    ),
+  )
 
   assert.deepEqual(own.structuredContent, { ok: true, released: true })
   assert.deepEqual(others.structuredContent, { ok: true, released: true })
   assert.deepEqual(unoccupied.structuredContent, { ok: true, released: false })
+  assert.deepEqual(passed.structuredContent, { ok: true, released: false })
   assert.deepEqual(
     malformed.map(result => result.isError),
-    [true, true, true],
+    [true, true, true, true, true],
   )
   for (const deck of [here, elsewhere]) {
     const { groups } = (await deck.callTool('deck_tasks')).structuredContent
-    assert.deepEqual(groups.inProgress, [])
+    assert.deepEqual(occupants(groups.inProgress), { 9: 'session-b' })
     assert.deepEqual(numbers(groups.ready), [3, 7])
     assert.deepEqual(numbers(groups.blocked), [5])
   }

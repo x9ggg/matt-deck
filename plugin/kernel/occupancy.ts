@@ -5,17 +5,30 @@
 import { openState } from './state.ts'
 
 // Records `session`'s Occupancy of the Task `task`, unless another Session
-// holds one and `takeOver` does not move it to `session`; answers the
-// Session that holds it now.
-export const occupy = (home: string, source: string, task: number, session: string, now: number, takeOver: boolean) => {
+// holds one; the Occupancy `takeOverFrom` holds, the Session the person
+// confirmed taking the Task over from, moves to `session`. One that passed
+// to a third Session since stays with it. Answers the Session that holds
+// the Task now.
+export const occupy = (
+  home: string,
+  source: string,
+  task: number,
+  session: string,
+  now: number,
+  takeOverFrom: string | undefined,
+) => {
   const db = openState(home)
   try {
-    db.prepare(`INSERT OR ${takeOver ? 'REPLACE' : 'IGNORE'} INTO occupancies VALUES (?, ?, ?, ?)`).run(
-      source,
-      task,
-      session,
-      now,
-    )
+    if (takeOverFrom !== undefined) {
+      db.prepare('UPDATE occupancies SET session = ?, occupied_at = ? WHERE source = ? AND task = ? AND session = ?').run(
+        session,
+        now,
+        source,
+        task,
+        takeOverFrom,
+      )
+    }
+    db.prepare('INSERT OR IGNORE INTO occupancies VALUES (?, ?, ?, ?)').run(source, task, session, now)
     const row = db.prepare('SELECT session FROM occupancies WHERE source = ? AND task = ?').get(source, task)
 
     return row!.session as string
@@ -24,12 +37,15 @@ export const occupy = (home: string, source: string, task: number, session: stri
   }
 }
 
-// Releases the Occupancy of the Task `task`, whichever Session holds it;
-// answers whether there was one.
-export const release = (home: string, source: string, task: number) => {
+// Releases the Occupancy `session` holds of the Task `task`; answers whether
+// it held one. One that passed to another Session since stays with it.
+export const release = (home: string, source: string, task: number, session: string) => {
   const db = openState(home)
   try {
-    return db.prepare('DELETE FROM occupancies WHERE source = ? AND task = ?').run(source, task).changes > 0
+    return (
+      db.prepare('DELETE FROM occupancies WHERE source = ? AND task = ? AND session = ?').run(source, task, session)
+        .changes > 0
+    )
   } finally {
     db.close()
   }
