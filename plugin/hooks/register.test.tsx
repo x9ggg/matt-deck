@@ -234,7 +234,7 @@ const engine = (
     isDropped = () => false,
   }: {
     config: Answer | undefined
-    tasks?: () => Answer
+    tasks?: () => Answer | Promise<Answer>
     detail?: (number: number) => Answer
     isNarrow?: boolean
     skills?: () => Answer
@@ -275,6 +275,9 @@ const engine = (
     ran: [] as { command: string; args: string }[],
     // The id `$.session.id()` answers: a /clear moves it on.
     sessionId: 'a1b2c3d4-session',
+    // Widening the terminal places a previously undrawn Pane, without ui.open.
+    widen: () => void (panes = panes.map(pane => ({ ...pane, isPlaced: true }))),
+    narrow: () => void (panes = panes.map(pane => ({ ...pane, isPlaced: false }))),
   }
   let asks = 0
   let panes: { id: string; isPlaced: boolean }[] = []
@@ -298,7 +301,7 @@ const engine = (
     await waitFor(e.tool)
     const answer =
       e.tool === 'deck_tasks'
-        ? tasks()
+        ? await tasks()
         : e.tool === 'deck_task'
           ? detail(e.args!.number as number)
           : e.tool === 'deck_skills'
@@ -732,6 +735,8 @@ test('the pane reads the Tasks again on its timer, after a turn, after a deck to
   const reads = () => seen.calls.filter(call => call.tool === 'deck_tasks').map(call => call.args)
   const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
   expect(reads()).toEqual([{}])
+  // The already closed Tasks and Spec in the first read are just a baseline.
+  expect(seen.toasts).toEqual([])
 
   // A Task changed on GitHub shows at the next timed read.
   answer = tasks({ done: [task(3, 'Pane 布局设计', { isOpen: false, closedAt: '2026-11-12T12:00:00Z' })] })
@@ -740,6 +745,8 @@ test('the pane reads the Tasks again on its timer, after a turn, after a deck to
   await seen.clock.advance(1_000)
   expect(reads()).toEqual([{}, {}])
   expect(await ui.find({ type: 'Button', text: /^◆ #3 / })).toBeDefined()
+  // No parent in this read: no progress count.
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #3 Pane 布局设计'])
 
   // The end of one of this Session's turns: the turn may have changed the
   // Tasks a moment ago, so the read goes past the Deck service's cache.
@@ -763,6 +770,185 @@ test('the pane reads the Tasks again on its timer, after a turn, after a deck to
   // r reads past the Deck service's cache.
   await ui.press({ key: 'refresh' })
   expect(reads()).toEqual([{}, {}, { refresh: true }, { refresh: true }, { refresh: true }])
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #3 Pane 布局设计'])
+  await ui.unmount()
+})
+
+for (const kind of ['spec', 'map']) {
+  test(`a closed Child Task announces its title and the ${kind}'s progress from that read, only once`, async ($, on) => {
+    const project = (isOpen: boolean) => tasks({
+      containers: [spec(1, '上级', [15, 17], { closed: isOpen ? 0 : 1, inProgress: 0, total: 2 }, { kind })],
+      ready: [task(17, '继续'), ...(isOpen ? [task(15, '配置技能', { parent: 1 })] : [])],
+      done: isOpen ? [] : [task(15, '配置技能（已更新）', { parent: 1, isOpen: false })],
+    })
+    let answer = project(true)
+    const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+    await start($)
+    await seen.clock.settle()
+    const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+    answer = project(false)
+    await ui.press({ key: 'refresh' })
+    expect(seen.toasts).toEqual(['◆ 成就已解锁  #15 配置技能（已更新）  ·  1 / 2'])
+
+    // Even a Task reopened and closed again was already announced in this Pane.
+    answer = project(true)
+    await ui.press({ key: 'refresh' })
+    answer = project(false)
+    await ui.press({ key: 'refresh' })
+    expect(seen.toasts).toEqual(['◆ 成就已解锁  #15 配置技能（已更新）  ·  1 / 2'])
+    await ui.unmount()
+  })
+}
+
+test('Pending Closeout announces only the closed Child Task; closing the Spec announces the Spec itself', async ($, on) => {
+  let answer = tasks({
+    containers: [spec(1, '规格标题', [15], { closed: 0, inProgress: 0, total: 1 })],
+    inProgress: [task(15, '配置技能', { parent: 1, occupant: 'other-session' })],
+  })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  answer = tasks({
+    containers: [spec(1, '规格标题', [15], { closed: 1, inProgress: 0, total: 1 }, { isPendingCloseout: true })],
+    done: [task(15, '配置技能', { parent: 1, isOpen: false })],
+  })
+  await ui.press({ key: 'refresh' })
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #15 配置技能  ·  1 / 1'])
+  answer = tasks({
+    containers: [spec(1, '规格标题', [15], { closed: 1, inProgress: 0, total: 1 }, { isOpen: false, group: 'done' })],
+    done: [task(15, '配置技能', { parent: 1, isOpen: false })],
+  })
+  await ui.press({ key: 'refresh' })
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #15 配置技能  ·  1 / 1', '◆ 成就已解锁  #1 规格标题'])
+  await ui.unmount()
+})
+
+test('one read closing several Tasks announces their numbers together, without newly discovered closed Tasks', async ($, on) => {
+  let answer = tasks({ ready: [task(15, '配置技能')], blocked: [task(17, '安装', { blockers: [15] })] })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  answer = tasks({ done: [task(17, '安装', { isOpen: false }), task(15, '配置技能', { isOpen: false }), task(99, '刚读到', { isOpen: false })] })
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #15 #17'])
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #15 #17'])
+})
+
+test('failed reads neither establish nor erase the successful baseline for unlocks', async ($, on) => {
+  let answer: Answer = failed('offline')
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  answer = PROJECT
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual([])
+  answer = failed('offline')
+  await seen.clock.advance(60_000)
+  answer = tasks({ done: [task(3, 'Pane 布局设计', { isOpen: false })] })
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #3 Pane 布局设计'])
+})
+
+test('reopening the Pane starts a new baseline; changing its height keeps the current baseline', async ($, on) => {
+  let answer = tasks({ ready: [task(15, '配置技能'), task(17, '安装')] })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  await $.command.run(DECK_COMMAND)
+  answer = tasks({ ready: [task(17, '安装')], done: [task(15, '配置技能', { isOpen: false })] })
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual([])
+  await $.command.run(DECK_COMMAND)
+  answer = tasks({ done: [task(15, '配置技能', { isOpen: false }), task(17, '安装', { isOpen: false })] })
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual([])
+
+  answer = tasks({ ready: [task(19, '后来的 Task')] })
+  await seen.clock.advance(60_000)
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  await ui.press({ key: 'task:19' }) // Opening a detail changes the Pane's height with ui.open.
+  answer = tasks({ done: [task(19, '后来的 Task', { isOpen: false })] })
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #19 后来的 Task'])
+  await ui.unmount()
+})
+
+test('a Pane first placed by widening the terminal establishes its baseline then, without another open', async ($, on) => {
+  let answer = tasks({ ready: [task(15, '配置技能'), task(17, '安装')] })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, isNarrow: true, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  answer = tasks({ ready: [task(17, '安装')], done: [task(15, '配置技能', { isOpen: false })] })
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual([])
+  seen.widen()
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual([])
+  answer = tasks({ done: [task(15, '配置技能', { isOpen: false }), task(17, '安装', { isOpen: false })] })
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #17 安装'])
+})
+
+test('a closure read while the Pane is undrawn is not replayed when the terminal widens', async ($, on) => {
+  let answer = tasks({ ready: [task(15, '配置技能'), task(17, '安装')] })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  seen.narrow()
+  answer = tasks({ ready: [task(17, '安装')], done: [task(15, '配置技能', { isOpen: false })] })
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual([])
+  seen.widen()
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual([])
+
+  // Subsequent visible closures still announce normally.
+  answer = tasks({ done: [task(15, '配置技能', { isOpen: false }), task(17, '安装', { isOpen: false })] })
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #17 安装'])
+})
+
+test('an older read arriving after the terminal widens does not become the baseline', async ($, on) => {
+  let answer: Answer | Promise<Answer> = tasks({ ready: [task(15, '配置技能')] })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, isNarrow: true, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  let finish!: (answer: Answer) => void
+  answer = new Promise<Answer>(resolve => { finish = resolve })
+  await seen.clock.advance(60_000)
+  // #15 closes, and a newer read answers first while the Pane is still undrawn.
+  answer = tasks({ done: [task(15, '配置技能', { isOpen: false })] })
+  await $.tool.call({ tool: 'mcp__plugin_matt-deck_deck__deck_config' })
+  await seen.clock.settle()
+  seen.widen()
+  finish(tasks({ ready: [task(15, '配置技能')] }))
+  await seen.clock.settle()
+  await seen.clock.advance(60_000)
+  expect(seen.toasts).toEqual([])
+})
+
+test('overlapping reads announce a closure once and ignore an older response arriving late', async ($, on) => {
+  let answer: Answer | Promise<Answer> = tasks({ ready: [task(15, '配置技能'), task(17, '安装')] })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  let finish!: (answer: Answer) => void
+  answer = new Promise<Answer>(resolve => { finish = resolve })
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'refresh' })
+  answer = tasks({ ready: [task(15, '配置技能')], done: [task(17, '安装', { isOpen: false })] })
+  await $.tool.call({ tool: 'mcp__plugin_matt-deck_deck__deck_config' })
+  await seen.clock.settle()
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #17 安装'])
+  // An older response must not announce #15, now open again in the newer read.
+  finish(tasks({ ready: [task(17, '安装')], done: [task(15, '配置技能', { isOpen: false })] }))
+  await seen.clock.settle()
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #17 安装'])
+  answer = tasks({ done: [task(15, '配置技能', { isOpen: false }), task(17, '安装', { isOpen: false })] })
+  await Promise.all([ui.press({ key: 'refresh' }), ui.press({ key: 'refresh' })])
+  expect(seen.toasts).toEqual(['◆ 成就已解锁  #17 安装', '◆ 成就已解锁  #15 配置技能'])
   await ui.unmount()
 })
 
@@ -2675,6 +2861,55 @@ const clearableState = (on: On) => {
 
   return { clear: () => void (states = new Map()) }
 }
+
+for (const reason of ['clear', 'resume'] as const) {
+  test(`after ${reason} the first successful read is silent, including a read left over from the old Session`, async ($, on) => {
+    const state = clearableState(on)
+    let answer: Answer | Promise<Answer> = tasks({ ready: [task(15, '配置技能'), task(17, '安装')] })
+    const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+    await start($)
+    await seen.clock.settle()
+    const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+    let finish!: (answer: Answer) => void
+    answer = new Promise<Answer>(resolve => { finish = resolve })
+    await ui.press({ key: 'refresh' })
+    await $.session.end({ reason, sessionId: seen.sessionId, resume: { id: seen.sessionId } } as never)
+    if (reason === 'clear') {
+      state.clear()
+    } // Resume deliberately retains the old view, as a restored Session can.
+    seen.sessionId = `new-${reason}-session`
+    answer = tasks({ ready: [task(17, '安装')], done: [task(15, '配置技能', { isOpen: false })] })
+    await seen.clock.settle()
+    expect(seen.toasts).toEqual([])
+    finish(tasks({ done: [task(15, '配置技能', { isOpen: false }), task(17, '安装', { isOpen: false })] }))
+    await seen.clock.settle()
+    expect(seen.toasts).toEqual([])
+    answer = tasks({ done: [task(15, '配置技能', { isOpen: false }), task(17, '安装', { isOpen: false })] })
+    await seen.clock.advance(60_000)
+    expect(seen.toasts).toEqual(['◆ 成就已解锁  #17 安装'])
+    await ui.unmount()
+  })
+}
+
+test('a read started before the Pane was closed cannot announce or seed its reopened lifetime', async ($, on) => {
+  let answer: Answer | Promise<Answer> = tasks({ ready: [task(15, '配置技能'), task(17, '安装')] })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  let finish!: (answer: Answer) => void
+  answer = new Promise<Answer>(resolve => { finish = resolve })
+  await ui.press({ key: 'refresh' })
+  await $.command.run(DECK_COMMAND)
+  await $.command.run(DECK_COMMAND)
+  finish(tasks({ ready: [task(17, '安装')], done: [task(15, '配置技能', { isOpen: false })] }))
+  await seen.clock.settle()
+  expect(seen.toasts).toEqual([])
+  answer = tasks({ done: [task(15, '配置技能', { isOpen: false }), task(17, '安装', { isOpen: false })] })
+  await ui.press({ key: 'refresh' })
+  expect(seen.toasts).toEqual([])
+  await ui.unmount()
+})
 
 test('after a /clear the pane shows the Tasks again, its top naming the new Session', async ($, on) => {
   const state = clearableState(on)

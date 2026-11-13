@@ -1,5 +1,7 @@
-// The Claude Code host adapter: the Pane and its command. It holds no task
-// logic; everything about the project comes from the Deck service.
+// The Claude Code host adapter: the Pane and its command. Everything about
+// the project comes from the Deck service. The one thing judged here is which
+// Tasks closed between two of this Pane's own reads, because only the Pane
+// knows what it has already seen.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
@@ -21,6 +23,7 @@ import type {
   SkillsView,
   SkillTextView,
   Tab,
+  TaskList,
   TasksView,
   View,
 } from '../types'
@@ -111,6 +114,59 @@ const callWatched = async ($: EngineInterface, server: string, tool: string, arg
 
 const textOf = (answer: { content: { text?: string }[] }) => answer.content.map(block => block.text ?? '').join('\n')
 
+// Only this Pane's current lifetime remembers its reads and announcements.
+// Kept out of reactive/persisted state so a restored Session never replays
+// closures. Replacing the object also retires reads still in flight.
+const freshUnlocks = () => ({
+  previous: undefined as TaskList | undefined,
+  announced: new Set<number>(),
+  started: 0,
+  applied: 0,
+})
+let unlocks = freshUnlocks()
+let isPaneOpen = false
+
+const allTasks = (list: TaskList) => [...list.containers, ...Object.values(list.groups).flat()]
+
+const announceClosed = async ($: EngineInterface, list: TaskList, watching: typeof unlocks, order: number) => {
+  // An unasked open on a narrow terminal stays undrawn until it widens,
+  // without another ui.open event. Start observing only when it is placed.
+  const isPlaced = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isPlaced)
+  if (watching !== unlocks || !isPaneOpen || order <= watching.applied) {
+    return
+  }
+  watching.applied = order
+  // Undrawn before any baseline: keep waiting for the first placed read.
+  if (!isPlaced && watching.previous === undefined) {
+    return
+  }
+  const before = watching.previous
+  watching.previous = list
+  // A closure read while the Pane is undrawn is recorded, never announced later.
+  if (before === undefined || !isPlaced) {
+    return
+  }
+  const wasOpen = new Set(allTasks(before).filter(task => task.isOpen).map(task => task.number))
+  const closed = allTasks(list)
+    .filter(task => !task.isOpen && wasOpen.has(task.number) && !watching.announced.has(task.number))
+    .sort((a, b) => a.number - b.number)
+  if (closed.length === 0) {
+    return
+  }
+  for (const task of closed) {
+    watching.announced.add(task.number)
+  }
+  // A newer toast can replace this Mod's previous one: one read, one toast.
+  if (closed.length > 1) {
+    $.ui.toast(`◆ 成就已解锁  ${closed.map(task => `#${task.number}`).join(' ')}`)
+    return
+  }
+  const task = closed[0]!
+  const parent = list.containers.find(container => container.number === task.parent)
+  const progress = parent === undefined ? '' : `  ·  ${parent.progress.closed} / ${parent.progress.total}`
+  $.ui.toast(`◆ 成就已解锁  #${task.number} ${task.title}${progress}`)
+}
+
 const loadConfig = async ($: EngineInterface): Promise<ConfigView> => {
   const deck = await $.mcp.connect('deck')
   if (!deck.isConnected) {
@@ -131,6 +187,8 @@ const loadConfig = async ($: EngineInterface): Promise<ConfigView> => {
 // Reads the Tasks from the Deck service; `refresh` reads past its cache. A
 // failed read keeps the Tasks read before it.
 const loadTasks = async ($: EngineInterface, refresh: boolean) => {
+  const watching = unlocks
+  const order = ++watching.started
   const deck = await $.mcp.connect('deck')
   let answer: DeckTasksAnswer
   if (!deck.isConnected) {
@@ -151,6 +209,9 @@ const loadTasks = async ($: EngineInterface, refresh: boolean) => {
 
     return { ...current, tasks, checkedAt }
   })
+  if (answer.ok && (await $.session.id()) !== endedSession) {
+    await announceClosed($, answer, watching, order)
+  }
 }
 
 // Reads one Task's detail from the Deck service. A detail read before stays
@@ -482,6 +543,7 @@ let poll: { cancel: () => void } | undefined
 // Project, the Tasks and the skills, off the caller so it does not wait on
 // gh. The timed reads start once and go on across a /clear.
 const readSession = async ($: EngineInterface, sessionId: string) => {
+  unlocks = freshUnlocks()
   reading = sessionId
   try {
     const config = await loadConfig($)
@@ -516,6 +578,28 @@ const ensureSession = async ($: EngineInterface) => {
 }
 
 export const register: Register = on => {
+  on('ui.open', { id: PANE }, async ($, e, next) => {
+    const opened = await next(e)
+    if (opened.value !== undefined) {
+      if (!isPaneOpen) {
+        unlocks = freshUnlocks()
+      }
+      isPaneOpen = true
+    }
+
+    return opened
+  })
+
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    const closed = await next(e)
+    if (closed.deny === undefined) {
+      isPaneOpen = false
+      unlocks = freshUnlocks()
+    }
+
+    return closed
+  })
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({ name: COMMAND, description: '打开或关闭 Matt Deck 的 Pane' })
@@ -630,6 +714,7 @@ export const register: Register = on => {
   // again, under that one.
   on('session.end', async ($, e, next) => {
     endedSession = e.sessionId
+    unlocks = freshUnlocks()
     if (e.reason === 'clear') {
       await update($, ask, current => (current.status === 'held' ? { ...current, status: 'none' as const } : current))
     }
