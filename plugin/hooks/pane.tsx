@@ -1700,23 +1700,28 @@ export const drawPane = (
     )
   // The stages gone through, the one the request is at in bold, and those
   // to come. A request sent at once was never held: that stage is drawn as
-  // one it did not get to.
+  // one it did not get to. While the request is held, sent or running the
+  // bar holds n and does nothing with it: a key no Button holds goes to the
+  // prompt, and the keyboard with it.
   const stageBar = () => {
     const at = STAGES.findIndex(([status]) => status === ask.status)
+    const stages = STAGES.flatMap(([status, label], index) => [
+      ...(index > 0 ? [<Text dimColor={index > at}> › </Text>] : []),
+      index < at && (status !== 'held' || ask.wasHeld === true) ? (
+        <Text color="suggestion">{label}</Text>
+      ) : index === at ? (
+        <Text bold>{label}</Text>
+      ) : (
+        <Text dimColor>{label}</Text>
+      ),
+    ])
 
-    return (
-      <Box flexDirection="row">
-        {STAGES.flatMap(([status, label], index) => [
-          ...(index > 0 ? [<Text dimColor={index > at}> › </Text>] : []),
-          index < at && (status !== 'held' || ask.wasHeld === true) ? (
-            <Text color="suggestion">{label}</Text>
-          ) : index === at ? (
-            <Text bold>{label}</Text>
-          ) : (
-            <Text dimColor>{label}</Text>
-          ),
-        ])}
-      </Box>
+    return isPending ? (
+      <Button key="stages" plain hotkey="n" onPress={() => undefined}>
+        {stages}
+      </Button>
+    ) : (
+      <Box flexDirection="row">{stages}</Box>
     )
   }
   const cancel = <Button key="cancel" plain hotkey="c" label="取消" onPress={actions.cancelAsk} />

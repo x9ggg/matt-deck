@@ -2012,6 +2012,66 @@ test('n while the Session is busy holds the request, which goes once the turn ha
   await ui.unmount()
 })
 
+test('while the request is held, sent or running, n is taken by the stages, in both placements, and does nothing', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const docked = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await docked.press({ key: 'tab:next' })
+  const asks = () => seen.calls.filter(call => call.tool === 'deck_ask').length
+  // A key no Button of the Pane holds goes to the prompt, and the keyboard
+  // with it: one Button holds n, and pressing it makes nothing.
+  const expectStagesTakeN = async (stage: string) => {
+    for (const target of [PANE_TARGET, INLINE]) {
+      const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+      const holders = (await ui.findAll({ type: 'Button' })).filter(button => button.props.hotkey === 'n')
+      expect(holders).toHaveLength(1)
+      const [before, ran] = [asks(), seen.ran.length]
+      await ui.press({ key: holders[0].key! })
+      await seen.clock.advance(100)
+      expect([asks(), seen.ran.length]).toEqual([before, ran])
+      expect((await ui.find({ type: 'Text', text: stage }))?.props).toEqual(expect.objectContaining({ bold: true }))
+      await ui.unmount()
+    }
+  }
+  await turnStart($, 't1')
+  await docked.press({ key: 'ask' })
+
+  await docked.unmount()
+
+  await expectStagesTakeN('持有中')
+  await turnEnd($, 't1')
+  await seen.clock.advance(100)
+  expect(seen.ran).toHaveLength(1)
+  await expectStagesTakeN('已发出')
+  await turnStart($, 't2', '/mattpocock-skills:ask-matt Matt Deck Recommendation Request request-1. 快照 1')
+  await expectStagesTakeN('运行中')
+
+  expect(asks()).toBe(1)
+})
+
+test('n pressed again and again while the request is held, then c, cancels it', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+  await turnStart($, 't1')
+  await ui.press({ key: 'ask' })
+  const stages = (await ui.findAll({ type: 'Button' })).find(button => button.props.hotkey === 'n')!
+
+  await ui.press({ key: stages.key! })
+  await ui.press({ key: stages.key! })
+  await ui.press({ key: 'cancel' })
+  await turnEnd($, 't1')
+  await seen.clock.advance(1_000)
+
+  expect(seen.calls.filter(call => call.tool === 'deck_ask')).toEqual([])
+  expect(seen.ran).toEqual([])
+  expect(await texts(ui)).toContain('已取消。请求没有发出。')
+  await ui.unmount()
+})
+
 test('a held request can be cancelled, and is not sent when the turn ends', async ($, on) => {
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
   await start($)
