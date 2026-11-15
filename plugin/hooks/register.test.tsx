@@ -743,6 +743,59 @@ test('the tasks tab lists open Specs and Maps first, then the Tasks by group', a
   }
 })
 
+// #3, the one ready Task, taken by another Session, under a Spec or a Map.
+const noneReady = (kind: 'spec' | 'map') =>
+  tasks({
+    containers: [
+      spec(1, '规格：里程碑一，Claude Code 上的 Matt Deck 闭环', [2, 3, 5, 7], { closed: 1, inProgress: 1, total: 4 }, { kind }),
+    ],
+    inProgress: [task(3, 'Pane 布局设计', { labels: ['ready-for-human'], parent: 1, occupant: '3f9c21d0-other' })],
+    blocked: [
+      task(5, '任务列表：按分组展示 Task', { labels: ['ready-for-agent'], parent: 1, blockers: [3] }),
+      task(7, 'Map View', { labels: ['ready-for-agent'], parent: 1, blockers: [3, 5] }),
+    ],
+  })
+
+test('with no Task ready the focus lands on the first row, a Spec or a Map as well', async ($, on) => {
+  let answer = PROJECT
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  const landings = async (ui: { findAll: (query: { type: string }) => Promise<{ key?: string; props: { autoFocus?: true } }[]> }) =>
+    (await ui.findAll({ type: 'Button' })).filter(button => button.props.autoFocus === true).map(button => button.key)
+
+  for (const target of [PANE_TARGET, INLINE]) {
+    const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+    expect(await landings(ui)).toEqual(['task:3'])
+    await ui.unmount()
+  }
+
+  // #3, the one ready Task, is taken by another Session while the pane is open.
+  for (const [kind, head] of [['spec', 'Spec'], ['map', 'Map']] as const) {
+    answer = noneReady(kind)
+    await seen.clock.advance(60_000)
+    for (const target of [PANE_TARGET, INLINE]) {
+      // The focus was last on #3, which stays listed, in progress.
+      await focus($, 'task:3')
+      const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+      expect(await landings(ui)).toEqual(['task:1'])
+      // The engine moves the focus onto that row as the pane takes the
+      // keyboard (`docs/pane-layout.md`, the eighth round), and the action
+      // bar follows it: docked `#1 …`, above the prompt `◇ Spec #1 <title> …`.
+      await focus($, 'task:1')
+      expect(
+        await ui.find({ type: 'Box', text: new RegExp(`^(#1 |◇ ${head} #1 .*)◇ 0  ▶ 1  □ 2  ◆ 0地图  详情$`) }),
+      ).toBeDefined()
+
+      // The map tab's tree has no ready Task either: its first row.
+      await ui.press({ key: 'tab:map' })
+      expect(await landings(ui)).toEqual(['task:3'])
+      await ui.press({ key: 'tab:tasks' })
+      await ui.unmount()
+    }
+  }
+})
+
 test('the action bar follows the focus from row to row and keeps the last row', async ($, on) => {
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
   await start($)

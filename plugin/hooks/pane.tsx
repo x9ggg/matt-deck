@@ -651,11 +651,12 @@ export const drawPane = (
 
   // A docked list row, filling the pane's width: glyph, number, title cut to
   // what is left, the status at the right end. It takes the focus when the
-  // pane takes the keyboard if it is where the focus lands, and opens its
-  // Task when pressed, unless told otherwise.
+  // pane takes the keyboard if it is where the focus lands (told by key: a
+  // Spec's or Map's row is drawn from a Row built anew), and opens its Task
+  // when pressed, unless told otherwise.
   const docked = (
     row: Row,
-    { isLanding = row === landing, onPress = () => actions.openTask(numberOf(row)) } = {},
+    { isLanding = row.key === landing?.key, onPress = () => actions.openTask(numberOf(row)) } = {},
   ) => {
     if ('container' in row) {
       const { container } = row
@@ -967,7 +968,7 @@ export const drawPane = (
                 'container' in row ? containerGlyph(row.container) : taskGlyph(row.task, row.group, row.group === 'blocked'),
                 <Text dimColor={'group' in row && row.group === 'blocked'}>{labelOf(row).slice(1)}</Text>,
               ],
-              isLanding: row === landing,
+              isLanding: row.key === landing?.key,
               onPress: () => actions.openTask(numberOf(row)),
             })),
             columns - filterWidth - 2,
