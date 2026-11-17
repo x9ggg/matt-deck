@@ -1405,6 +1405,10 @@ test('a Task waiting on triage or information, with no blocker, is blocked, its 
     await focus($, `task:${number}`)
     expect((await docked.find({ key: `task:${number}` }))?.text).toMatch(new RegExp(`^□ #${number} .* ${label}$`))
     expect(await texts(docked)).toContain(`#${number} ${label}`)
+    // Its row is dimmed whole, as a row with a blocker is.
+    expect((await docked.find({ key: `task:${number}` }))?.children).toEqual(
+      Array(4).fill(expect.objectContaining({ props: expect.objectContaining({ dimColor: true }) })),
+    )
     await docked.unmount()
 
     for (const columns of [96, 60]) {
@@ -1418,10 +1422,12 @@ test('a Task waiting on triage or information, with no blocker, is blocked, its 
   }
 
   // A blocked Task's bar still says its blockers, then its label.
-  const ui = await $.ui.mount({ ...inline(96), surface: 'terminal' })
-  await focus($, 'task:5')
-  expect(await texts(ui, 'Box')).toContain('□ #5 任务列表   被 #3 阻塞   ready-for-agent详情')
-  await ui.unmount()
+  for (const columns of [96, 60]) {
+    const ui = await $.ui.mount({ ...inline(columns), surface: 'terminal' })
+    await focus($, 'task:5')
+    expect(await texts(ui, 'Box')).toContain('□ #5 任务列表   被 #3 阻塞   ready-for-agent详情')
+    await ui.unmount()
+  }
 })
 
 test('the tabs switch the content under the top, which stays', async ($, on) => {
