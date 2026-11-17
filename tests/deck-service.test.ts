@@ -775,6 +775,20 @@ test('deck_tasks groups the Tasks of the Task Source', async t => {
   assert.deepEqual(groups.done[0].blockers, [])
 })
 
+test('deck_tasks lists a Task waiting on triage or information in progress while a Session occupies it', async t => {
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 8, labels: ['needs-triage'] }), issue({ number: 9, labels: ['needs-info'] })])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: await home() })
+  t.after(deck.stop)
+
+  await deck.callTool('deck_occupy', { session: 'session-a', task: 8 })
+  await deck.callTool('deck_occupy', { session: 'session-b', task: 9 })
+
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+  assert.deepEqual(occupants(groups.inProgress), { 8: 'session-a', 9: 'session-b' })
+  assert.deepEqual(groups.blocked, [])
+})
+
 test('deck_tasks reads Blocking Edges from the body when GitHub has no native dependency', async t => {
   const gh = await fakeGh()
   await gh.issues([

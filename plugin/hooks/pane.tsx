@@ -633,7 +633,9 @@ export const drawPane = (
     const { task, group } = row
     const said = status(task, group)
     const label = task.labels.find(label => TRIAGE_LABELS.includes(label)) ?? ''
-    const tail = `${said === '' ? '' : `   ${said}`}${label === '' ? '' : `   ${label}`}`
+    // A Task waiting on triage or information says its label as its status,
+    // and so only once.
+    const tail = `${said === '' ? '' : `   ${said}`}${label === '' || label === said ? '' : `   ${label}`}`
     const evidenceWidth = isEvidenced(task) ? width(`  ${EVIDENCE}`) : 0
 
     return (

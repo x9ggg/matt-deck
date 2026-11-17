@@ -1385,6 +1385,45 @@ test('above the prompt the list row turns pages by width', async ($, on) => {
   await ui.unmount()
 })
 
+test('a Task waiting on triage or information, with no blocker, is blocked, its row ending in its label, written once above the prompt', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () =>
+      tasks({
+        blocked: [
+          task(8, '等分诊', { labels: ['needs-triage'] }),
+          task(9, '等补充', { labels: ['needs-info'] }),
+          task(5, '任务列表', { labels: ['ready-for-agent'], blockers: [3] }),
+        ],
+      }),
+  })
+  await start($)
+  await seen.clock.settle()
+
+  for (const [number, label] of [[8, 'needs-triage'], [9, 'needs-info']] as const) {
+    const docked = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+    await focus($, `task:${number}`)
+    expect((await docked.find({ key: `task:${number}` }))?.text).toMatch(new RegExp(`^□ #${number} .* ${label}$`))
+    expect(await texts(docked)).toContain(`#${number} ${label}`)
+    await docked.unmount()
+
+    for (const columns of [96, 60]) {
+      const ui = await $.ui.mount({ ...inline(columns), surface: 'terminal' })
+      await focus($, `task:${number}`)
+      const bar = (await ui.find({ type: 'Box', text: new RegExp(`^□ #${number} .*详情$`) }))?.text
+      expect(bar).toMatch(new RegExp(`^□ #${number} .*   ${label}详情$`))
+      expect(bar!.split(label).length - 1).toBe(1)
+      await ui.unmount()
+    }
+  }
+
+  // A blocked Task's bar still says its blockers, then its label.
+  const ui = await $.ui.mount({ ...inline(96), surface: 'terminal' })
+  await focus($, 'task:5')
+  expect(await texts(ui, 'Box')).toContain('□ #5 任务列表   被 #3 阻塞   ready-for-agent详情')
+  await ui.unmount()
+})
+
 test('the tabs switch the content under the top, which stays', async ($, on) => {
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
   await start($)
