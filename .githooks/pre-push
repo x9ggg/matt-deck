@@ -1,0 +1,31 @@
+#!/bin/sh
+# Pushing to origin publishes. Refuses a commit whose author or committer
+# email is not one of GitHub's noreply ones, or whose message or added lines
+# hold a path of the machine it was written on (private-paths, beside this).
+paths="$(dirname "$0")/private-paths"
+zero=$(git hash-object --stdin </dev/null | tr '0-9a-f' '0')
+status=0
+
+while read -r _ local_sha _ remote_sha; do
+  # A deleted ref pushes nothing.
+  [ "$local_sha" = "$zero" ] && continue
+  if [ "$remote_sha" = "$zero" ]; then
+    commits=$(git rev-list "$local_sha" --not --remotes="$1")
+  else
+    commits=$(git rev-list "$remote_sha..$local_sha")
+  fi
+  for commit in $commits; do
+    found=$(
+      git log -1 --format='%ae%n%ce' "$commit" | grep -v -e '@users\.noreply\.github\.com$' -e '^noreply@github\.com$'
+      git log -1 --format=%B "$commit" | grep -E -f "$paths"
+      git show --format= "$commit" | grep '^+' | grep -E -f "$paths"
+    )
+    if [ -n "$found" ]; then
+      echo "pre-push: $(git log -1 --format='%h %s' "$commit")" >&2
+      echo "$found" | sed 's/^/  /' >&2
+      status=1
+    fi
+  done
+done
+
+exit $status

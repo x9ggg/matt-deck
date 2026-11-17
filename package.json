@@ -2,6 +2,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/ && claude plugin test plugin"
+    "test": "node --test tests/ && claude plugin test plugin",
+    "check": "npx --yes -p typescript@5.9.3 -p @types/node@24 -c 'tsc --noEmit --strict --skipLibCheck --module nodenext --target esnext --allowImportingTsExtensions --typeRoots \"$(dirname \"$(dirname \"$(command -v tsc)\")\")/@types\" --types node plugin/server/main.ts plugin/cli/main.ts plugin/cli/end-session.ts tests/*.test.ts'"
   }
 }
