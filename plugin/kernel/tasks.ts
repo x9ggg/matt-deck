@@ -244,13 +244,17 @@ const QUERY = `query($owner: String!, $name: String!, $endCursor: String) {
       nodes {
         number title state closedAt body
         labels(first: 50) { nodes { name } }
-        parent { number }
-        blockedBy(first: 50) { nodes { number } }
+        parent { number repository { nameWithOwner } }
+        blockedBy(first: 50) { nodes { number repository { nameWithOwner } } }
       }
       pageInfo { hasNextPage endCursor }
     }
   }
 }`
+
+// An issue a sub-issue parent or a native dependency points at, which may be
+// in another repository.
+type IssueRef = { number: number; repository: { nameWithOwner: string } }
 
 type IssueNode = {
   number: number
@@ -259,8 +263,8 @@ type IssueNode = {
   closedAt: string | null
   body: string
   labels: { nodes: { name: string }[] }
-  parent: { number: number } | null
-  blockedBy: { nodes: { number: number }[] }
+  parent: IssueRef | null
+  blockedBy: { nodes: IssueRef[] }
 }
 
 const gh = (workspace: string, args: string[]) =>
@@ -363,29 +367,38 @@ export const githubIssues = (workspace: string): TaskSource => ({
     const pages: { data: { repository: { nameWithOwner: string; issues: { nodes: IssueNode[] } } } }[] =
       JSON.parse(stdout)
 
+    const identity = pages[0]!.data.repository.nameWithOwner
     const tasks = pages
       .flatMap(page => page.data.repository.issues.nodes)
-      .map(node => ({
-        number: node.number,
-        title: node.title,
-        isOpen: node.state === 'OPEN',
-        closedAt: node.closedAt,
-        labels: node.labels.nodes.map(label => label.name),
-        isMap: node.labels.nodes.some(label => label.name === 'wayfinder:map'),
-        // A sub-issue first, then the body's `Parent` section, then a `Part
-        // of #n` line at its top.
-        parent:
-          node.parent?.number ??
-          references(declared(node.body, 'Parent') ?? '')[0] ??
-          references(node.body.trimStart().match(/^Part of #\d+/i)?.[0] ?? '')[0] ??
-          null,
-        // GitHub's own dependencies first; without any, the body's.
-        blockedBy:
-          node.blockedBy.nodes.length > 0
-            ? node.blockedBy.nodes.map(blocker => blocker.number)
-            : references(declared(node.body, 'Blocked by') ?? ''),
-      }))
+      .map(node => {
+        // A parent or blocker in another repository is not this
+        // repository's issue of the same number; it is taken as if GitHub
+        // had not given it.
+        const parent = node.parent?.repository.nameWithOwner === identity ? node.parent.number : undefined
+        const blockers = node.blockedBy.nodes
+          .filter(blocker => blocker.repository.nameWithOwner === identity)
+          .map(blocker => blocker.number)
 
-    return { identity: pages[0]!.data.repository.nameWithOwner, tasks }
+        return {
+          number: node.number,
+          title: node.title,
+          isOpen: node.state === 'OPEN',
+          closedAt: node.closedAt,
+          labels: node.labels.nodes.map(label => label.name),
+          isMap: node.labels.nodes.some(label => label.name === 'wayfinder:map'),
+          // A sub-issue first, then the body's `Parent` section, then a `Part
+          // of #n` line at its top.
+          parent:
+            parent ??
+            references(declared(node.body, 'Parent') ?? '')[0] ??
+            references(node.body.trimStart().match(/^Part of #\d+/i)?.[0] ?? '')[0] ??
+            null,
+          // GitHub's own dependencies first; without any in this repository,
+          // the body's.
+          blockedBy: blockers.length > 0 ? blockers : references(declared(node.body, 'Blocked by') ?? ''),
+        }
+      })
+
+    return { identity, tasks }
   },
 })

@@ -439,6 +439,9 @@ test('deck_allow_service writes where the Session runs, which is where Claude Co
   })
 })
 
+// The repository the fake `gh` answers for unless a test names another.
+const thisRepository = 'acme/shop'
+
 // A `gh` on the Deck service's PATH that answers with prepared JSON (see
 // fake-gh.ts). `answer` sets what every later call gets; `calls` lists the
 // calls made so far.
@@ -455,7 +458,7 @@ const fakeGh = async () => {
     answer,
     // The issues GitHub's GraphQL API answers, as `gh api graphql --paginate
     // --slurp` prints them: one page, of the repository `repository`.
-    issues: (nodes: object[], repository = 'acme/shop') =>
+    issues: (nodes: object[], repository = thisRepository) =>
       answer({
         stdout: [
           {
@@ -473,7 +476,13 @@ const fakeGh = async () => {
   }
 }
 
-// One issue as the GraphQL query reads it.
+// One issue as the GraphQL query reads it. A parent or blocker given by its
+// number is in `thisRepository`, the one `issues` answers for by default.
+type IssueGiven = number | { number: number; repository: string }
+const ref = (value: IssueGiven) =>
+  typeof value === 'number'
+    ? { number: value, repository: { nameWithOwner: thisRepository } }
+    : { number: value.number, repository: { nameWithOwner: value.repository } }
 const issue = ({
   number,
   title = `Task ${number}`,
@@ -490,8 +499,8 @@ const issue = ({
   closedAt?: string | null
   labels?: string[]
   body?: string
-  parent?: number | null
-  blockedBy?: number[]
+  parent?: IssueGiven | null
+  blockedBy?: IssueGiven[]
 }) => ({
   number,
   title,
@@ -499,8 +508,8 @@ const issue = ({
   closedAt,
   body,
   labels: { nodes: labels.map(name => ({ name })) },
-  parent: parent === null ? null : { number: parent },
-  blockedBy: { nodes: blockedBy.map(number => ({ number })) },
+  parent: parent === null ? null : ref(parent),
+  blockedBy: { nodes: blockedBy.map(ref) },
 })
 
 const configured = () =>
@@ -817,6 +826,40 @@ test('deck_tasks reads Blocking Edges from the body when GitHub has no native de
   )
 })
 
+test('deck_tasks takes no native Blocking Edge to another repository\'s issue for the Task of the same number', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 3 }),
+    issue({ number: 4 }),
+    // Blocked by acme/web#3, not this repository's open #3.
+    issue({ number: 5, blockedBy: [{ number: 3, repository: 'acme/web' }] }),
+    // Blocked here by #4 and elsewhere by other/lib#3: only #4 counts, and
+    // the body is not read.
+    issue({ number: 6, blockedBy: [4, { number: 3, repository: 'other/lib' }], body: 'Blocked by: #3\n' }),
+    // Blocked only elsewhere: the body's `Blocked by` is read.
+    issue({ number: 7, blockedBy: [{ number: 3, repository: 'acme/web' }], body: 'Blocked by: #4\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+  const edges = [...groups.ready, ...groups.blocked].map(
+    ({ number, blockers, blockedBy }: { number: number; blockers: number[]; blockedBy: number[] }) => ({
+      number,
+      blockers,
+      blockedBy,
+    }),
+  )
+
+  assert.deepEqual(edges, [
+    { number: 3, blockers: [], blockedBy: [] },
+    { number: 4, blockers: [], blockedBy: [] },
+    { number: 5, blockers: [], blockedBy: [] },
+    { number: 6, blockers: [4], blockedBy: [4] },
+    { number: 7, blockers: [4], blockedBy: [4] },
+  ])
+})
+
 test('deck_tasks keeps every Blocking Edge a Task declares, to closed Tasks and from closed ones too', async t => {
   const gh = await fakeGh()
   await gh.issues([
@@ -893,6 +936,33 @@ test('deck_tasks lists Specs and Maps apart from the groups, each with its Child
   assert.deepEqual(numbers(groups.done), [31, 2])
   assert.equal(groups.ready.find((task: any) => task.number === 12).parent, 10)
   assert.equal(groups.ready.find((task: any) => task.number === 40).parent, null)
+})
+
+test('deck_tasks takes no sub-issue parent from another repository for the Task of the same number', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 10, labels: ['wayfinder:map'] }),
+    issue({ number: 12 }),
+    // GitHub's parent is acme/web#12, not this repository's #12.
+    issue({ number: 5, parent: { number: 12, repository: 'acme/web' } }),
+    // Without a parent here, the body's Parent section stands.
+    issue({ number: 6, parent: { number: 12, repository: 'acme/web' }, body: '## Parent\n\n#10\n' }),
+    // And so does a `Part of` line.
+    issue({ number: 7, parent: { number: 12, repository: 'acme/web' }, body: 'Part of #10\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { containers, groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(
+    containers.map(({ kind, number, children }: any) => ({ kind, number, children })),
+    [{ kind: 'map', number: 10, children: [6, 7] }],
+  )
+  assert.deepEqual(numbers(groups.ready), [5, 6, 7, 12])
+  assert.equal(groups.ready.find((task: any) => task.number === 5).parent, null)
+  assert.equal(groups.ready.find((task: any) => task.number === 6).parent, 10)
+  assert.equal(groups.ready.find((task: any) => task.number === 7).parent, 10)
 })
 
 test('deck_tasks marks only open Specs with every Child Task closed as Pending Closeout, without closing them', async t => {
