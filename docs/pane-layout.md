@@ -292,8 +292,7 @@ f: 全部 17  ◇ 1  ▶ 3  □ 11  ◆ 2             ◀ 选中“全部”
 #1  待收尾核对        k: 收尾核对  m: 地图  ◀ Pending Closeout 的 Spec
 ```
 
-- Spec 或 Map 的四个计数数的是它全部直接的 Child Task，和进度数的是同一批，孙辈不计入。本身是 Spec 或 Map 的 Child Task 按它作为 Task 所在的分组计数，和 Map View 的画法一致：一个开着、没有 Occupancy、没被阻塞的子 Spec 计入“◇”，虽然 Spec 本身不能直接执行。
-
+- Spec 或 Map 的四个计数数的是它全部直接的 Child Task，和进度数的是同一批，孙辈不计入。本身是 Spec 或 Map 的 Child Task 按它作为 Task 所在的分组计数，和 Map View 的画法一致：一个开着、没有 Occupancy、没被阻塞的子 Spec 或子 Map 计入“可执行”，虽然 Spec 和 Map 本身不能直接执行。
 - 已经有两个动作时不画 `o: 详情`，在那一行上按回车照样钻进详情。
 
 筛选换到“进行中”：只画这个分组，不画分组标题，也不折叠。焦点在被其他 Session 占用的 Task 上：
