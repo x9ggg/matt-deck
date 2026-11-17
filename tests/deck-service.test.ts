@@ -860,6 +860,49 @@ test('deck_tasks takes no native Blocking Edge to another repository\'s issue fo
   ])
 })
 
+test('deck_tasks takes no Blocking Edge from a body\'s Blocked by to another repository\'s issue', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 3 }),
+    issue({ number: 4 }),
+    // Blocked by acme/web#3, not this repository's open #3.
+    issue({ number: 5, body: 'Blocked by: acme/web#3\n' }),
+    issue({ number: 6, body: '## Blocked by\n\n- https://github.com/acme/web/issues/3\n' }),
+    // Beside it, a reference to this repository still counts.
+    issue({ number: 7, body: '## Blocked by\n\n- https://github.com/acme/web/issues/3\n- #4\n' }),
+    issue({ number: 8, body: 'Blocked by: acme/web#3, #4\n' }),
+    issue({ number: 11, body: 'Blocked by: https://github.com/acme/web/issues/3\n' }),
+    issue({ number: 12, body: '## Blocked by\n\n- acme/web#3\n' }),
+    // This repository named in full, in any case, is this repository.
+    issue({ number: 9, body: 'Blocked by: ACME/Shop#3\n' }),
+    issue({ number: 10, body: '## Blocked by\n\n- https://github.com/Acme/SHOP/issues/4\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+  const edges = [...groups.ready, ...groups.blocked].map(
+    ({ number, blockers, blockedBy }: { number: number; blockers: number[]; blockedBy: number[] }) => ({
+      number,
+      blockers,
+      blockedBy,
+    }),
+  )
+
+  assert.deepEqual(edges, [
+    { number: 3, blockers: [], blockedBy: [] },
+    { number: 4, blockers: [], blockedBy: [] },
+    { number: 5, blockers: [], blockedBy: [] },
+    { number: 6, blockers: [], blockedBy: [] },
+    { number: 11, blockers: [], blockedBy: [] },
+    { number: 12, blockers: [], blockedBy: [] },
+    { number: 7, blockers: [4], blockedBy: [4] },
+    { number: 8, blockers: [4], blockedBy: [4] },
+    { number: 9, blockers: [3], blockedBy: [3] },
+    { number: 10, blockers: [4], blockedBy: [4] },
+  ])
+})
+
 test('deck_tasks keeps every Blocking Edge a Task declares, to closed Tasks and from closed ones too', async t => {
   const gh = await fakeGh()
   await gh.issues([
@@ -963,6 +1006,45 @@ test('deck_tasks takes no sub-issue parent from another repository for the Task 
   assert.equal(groups.ready.find((task: any) => task.number === 5).parent, null)
   assert.equal(groups.ready.find((task: any) => task.number === 6).parent, 10)
   assert.equal(groups.ready.find((task: any) => task.number === 7).parent, 10)
+})
+
+test('deck_tasks takes no parent from a Parent section that first names another repository\'s issue', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 10, labels: ['wayfinder:map'] }),
+    issue({ number: 12 }),
+    // The section names acme/web#12, not this repository's #12.
+    issue({ number: 5, body: '## Parent\n\nacme/web#12\n' }),
+    issue({ number: 6, body: '## Parent\n\nhttps://github.com/acme/web/issues/12\n' }),
+    // A later reference to this repository is not the parent either.
+    issue({ number: 7, body: '## Parent\n\nacme/web#12, like #10.\n' }),
+    // A `Part of` line still stands.
+    issue({ number: 8, body: 'Part of #10\n\n## Parent\n\nhttps://github.com/acme/web/issues/12\n' }),
+    // This repository named in full, in any case, is this repository.
+    issue({ number: 9, body: '## Parent\n\nACME/Shop#10\n' }),
+    issue({ number: 11, body: '## Parent\n\nhttps://github.com/Acme/SHOP/issues/10\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { containers, groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(
+    containers.map(({ kind, number, children }: any) => ({ kind, number, children })),
+    [{ kind: 'map', number: 10, children: [8, 9, 11] }],
+  )
+  assert.deepEqual(
+    groups.ready.map(({ number, parent }: any) => ({ number, parent })),
+    [
+      { number: 5, parent: null },
+      { number: 6, parent: null },
+      { number: 7, parent: null },
+      { number: 8, parent: 10 },
+      { number: 9, parent: 10 },
+      { number: 11, parent: 10 },
+      { number: 12, parent: null },
+    ],
+  )
 })
 
 test('deck_tasks marks only open Specs with every Child Task closed as Pending Closeout, without closing them', async t => {

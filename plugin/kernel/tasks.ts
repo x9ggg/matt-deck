@@ -311,8 +311,15 @@ const declared = (body: string, name: string): string | undefined => {
   return lines.slice(at + 1, end === -1 ? undefined : end).join('\n')
 }
 
-// The issues a text points at: `#12`, or a link ending in `/issues/12`.
-const references = (text: string) => [...text.matchAll(/(?:#|\/issues\/)(\d+)/g)].map(match => Number(match[1]))
+// The issues a text points at: `#12`, `owner/repo#12`, or a link ending in
+// `/issues/12` or `owner/repo/issues/12`. One that names a repository other
+// than `identity` is null: it is not this repository's issue of the same
+// number.
+const references = (text: string, identity: string) =>
+  [...text.matchAll(/(?:([\w.-]+\/[\w.-]+)?\/issues\/|(?:([\w.-]+\/[\w.-]+))?#)(\d+)/g)].map(match => {
+    const repository = match[1] ?? match[2]
+    return repository === undefined || repository.toLowerCase() === identity.toLowerCase() ? Number(match[3]) : null
+  })
 
 type ViewedIssue = {
   number: number
@@ -390,12 +397,17 @@ export const githubIssues = (workspace: string): TaskSource => ({
           // of #n` line at its top.
           parent:
             parent ??
-            references(declared(node.body, 'Parent') ?? '')[0] ??
-            references(node.body.trimStart().match(/^Part of #\d+/i)?.[0] ?? '')[0] ??
+            // The section's first reference is its parent; one in another
+            // repository gives none, and the `Part of` line is read next.
+            references(declared(node.body, 'Parent') ?? '', identity)[0] ??
+            references(node.body.trimStart().match(/^Part of #\d+/i)?.[0] ?? '', identity)[0] ??
             null,
           // GitHub's own dependencies first; without any in this repository,
-          // the body's.
-          blockedBy: blockers.length > 0 ? blockers : references(declared(node.body, 'Blocked by') ?? ''),
+          // the body's, leaving out those in another repository.
+          blockedBy:
+            blockers.length > 0
+              ? blockers
+              : references(declared(node.body, 'Blocked by') ?? '', identity).filter(number => number !== null),
         }
       })
 
