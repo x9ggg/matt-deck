@@ -14,6 +14,7 @@ import assert from 'node:assert/strict'
 const SERVER = join(import.meta.dirname, '..', 'plugin', 'server', 'main.ts')
 const FAKE_CLOCK = join(import.meta.dirname, 'fake-clock.ts')
 const CLI = join(import.meta.dirname, '..', 'plugin', 'cli', 'main.ts')
+const END_SESSION = join(import.meta.dirname, '..', 'plugin', 'cli', 'end-session.ts')
 const exec = promisify(execFile)
 
 // Unless a test gives it a HOME of its own, each Deck service keeps its local
@@ -651,6 +652,38 @@ test('the CLI prints the same inspection from a repository subdirectory and repo
     assert.deepEqual(JSON.parse(error.stdout), failed)
     return true
   })
+})
+
+test('the one-shot run a Session exits with records its end: its Occupancies show Orphaned at once', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  const env = { ...process.env, ...gh.env, HOME: user }
+  const deck = startDeck(await configured(), env)
+  t.after(deck.stop)
+  await gh.issues([issue({ number: 3 })])
+  await deck.callTool('deck_occupy', { task: 3, session: 'exiting' })
+  await deck.callTool('deck_heartbeat', { session: 'exiting' })
+  assert.deepEqual((await deck.callTool('deck_inspect')).structuredContent.occupancies, [
+    { task: 3, session: 'exiting', isOrphaned: false },
+  ])
+
+  const ran = await exec(process.execPath, [END_SESSION, 'exiting'], { env })
+
+  assert.deepEqual([ran.stdout, ran.stderr], ['', ''])
+  assert.deepEqual((await deck.callTool('deck_inspect')).structuredContent.occupancies, [
+    { task: 3, session: 'exiting', isOrphaned: true },
+  ])
+})
+
+test('the one-shot end of a Session takes exactly its id', async () => {
+  const env = { ...process.env, HOME: await home() }
+  for (const args of [[], [''], ['a', 'b']]) {
+    await assert.rejects(exec(process.execPath, [END_SESSION, ...args], { env }), (error: any) => {
+      assert.equal(error.code, 2)
+      assert.match(error.stderr, /Usage:/)
+      return true
+    })
+  }
 })
 
 test('the CLI explains unconfigured and malformed projects and validates arguments before reading', async () => {

@@ -746,9 +746,23 @@ export const register: Register = on => {
       await update($, ask, current => (current.status === 'held' ? { ...current, status: 'none' as const } : current))
     }
     if (heartbeat !== undefined) {
-      const deck = await $.mcp.connect('deck')
-      if (deck.isConnected) {
-        await $.mcp.call(deck.server, 'deck_end_session', { session: e.sessionId })
+      // As the process exits the Deck service has gone first, and connecting
+      // throws: a one-shot run of the kernel records the end instead (ADR-0005),
+      // within the time session.end has. Not recorded, the heartbeat expires.
+      const deck = await $.mcp.connect('deck').catch(() => undefined)
+      const isTold =
+        deck?.isConnected === true &&
+        (await $.mcp.call(deck.server, 'deck_end_session', { session: e.sessionId }).then(
+          () => true,
+          () => false,
+        ))
+      if (!isTold) {
+        await $.process
+          .hookEnv()
+          .then(env =>
+            $.process.run(['node', `${env.CLAUDE_PLUGIN_ROOT}/cli/end-session.ts`, e.sessionId], { timeoutMs: 1_000 }),
+          )
+          .catch(() => undefined)
       }
     }
     const ended = await next(e)

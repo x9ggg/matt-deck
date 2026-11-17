@@ -7,6 +7,7 @@ import type { On } from 'claude-code'
 
 const PANE = 'matt-deck'
 const SERVER = 'plugin:matt-deck:deck'
+const PLUGIN_ROOT = '/plugins/matt-deck'
 const WORKSPACE = '/work/shop'
 
 const CONFIGURED = {
@@ -235,6 +236,7 @@ const engine = (
     occupy = session => ({ isError: false, structuredContent: { ok: true, occupied: true, occupant: session } }),
     release = () => ({ isError: false, structuredContent: { ok: true, released: true } }),
     isDropped = () => false,
+    run = () => ({ exitCode: 0, stdout: '', stderr: '' }),
   }: {
     config: Answer | undefined
     tasks?: () => Answer | Promise<Answer>
@@ -260,6 +262,9 @@ const engine = (
     release?: (task: number) => Answer
     // Whether a hook beneath stops a prompt sent with `text`.
     isDropped?: (text: string) => boolean
+    // What a command the Mod runs on the host ends with; one that throws
+    // could not start or outlasted its time.
+    run?: (argv: readonly string[]) => { exitCode: number; stdout: string; stderr: string }
   },
 ) => {
   const seen = {
@@ -276,6 +281,8 @@ const engine = (
     toasts: [] as string[],
     // The commands the Mod ran, as the person typing them.
     ran: [] as { command: string; args: string }[],
+    // The commands the Mod ran on the host, with how it ran them.
+    processes: [] as { argv: readonly string[]; init?: { env?: Record<string, string>; timeoutMs?: number } }[],
     // The id `$.session.id()` answers: a /clear moves it on.
     sessionId: 'a1b2c3d4-session',
     // Widening the terminal places a previously undrawn Pane, without ui.open.
@@ -382,6 +389,12 @@ const engine = (
     return { text: '' }
   })
   on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+  on('process.hookEnv', () => ({ value: { CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT } }))
+  on('process.run', (_, e) => {
+    seen.processes.push(e)
+
+    return { value: { ...run(e.argv), isStdoutTruncated: false, isStderrTruncated: false } }
+  })
 
   return seen
 }
@@ -2940,6 +2953,93 @@ test('in a Configured Project the Session beats as it starts and every minute, a
 
   await $.session.end({ reason: 'prompt_input_exit', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
   expect(callsOf(seen, 'deck_end_session')).toEqual([{ session: 'a1b2c3d4-session' }])
+  expect(seen.processes).toEqual([])
+})
+
+// As the process exits, the Deck service has gone before session.end, and a
+// connection to it throws.
+const EXITING = new Error('$.mcp.connect is not available in this mode: no session is bound in this process')
+
+test('a Session exiting with the Deck service gone says it ended through a one-shot run of the kernel', async ($, on) => {
+  let isExiting = false
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    connecting: () => {
+      if (isExiting) throw EXITING
+    },
+  })
+  await start($)
+  await seen.clock.settle()
+
+  isExiting = true
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+
+  expect(callsOf(seen, 'deck_end_session')).toEqual([])
+  expect(seen.processes.map(({ argv }) => argv)).toEqual([
+    ['node', `${PLUGIN_ROOT}/cli/end-session.ts`, 'a1b2c3d4-session'],
+  ])
+  // Within the time session.end itself has (1.5 s).
+  expect(seen.processes[0]!.init!.timeoutMs! < 1_500).toBe(true)
+})
+
+test('a Session whose end the Deck service could not take records it through the one-shot run', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => (tool === 'deck_end_session' ? Promise.reject(new Error('MCP server disconnected')) : undefined),
+  })
+  await start($)
+  await seen.clock.settle()
+
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+
+  expect(seen.processes.map(({ argv }) => argv)).toEqual([
+    ['node', `${PLUGIN_ROOT}/cli/end-session.ts`, 'a1b2c3d4-session'],
+  ])
+})
+
+test('a Session exiting outside a Configured Project runs nothing on the host', async ($, on) => {
+  let isExiting = false
+  const seen = engine(on, {
+    config: { structuredContent: { configured: false, workspace: WORKSPACE }, isError: false },
+    connecting: () => {
+      if (isExiting) throw EXITING
+    },
+  })
+  await start($)
+  await seen.clock.settle()
+
+  isExiting = true
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+
+  expect(seen.processes).toEqual([])
+})
+
+test('a Session exits all the same when its one-shot run cannot start, outlasts its time or fails', async ($, on) => {
+  let isExiting = false
+  let runs = 0
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    connecting: () => {
+      if (isExiting) throw EXITING
+    },
+    run: () => {
+      runs++
+      if (runs === 1) throw new Error('spawn node ENOENT')
+      if (runs === 2) throw new Error('timed out after 1000 ms')
+
+      return { exitCode: 1, stdout: '', stderr: 'database is locked' }
+    },
+  })
+  await start($)
+  await seen.clock.settle()
+
+  isExiting = true
+  for (const _ of [1, 2, 3]) {
+    expect(
+      await $.session.end({ reason: 'prompt_input_exit', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never),
+    ).toEqual({ sessionId: 'a1b2c3d4-session' })
+  }
+  expect(seen.processes).toHaveLength(3)
 })
 
 test('outside a Configured Project the Session neither beats nor says it ended', async ($, on) => {
@@ -2963,6 +3063,7 @@ test('a /clear ends the Session it was, and the Session beats on under its new i
   await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
   await seen.clock.settle()
   expect(callsOf(seen, 'deck_end_session')).toEqual([{ session: 'a1b2c3d4-session' }])
+  expect(seen.processes).toEqual([])
   expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: 'a1b2c3d4-session' }, { session: '2c9f224f-cleared' }])
 
   // Once a minute, not twice.
