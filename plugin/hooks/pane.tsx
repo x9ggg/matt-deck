@@ -219,11 +219,15 @@ const containerRow = (container: Container): Row => ({ key: keyOf(container.numb
 
 const numberOf = (row: Row) => ('container' in row ? row.container.number : row.task.number)
 
-// How each of a Spec's or Map's Child Tasks stands, by group.
+// How each of a Spec's or Map's Child Tasks stands, by group. A Child Task
+// that is a Spec or Map itself counts where it stands as a Task, so the
+// four counts add up to its progress.
 const childCounts = (list: TaskList, container: Container) =>
   GROUPS.map(group => ({
     group,
-    count: list.groups[group].filter(task => task.parent === container.number).length,
+    count: [...list.containers.filter(child => child.group === group), ...list.groups[group]].filter(
+      child => child.parent === container.number,
+    ).length,
   }))
 
 const progressText = (container: Container) => `${container.progress.closed}/${container.progress.total}`

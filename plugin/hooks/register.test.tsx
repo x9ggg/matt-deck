@@ -796,6 +796,32 @@ test('with no Task ready the focus lands on the first row, a Spec or a Map as we
   }
 })
 
+// #1's Child Tasks: #2, an open Spec of its own over #3; #4, a closed Spec
+// over #6; #5, a ready Task. #3 and #6 are #1's grandchildren.
+const NESTED = tasks({
+  containers: [
+    spec(1, '上级规格', [2, 4, 5], { closed: 1, inProgress: 0, total: 3 }),
+    spec(2, '子规格', [3], { closed: 0, inProgress: 0, total: 1 }, { parent: 1 }),
+    spec(4, '已关闭的子规格', [6], { closed: 1, inProgress: 0, total: 1 }, { parent: 1, isOpen: false, group: 'done' }),
+  ],
+  ready: [task(3, '孙辈', { parent: 2 }), task(5, '直接的 Child Task', { parent: 1 })],
+  done: [task(6, '已关闭的孙辈', { parent: 4, isOpen: false, closedAt: '2026-11-11T12:00:00Z' })],
+})
+
+test("the action bar counts a Spec's Child Tasks that are Specs by their own group, as its progress does", async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => NESTED })
+  await start($)
+  await seen.clock.settle()
+
+  for (const target of [PANE_TARGET, INLINE]) {
+    const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+    await focus($, 'task:1')
+    // Progress 1/3: #2 and #5 ready, #4 done, #3 not counted.
+    expect(await ui.find({ type: 'Box', text: /^(#1 |◇ Spec #1 .*)◇ 2  ▶ 0  □ 0  ◆ 1地图  详情$/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
 test('the action bar follows the focus from row to row and keeps the last row', async ($, on) => {
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false } })
   await start($)
