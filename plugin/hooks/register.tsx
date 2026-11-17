@@ -534,39 +534,62 @@ const startHeartbeat = ($: EngineInterface) => {
   heartbeat = $.clock.every(HEARTBEAT_MS, beat)
 }
 
-// The Session whose project config is being read, and the timer of the timed
-// reads; kept here, not in the Session's state, which a /clear starts over.
-let reading: string | undefined
+// The read of the project config under way, with the Session it reads for;
+// whether what the start of a Session does is still to be done; and the
+// timer of the timed reads: kept here, not in the Session's state, which a
+// /clear starts over.
+let reading: { sessionId: string; done: Promise<void> } | undefined
+let isStartDue = false
 let poll: { cancel: () => void } | undefined
 
 // Reads the project config for the Session `sessionId`, then, in a Configured
 // Project, the Tasks and the skills, off the caller so it does not wait on
-// gh. The timed reads start once and go on across a /clear. At the start of
-// a Session the Pane opens where a project config exists, a malformed one to
-// say why, before the Tasks are read: the first read is the baseline of the
-// unlocks.
-const readSession = async ($: EngineInterface, sessionId: string, isStart = false) => {
-  unlocks = freshUnlocks()
-  reading = sessionId
-  try {
-    const config = await loadConfig($)
-    await update($, view, current => ({ ...current, sessionId, config }))
-    if (isStart && (config.status === 'configured' || config.status === 'error')) {
-      await $.ui.open(LIST_OPEN)
-      // The engine does not pass this Mod's own open through its ui.open.
-      isPaneOpen = true
+// gh. The read at the start of a Session runs off the event. A read that
+// answers once the Session goes on under another id leaves the state, and
+// the read under way, to the Session running. The timed reads start once
+// and go on across a /clear. The first read to land after the start of a
+// Session, the start's own or one after a /clear while it was under way,
+// does what the start does: the Pane opens where a project config exists, a
+// malformed one to say why, before the Tasks are read, the first read being
+// the baseline of the unlocks; and the heartbeat starts.
+const readSession = ($: EngineInterface, sessionId: string, isStart = false) => {
+  const under = { sessionId, done: Promise.resolve() }
+  under.done = (async () => {
+    if (isStart) {
+      isStartDue = true
+      await new Promise<void>(resolve => $.clock.after(0, resolve))
     }
-    if (config.status === 'configured') {
-      $.clock.after(0, () => void loadTasks($, false))
-      $.clock.after(0, () => void loadSkills($))
-      poll ??= $.clock.every(POLL_MS, () => void loadTasks($, false))
-      if (isStart) {
-        startHeartbeat($)
+    unlocks = freshUnlocks()
+    try {
+      const config = await loadConfig($)
+      if ((await $.session.id()) !== sessionId) {
+        return
+      }
+      await update($, view, current => ({ ...current, sessionId, config }))
+      const isFirst = isStartDue
+      isStartDue = false
+      if (isFirst && (config.status === 'configured' || config.status === 'error')) {
+        await $.ui.open(LIST_OPEN)
+        // The engine does not pass this Mod's own open through its ui.open.
+        isPaneOpen = true
+      }
+      if (config.status === 'configured') {
+        $.clock.after(0, () => void loadTasks($, false))
+        $.clock.after(0, () => void loadSkills($))
+        poll ??= $.clock.every(POLL_MS, () => void loadTasks($, false))
+        if (isFirst) {
+          startHeartbeat($)
+        }
+      }
+    } finally {
+      if (reading === under) {
+        reading = undefined
       }
     }
-  } finally {
-    reading = undefined
-  }
+  })()
+  reading = under
+
+  return under.done
 }
 
 // After a /clear or a resume the process goes on under another id, with no
@@ -576,11 +599,11 @@ const readSession = async ($: EngineInterface, sessionId: string, isStart = fals
 // while a read is under way.
 const ensureSession = async ($: EngineInterface) => {
   const sessionId = await $.session.id()
-  if (reading === sessionId) {
+  if (reading?.sessionId === sessionId) {
     return
   }
   const { sessionId: shown } = await read($, view)
-  if (reading === sessionId || shown === sessionId) {
+  if (reading?.sessionId === sessionId || shown === sessionId) {
     return
   }
   await readSession($, sessionId)
@@ -616,9 +639,7 @@ export const register: Register = on => {
     // Read off the event: a permission hook waiting for the person keeps the
     // read waiting with it, and the Session's prompts wait on this event.
     // Marked as under way now, so a /deck before it begins does not read too.
-    const sessionId = await $.session.id()
-    reading = sessionId
-    $.clock.after(0, () => void readSession($, sessionId, true))
+    void readSession($, await $.session.id(), true)
 
     return started
   })
@@ -679,7 +700,8 @@ export const register: Register = on => {
   // once the prompt has entered, never for one stopped on the way. The
   // first prompt after a /clear is sent before its turn starts, so the state
   // may still be the one started over: the project config and the skills
-  // are read for the Session running before /implement is looked up.
+  // are read for the Session running before /implement is looked up, the
+  // read under way for it waited on rather than another begun.
   on('prompt.submit', async ($, e, next) => {
     const entered = await next(e)
     if (entered.drop !== undefined || e.command === undefined) {
@@ -694,7 +716,7 @@ export const register: Register = on => {
           void (async () => {
             const sessionId = await $.session.id()
             if ((await read($, view)).sessionId !== sessionId) {
-              await readSession($, sessionId)
+              await (reading?.sessionId === sessionId ? reading.done : readSession($, sessionId))
             }
             const { config, skills } = await read($, view)
             if (config.status === 'configured' && skills.status === 'loading') {
@@ -774,7 +796,7 @@ export const register: Register = on => {
     // permission hook. After a /clear the read starts off the command.
     const sessionId = await $.session.id()
     const { sessionId: shown, config } = await read($, view)
-    if (reading === sessionId || shown !== sessionId) {
+    if (reading?.sessionId === sessionId || shown !== sessionId) {
       $.clock.after(0, () => void ensureSession($))
 
       return { text: 'Matt Deck 还在读取项目配置，这次读取可能在等权限批准。读到之后再运行一次 /deck。' }
