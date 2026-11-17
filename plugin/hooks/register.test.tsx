@@ -3345,12 +3345,23 @@ for (const first of ['old', 'new'] as const) {
     expect(callsOf(seen, 'deck_config')).toHaveLength(2)
     const [old, cleared] = first === 'old' ? reads : [reads[1]!, reads[0]!]
 
+    if (first === 'new') {
+      // Asked while neither read has answered: the Pane is not open yet, so the command answers it is read.
+      expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+      await seen.clock.settle()
+      expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+      await seen.clock.settle()
+      expect(callsOf(seen, 'deck_config')).toHaveLength(2)
+    }
     old!.release()
     await seen.clock.settle()
     if (first === 'old') {
       expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
       await seen.clock.settle()
       expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+    } else {
+      // The new Session's read has answered and opened the Pane; the start's own read is still held.
+      expect(callsOf(seen, 'deck_config')).toHaveLength(2)
     }
     cleared!.release()
     await seen.clock.settle()
