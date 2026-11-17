@@ -3328,55 +3328,82 @@ test('after a /clear without a project config the deck command answers at once w
   expect(seen.opened).toEqual([])
 })
 
-for (const first of ['old', 'new'] as const) {
-  test(`a read from before a /clear answering ${first === 'old' ? 'before' : 'after'} the new Session's leaves the state and the read under way to the new Session`, async ($, on) => {
-    const state = clearableState(on)
-    const reads = [gate(), gate()]
-    let count = 0
-    const seen = engine(on, {
-      config: { structuredContent: CONFIGURED, isError: false },
-      waitFor: tool => (tool === 'deck_config' ? reads[count++]?.waiting : undefined),
-    })
-    await start($)
-    await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
-    state.clear()
-    seen.sessionId = '2c9f224f-cleared'
-    await seen.clock.settle()
-    expect(callsOf(seen, 'deck_config')).toHaveLength(2)
-    const [old, cleared] = first === 'old' ? reads : [reads[1]!, reads[0]!]
-
-    if (first === 'new') {
-      // Asked while neither read has answered: the Pane is not open yet, so the command answers it is read.
-      expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
-      await seen.clock.settle()
-      expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
-      await seen.clock.settle()
-      expect(callsOf(seen, 'deck_config')).toHaveLength(2)
-    }
-    old!.release()
-    await seen.clock.settle()
-    if (first === 'old') {
-      expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
-      await seen.clock.settle()
-      expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
-    } else {
-      // The new Session's read has answered and opened the Pane; the start's own read is still held.
-      expect(callsOf(seen, 'deck_config')).toHaveLength(2)
-    }
-    cleared!.release()
-    await seen.clock.settle()
-
-    expect(callsOf(seen, 'deck_config')).toHaveLength(2)
-    // The start's own read gave way: the read after the /clear did what the start does.
-    expect(seen.opened).toEqual([PANE])
-    expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: '2c9f224f-cleared' }])
-    const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /2c9f224f/ })).toBeDefined()
-    await ui.unmount()
-    expect((await $.command.run(DECK_COMMAND)).text).toBe('Matt Deck 已关闭。')
-    expect(callsOf(seen, 'deck_config')).toHaveLength(2)
+test("the start's read answering before the read after a /clear leaves the state and the read under way to the new Session", async ($, on) => {
+  const state = clearableState(on)
+  const startRead = gate()
+  const afterClearRead = gate()
+  const reads = [startRead, afterClearRead]
+  let count = 0
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => (tool === 'deck_config' ? reads[count++]?.waiting : undefined),
   })
-}
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  state.clear()
+  seen.sessionId = '2c9f224f-cleared'
+  await seen.clock.settle()
+  expect(callsOf(seen, 'deck_config')).toHaveLength(2)
+
+  startRead.release()
+  await seen.clock.settle()
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+  await seen.clock.settle()
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+  afterClearRead.release()
+  await seen.clock.settle()
+
+  expect(callsOf(seen, 'deck_config')).toHaveLength(2)
+  // The start's own read gave way: the read after the /clear did what the start does.
+  expect(seen.opened).toEqual([PANE])
+  expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: '2c9f224f-cleared' }])
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /2c9f224f/ })).toBeDefined()
+  await ui.unmount()
+  expect((await $.command.run(DECK_COMMAND)).text).toBe('Matt Deck 已关闭。')
+  expect(callsOf(seen, 'deck_config')).toHaveLength(2)
+})
+
+test("the read after a /clear answering before the start's read leaves the state and the read under way to the new Session", async ($, on) => {
+  const state = clearableState(on)
+  const startRead = gate()
+  const afterClearRead = gate()
+  const reads = [startRead, afterClearRead]
+  let count = 0
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    waitFor: tool => (tool === 'deck_config' ? reads[count++]?.waiting : undefined),
+  })
+  await start($)
+  await $.session.end({ reason: 'clear', sessionId: 'a1b2c3d4-session', resume: { id: 'a1b2c3d4-session' } } as never)
+  state.clear()
+  seen.sessionId = '2c9f224f-cleared'
+  await seen.clock.settle()
+  expect(callsOf(seen, 'deck_config')).toHaveLength(2)
+
+  // Asked while neither read has answered: the Pane is not open yet, so the command answers it is read.
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+  await seen.clock.settle()
+  expect((await $.command.run(DECK_COMMAND)).text).toMatch(WAITING)
+  await seen.clock.settle()
+  expect(callsOf(seen, 'deck_config')).toHaveLength(2)
+  afterClearRead.release()
+  await seen.clock.settle()
+  // The new Session's read has answered and opened the Pane; the start's own read is still held.
+  expect(callsOf(seen, 'deck_config')).toHaveLength(2)
+  startRead.release()
+  await seen.clock.settle()
+
+  expect(callsOf(seen, 'deck_config')).toHaveLength(2)
+  // The start's own read gave way: the read after the /clear did what the start does.
+  expect(seen.opened).toEqual([PANE])
+  expect(callsOf(seen, 'deck_heartbeat')).toEqual([{ session: '2c9f224f-cleared' }])
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /2c9f224f/ })).toBeDefined()
+  await ui.unmount()
+  expect((await $.command.run(DECK_COMMAND)).text).toBe('Matt Deck 已关闭。')
+  expect(callsOf(seen, 'deck_config')).toHaveLength(2)
+})
 
 test('a /implement sent while the project config is read waits on that read, then occupies the Task', async ($, on) => {
   const { waiting, release } = gate()
