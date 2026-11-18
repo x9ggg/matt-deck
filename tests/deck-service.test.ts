@@ -949,6 +949,32 @@ test('deck_tasks reads a Markdown link to an issue in a body\'s Blocked by as th
   ])
 })
 
+test('deck_tasks reads a Markdown link within one line, keeping a reference beside a bracket left open on another', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 3 }),
+    issue({ number: 4 }),
+    // The `[` before #3 is not the start of the next line's link.
+    issue({ number: 5, body: '## Blocked by\n\n- see [notes #3\n- [#4](https://github.com/acme/web/issues/4)\n' }),
+    // Nor does a `(` left open take the next line's #3 into its link.
+    issue({ number: 6, body: '## Blocked by\n\n- [notes](https://example.com/doc\n- #3 (later)\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(
+    [...groups.ready, ...groups.blocked].map(({ number, blockers }: any) => ({ number, blockers })),
+    [
+      { number: 3, blockers: [] },
+      { number: 4, blockers: [] },
+      { number: 5, blockers: [3] },
+      { number: 6, blockers: [3] },
+    ],
+  )
+})
+
 test('deck_tasks keeps every Blocking Edge a Task declares, to closed Tasks and from closed ones too', async t => {
   const gh = await fakeGh()
   await gh.issues([
