@@ -975,6 +975,52 @@ test('deck_tasks reads a Markdown link within one line, keeping a reference besi
   )
 })
 
+test('deck_tasks reads a Markdown link whose text holds brackets in a body\'s Blocked by as the one reference its link names', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 3 }),
+    issue({ number: 4 }),
+    // Brackets nested once, or escaped, are part of the link's text.
+    issue({ number: 5, body: 'Blocked by: [#3 [草稿]](https://github.com/acme/web/issues/3)\n' }),
+    issue({ number: 9, body: '## Blocked by\n\n- [[草稿] #3](https://github.com/acme/web/issues/3)\n' }),
+    issue({ number: 11, body: '## Blocked by\n\n- [#3 \\[草稿\\]](https://github.com/acme/web/issues/3)\n' }),
+    issue({ number: 15, body: 'Blocked by: [上游 [草稿]](https://github.com/acme/web/issues/3)\n' }),
+    // Beside it, a reference to this repository still counts.
+    issue({ number: 6, body: '## Blocked by\n\n- [#3 [草稿]](https://github.com/acme/web/issues/3)\n- #4\n' }),
+    // A link to this repository is its issue, once.
+    issue({ number: 7, body: 'Blocked by: [acme/web#4 [草稿]](https://github.com/acme/shop/issues/4)\n' }),
+    issue({ number: 8, body: '## Blocked by\n\n- [#3 [草稿]](https://github.com/acme/shop/issues/3)\n' }),
+    // A link that is not to an issue leaves its text's reference.
+    issue({ number: 12, body: 'Blocked by: [see #3 [草稿]](https://example.com/doc)\n' }),
+    // A task list's checkbox is not a link's text.
+    issue({ number: 13, body: '## Blocked by\n\n- [ ] #3\n- [x] [#4](https://github.com/acme/web/issues/4)\n' }),
+    // A bracket left open does not take in the link after it.
+    issue({ number: 14, body: '## Blocked by\n\n- see [notes [#3](https://github.com/acme/web/issues/3), #4\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(
+    [...groups.ready, ...groups.blocked].map(({ number, blockers, blockedBy }: any) => ({ number, blockers, blockedBy })),
+    [
+      { number: 3, blockers: [], blockedBy: [] },
+      { number: 4, blockers: [], blockedBy: [] },
+      { number: 5, blockers: [], blockedBy: [] },
+      { number: 9, blockers: [], blockedBy: [] },
+      { number: 11, blockers: [], blockedBy: [] },
+      { number: 15, blockers: [], blockedBy: [] },
+      { number: 6, blockers: [4], blockedBy: [4] },
+      { number: 7, blockers: [4], blockedBy: [4] },
+      { number: 8, blockers: [3], blockedBy: [3] },
+      { number: 12, blockers: [3], blockedBy: [3] },
+      { number: 13, blockers: [3], blockedBy: [3] },
+      { number: 14, blockers: [4], blockedBy: [4] },
+    ],
+  )
+})
+
 test('deck_tasks keeps every Blocking Edge a Task declares, to closed Tasks and from closed ones too', async t => {
   const gh = await fakeGh()
   await gh.issues([
@@ -1155,6 +1201,44 @@ test('deck_tasks reads a Markdown link to an issue in a Parent section as the on
       { number: 6, parent: null },
       { number: 7, parent: null },
       { number: 8, parent: 10 },
+      { number: 9, parent: 10 },
+      { number: 11, parent: 10 },
+      { number: 12, parent: null },
+    ],
+  )
+})
+
+test('deck_tasks reads a Markdown link whose text holds brackets in a Parent section as the one reference its link names', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 10, labels: ['wayfinder:map'] }),
+    issue({ number: 12 }),
+    // The link names acme/web#12, not this repository's #12.
+    issue({ number: 5, body: '## Parent\n\n[#12 [草稿]](https://github.com/acme/web/issues/12)\n' }),
+    issue({ number: 6, body: '## Parent\n\n[[草稿] #12](https://github.com/acme/web/issues/12)\n' }),
+    issue({ number: 7, body: '## Parent\n\n[#12 \\[草稿\\]](https://github.com/acme/web/issues/12)\n' }),
+    issue({ number: 8, body: '## Parent\n\n[上游 [草稿]](https://github.com/acme/web/issues/12)\n' }),
+    // A link to this repository is its issue.
+    issue({ number: 9, body: '## Parent\n\n[acme/web#12 [草稿]](https://github.com/acme/shop/issues/10)\n' }),
+    // A link that is not to an issue leaves its text's reference.
+    issue({ number: 11, body: '## Parent\n\n[see #10 [草稿]](https://example.com/doc)\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { containers, groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(
+    containers.map(({ kind, number, children }: any) => ({ kind, number, children })),
+    [{ kind: 'map', number: 10, children: [9, 11] }],
+  )
+  assert.deepEqual(
+    groups.ready.map(({ number, parent }: any) => ({ number, parent })),
+    [
+      { number: 5, parent: null },
+      { number: 6, parent: null },
+      { number: 7, parent: null },
+      { number: 8, parent: null },
       { number: 9, parent: 10 },
       { number: 11, parent: 10 },
       { number: 12, parent: null },

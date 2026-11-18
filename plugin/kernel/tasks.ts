@@ -316,12 +316,13 @@ const declared = (body: string, name: string): string | undefined => {
 // than `identity` is null: it is not this repository's issue of the same
 // number. A Markdown link `[text](link)` on one line whose link is to an issue
 // is that one reference, whatever its text says; any other link leaves its
-// text's.
+// text's. Its text may hold brackets nested once, `[#12 [draft]]`, and escaped
+// ones, `\[` and `\]`, which neither open nor close a pair.
 const references = (text: string, identity: string): (number | null)[] => {
   const reference = (repository: string | undefined, number: string) =>
     repository === undefined || repository.toLowerCase() === identity.toLowerCase() ? Number(number) : null
   return [
-    ...text.matchAll(/\[([^\]\n]*)\]\(([^)\n]*)\)|(?:([\w.-]+\/[\w.-]+)?\/issues\/|([\w.-]+\/[\w.-]+)?#)(\d+)/g),
+    ...text.matchAll(/\[((?:[^[\]\\\n]|\\.|\[(?:[^[\]\\\n]|\\.)*\])*)\]\(([^)\n]*)\)|(?:([\w.-]+\/[\w.-]+)?\/issues\/|([\w.-]+\/[\w.-]+)?#)(\d+)/g),
   ].flatMap(match => {
     if (match[5] !== undefined) return [reference(match[3] ?? match[4], match[5])]
     const link = match[2].match(/([\w.-]+\/[\w.-]+)?\/issues\/(\d+)/)
