@@ -1315,6 +1315,17 @@ test('deck_tasks reads a long line of unclosed Markdown links in a Parent sectio
   assert.ok(lineMs - plainMs < 1000, `${lineMs} ms with the line, ${plainMs} ms without`)
 })
 
+test('deck_tasks reads a long line of Markdown links in a Parent section or Blocked by about as fast as plain words', async t => {
+  // Eight times as long as GitHub lets a body be, which the fake gh does not
+  // mind: within the limit, a read that grows with the square of the number of
+  // links takes only some tens of milliseconds more. No issue here is #99, so
+  // the links block nothing.
+  const { plainMs, lineMs, read } = await timedWithLine(t, '[#99](x) '.repeat((8 * LONG) / 9))
+
+  assertReadAsBefore(read)
+  assert.ok(lineMs - plainMs < 1000, `${lineMs} ms with the line, ${plainMs} ms without`)
+})
+
 test('deck_tasks marks only open Specs with every Child Task closed as Pending Closeout, without closing them', async t => {
   const gh = await fakeGh()
   const deck = startDeck(await configured(), gh.env)

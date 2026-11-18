@@ -375,7 +375,7 @@ const references = (text: string, identity: string): (number | null)[] => {
     return undefined
   }
 
-  let found: (number | null)[] = []
+  const found: (number | null)[] = []
   let at = 0
   while (at < n) {
     if (text[at] === '[') {
@@ -384,9 +384,10 @@ const references = (text: string, identity: string): (number | null)[] => {
       if (text[textClose] === ']' && text[textClose + 1] === '(' && text[linkClose] === ')') {
         let link: ReturnType<typeof issueAt>
         for (let from = textClose + 2; from < linkClose && link === undefined; from++) link = issueAt(from, true)
-        found = found.concat(
-          link === undefined ? references(text.slice(at + 1, textClose), identity) : [reference(link.repository, link.number)],
-        )
+        if (link !== undefined) found.push(reference(link.repository, link.number))
+        // One at a time: a text's references may be more than a call takes
+        // as arguments.
+        else for (const inText of references(text.slice(at + 1, textClose), identity)) found.push(inText)
         at = linkClose + 1
         continue
       }
