@@ -1021,6 +1021,55 @@ test('deck_tasks reads a Markdown link whose text holds brackets in a body\'s Bl
   )
 })
 
+test('deck_tasks reads a Markdown link inside another link\'s text in a body\'s Blocked by as GitHub renders it', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 3 }),
+    issue({ number: 5 }),
+    issue({ number: 9 }),
+    // The inner link is the link; the outer brackets and `](link)` after it
+    // are text, so that link is a bare one.
+    issue({ number: 20, body: '## Blocked by\n\n- [见 [#5](https://github.com/acme/shop/issues/5)](https://github.com/acme/shop/issues/9)\n' }),
+    issue({ number: 21, body: 'Blocked by: [见 [#5](https://github.com/acme/shop/issues/5)](https://github.com/acme/shop/issues/9)\n' }),
+    issue({ number: 22, body: '## Blocked by\n\n- [见 [#5](https://github.com/acme/shop/issues/5)](https://github.com/acme/web/issues/9)\n' }),
+    issue({ number: 23, body: 'Blocked by: [见 [#5](https://github.com/acme/shop/issues/5)](https://github.com/acme/web/issues/9)\n' }),
+    // A reference in the outer brackets' own text counts.
+    issue({ number: 24, body: '## Blocked by\n\n- [#3 见 [#5](https://github.com/acme/web/issues/5)](https://github.com/acme/shop/issues/9)\n' }),
+    issue({ number: 25, body: 'Blocked by: [#3 见 [#5](https://github.com/acme/web/issues/5)](https://github.com/acme/shop/issues/9)\n' }),
+    // The inner link's text may hold brackets; a link to no issue leaves its text's reference.
+    issue({ number: 26, body: '## Blocked by\n\n- [见 [#5 [草稿]](https://github.com/acme/shop/issues/5)](https://github.com/acme/shop/issues/9)\n' }),
+    issue({ number: 27, body: '## Blocked by\n\n- [见 [#5](https://example.com/doc)](https://github.com/acme/shop/issues/9)\n' }),
+    issue({ number: 28, body: '## Blocked by\n\n- [见 [#5](https://github.com/acme/shop/issues/5)](https://example.com/doc)\n' }),
+    issue({ number: 29, body: '## Blocked by\n\n- [见 [文档](https://example.com/doc)](https://github.com/acme/shop/issues/9)\n' }),
+    // An image in a link's text is not a link: the outer link decides.
+    issue({ number: 30, body: '## Blocked by\n\n- [![#5](https://example.com/badge.svg)](https://github.com/acme/shop/issues/9)\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(
+    [...groups.ready, ...groups.blocked].map(({ number, blockers, blockedBy }: any) => ({ number, blockers, blockedBy })),
+    [
+      { number: 3, blockers: [], blockedBy: [] },
+      { number: 5, blockers: [], blockedBy: [] },
+      { number: 9, blockers: [], blockedBy: [] },
+      { number: 20, blockers: [5, 9], blockedBy: [5, 9] },
+      { number: 21, blockers: [5, 9], blockedBy: [5, 9] },
+      { number: 22, blockers: [5], blockedBy: [5] },
+      { number: 23, blockers: [5], blockedBy: [5] },
+      { number: 24, blockers: [3, 9], blockedBy: [3, 9] },
+      { number: 25, blockers: [3, 9], blockedBy: [3, 9] },
+      { number: 26, blockers: [5, 9], blockedBy: [5, 9] },
+      { number: 27, blockers: [5, 9], blockedBy: [5, 9] },
+      { number: 28, blockers: [5], blockedBy: [5] },
+      { number: 29, blockers: [9], blockedBy: [9] },
+      { number: 30, blockers: [9], blockedBy: [9] },
+    ],
+  )
+})
+
 test('deck_tasks keeps every Blocking Edge a Task declares, to closed Tasks and from closed ones too', async t => {
   const gh = await fakeGh()
   await gh.issues([
@@ -1242,6 +1291,42 @@ test('deck_tasks reads a Markdown link whose text holds brackets in a Parent sec
       { number: 9, parent: 10 },
       { number: 11, parent: 10 },
       { number: 12, parent: null },
+    ],
+  )
+})
+
+test('deck_tasks reads a Markdown link inside another link\'s text in a Parent section as GitHub renders it', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 5 }),
+    issue({ number: 9 }),
+    // The inner link comes first: in another repository, the section gives no parent.
+    issue({ number: 20, body: '## Parent\n\n[见 [#5](https://github.com/acme/web/issues/5)](https://github.com/acme/shop/issues/9)\n' }),
+    // In this repository, it is the parent.
+    issue({ number: 21, body: '## Parent\n\n[见 [#5](https://github.com/acme/shop/issues/5)](https://github.com/acme/shop/issues/9)\n' }),
+    issue({ number: 22, body: '## Parent\n\n[见 [#5 [草稿]](https://github.com/acme/shop/issues/5)](https://github.com/acme/shop/issues/9)\n' }),
+    issue({ number: 23, body: '## Parent\n\n[见 [#5](https://example.com/doc)](https://github.com/acme/shop/issues/9)\n' }),
+    // An image in a link's text is not a link: the outer link decides.
+    issue({ number: 24, body: '## Parent\n\n[![#9](https://example.com/badge.svg)](https://github.com/acme/shop/issues/5)\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { containers, groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(
+    containers.map(({ kind, number, children }: any) => ({ kind, number, children })),
+    [{ kind: 'spec', number: 5, children: [21, 22, 23, 24] }],
+  )
+  assert.deepEqual(
+    groups.ready.map(({ number, parent }: any) => ({ number, parent })),
+    [
+      { number: 9, parent: null },
+      { number: 20, parent: null },
+      { number: 21, parent: 5 },
+      { number: 22, parent: 5 },
+      { number: 23, parent: 5 },
+      { number: 24, parent: 5 },
     ],
   )
 })

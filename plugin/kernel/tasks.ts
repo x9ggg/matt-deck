@@ -317,7 +317,10 @@ const declared = (body: string, name: string): string | undefined => {
 // number. A Markdown link `[text](link)` on one line whose link is to an issue
 // is that one reference, whatever its text says; any other link leaves its
 // text's. Its text may hold brackets nested once, `[#12 [draft]]`, and escaped
-// ones, `\[` and `\]`, which neither open nor close a pair.
+// ones, `\[` and `\]`, which neither open nor close a pair. As GitHub renders
+// it, its text holds no link: in `[see [#12](link)](other)` only `[#12](link)`
+// is one, and the rest is text, `other` a bare link. An image `![…](…)` in its
+// text is not a link.
 //
 // It reads as a regular expression would, left to right. A run of the
 // characters a repository's name holds, or a link's text or link, is measured
@@ -332,10 +335,12 @@ const references = (text: string, identity: string): (number | null)[] => {
   const isName = (c: string) => /[\w.-]/.test(c)
   // From each place, read right to left: where its run of name characters
   // ends; where the elements of a link's text, and of brackets nested in it,
-  // starting there end; the first `)` or line break from there.
+  // starting there end, and whether a link is among them; the first `)` or
+  // line break from there.
   const nameEnd = new Int32Array(n + 2).fill(n)
   const textEnd = new Int32Array(n + 2).fill(n)
   const nestedEnd = new Int32Array(n + 2).fill(n)
+  const holdsLink = new Uint8Array(n + 2)
   const closeAt = new Int32Array(n + 2).fill(n)
   for (let i = n - 1; i >= 0; i--) {
     const c = text[i]!
@@ -346,16 +351,21 @@ const references = (text: string, identity: string): (number | null)[] => {
       const isEscape = i + 1 < n && !/[\n\r\u2028\u2029]/.test(text[i + 1]!)
       textEnd[i] = isEscape ? textEnd[i + 2]! : i
       nestedEnd[i] = isEscape ? nestedEnd[i + 2]! : i
+      holdsLink[i] = isEscape ? holdsLink[i + 2]! : 0
     } else if (c === '[') {
       const close = nestedEnd[i + 1]!
-      textEnd[i] = text[close] === ']' ? textEnd[close + 1]! : i
+      const isPair = text[close] === ']'
+      textEnd[i] = isPair ? textEnd[close + 1]! : i
       nestedEnd[i] = i
+      const isLink = isPair && text[i - 1] !== '!' && text[close + 1] === '(' && text[closeAt[close + 2]!] === ')'
+      holdsLink[i] = isPair && (isLink || holdsLink[close + 1]!) ? 1 : 0
     } else if (c === ']' || c === '\n') {
       textEnd[i] = i
       nestedEnd[i] = i
     } else {
       textEnd[i] = textEnd[i + 1]!
       nestedEnd[i] = nestedEnd[i + 1]!
+      holdsLink[i] = holdsLink[i + 1]!
     }
   }
   // An issue reference starting at `at`: `/issues/12` or `#12` after an
@@ -383,7 +393,7 @@ const references = (text: string, identity: string): (number | null)[] => {
     if (text[at] === '[') {
       const textClose = textEnd[at + 1]!
       const linkClose = closeAt[textClose + 2]!
-      if (text[textClose] === ']' && text[textClose + 1] === '(' && text[linkClose] === ')') {
+      if (text[textClose] === ']' && text[textClose + 1] === '(' && text[linkClose] === ')' && !holdsLink[at + 1]) {
         let link: ReturnType<typeof issueAt>
         for (let from = textClose + 2; from < linkClose && link === undefined; from++) link = issueAt(from, true)
         if (link !== undefined) found.push(reference(link.repository, link.number))
