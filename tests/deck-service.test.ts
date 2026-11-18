@@ -1096,6 +1096,11 @@ test('deck_tasks reads `[text](…)` in a body\'s Blocked by as a Markdown link 
     // A title is not the link: only the link's number counts.
     issue({ number: 34, body: '## Blocked by\n\n- [#3](https://github.com/acme/shop/issues/5 "见 https://github.com/acme/shop/issues/9")\n' }),
     issue({ number: 35, body: '## Blocked by\n\n- [#3](<https://github.com/acme/shop/issues/5>)\n' }),
+    // A title may be in parentheses that hold none; unclosed, the parentheses hold no link.
+    issue({ number: 36, body: '## Blocked by\n\n- [见 [#5](https://github.com/acme/shop/issues/5 (标题))](https://github.com/acme/shop/issues/9)\n' }),
+    issue({ number: 37, body: 'Blocked by: [#3](https://github.com/acme/shop/issues/5 (见 https://github.com/acme/shop/issues/9))\n' }),
+    issue({ number: 38, body: '## Blocked by\n\n- [#3](https://github.com/acme/shop/issues/5 (标题)\n' }),
+    issue({ number: 39, body: '## Blocked by\n\n- [见 [#5](https://github.com/acme/shop/issues/5 (标题)](https://github.com/acme/shop/issues/9)\n' }),
   ])
   const deck = startDeck(await configured(), gh.env)
   t.after(deck.stop)
@@ -1124,6 +1129,10 @@ test('deck_tasks reads `[text](…)` in a body\'s Blocked by as a Markdown link 
       { number: 33, blockers: [5], blockedBy: [5] },
       { number: 34, blockers: [5], blockedBy: [5] },
       { number: 35, blockers: [5], blockedBy: [5] },
+      { number: 36, blockers: [5, 9], blockedBy: [5, 9] },
+      { number: 37, blockers: [5], blockedBy: [5] },
+      { number: 38, blockers: [3, 5], blockedBy: [3, 5] },
+      { number: 39, blockers: [9], blockedBy: [9] },
     ],
   )
 })
@@ -1435,6 +1444,8 @@ test('deck_tasks reads `[text](…)` in a Parent section as a Markdown link only
     issue({ number: 23, body: '## Parent\n\n[见 \\![#5](https://github.com/acme/shop/issues/5)](https://github.com/acme/shop/issues/9)\n' }),
     // An escaped backslash leaves `!` an image's start: the outer link decides.
     issue({ number: 24, body: '## Parent\n\n[见 \\\\![#5](https://example.com/badge.svg)](https://github.com/acme/shop/issues/9)\n' }),
+    // The inner link has a title in parentheses: it is the link.
+    issue({ number: 25, body: '## Parent\n\n[见 [#5](https://github.com/acme/shop/issues/5 (标题))](https://github.com/acme/shop/issues/9)\n' }),
   ])
   const deck = startDeck(await configured(), gh.env)
   t.after(deck.stop)
@@ -1444,7 +1455,7 @@ test('deck_tasks reads `[text](…)` in a Parent section as a Markdown link only
   assert.deepEqual(
     containers.map(({ kind, number, children }: any) => ({ kind, number, children })),
     [
-      { kind: 'spec', number: 5, children: [23] },
+      { kind: 'spec', number: 5, children: [23, 25] },
       { kind: 'spec', number: 9, children: [20, 21, 22, 24] },
     ],
   )
@@ -1456,6 +1467,7 @@ test('deck_tasks reads `[text](…)` in a Parent section as a Markdown link only
       { number: 22, parent: 9 },
       { number: 23, parent: 5 },
       { number: 24, parent: 9 },
+      { number: 25, parent: 5 },
     ],
   )
 })
@@ -1540,7 +1552,7 @@ test('deck_tasks reads a long line of Markdown links in a Parent section or Bloc
 })
 
 test('deck_tasks reads a long line of Markdown links with unclosed titles and angle brackets in a Parent section or Blocked by about as fast as plain words', async t => {
-  const { plainMs, lineMs, read } = await timedWithLine(t, '[x](a "[y](<b '.repeat(LONG / 14))
+  const { plainMs, lineMs, read } = await timedWithLine(t, '[x](a "[y](<b [z](c ('.repeat(LONG / 21))
 
   assertReadAsBefore(read)
   assert.ok(lineMs - plainMs < 1000, `${lineMs} ms with the line, ${plainMs} ms without`)

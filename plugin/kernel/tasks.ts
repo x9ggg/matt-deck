@@ -347,12 +347,13 @@ const references = (text: string, identity: string): (number | null)[] => {
   // And, for what a link's parentheses hold: where its run of spaces and
   // tabs ends; where its run of characters but those, `)` and a line break
   // ends; the first `<`, `>` or line break; the first `"` or line break; the
-  // first `'` or line break.
+  // first `'` or line break; the first `(`, `)` or line break.
   const spaceEnd = new Int32Array(n + 2).fill(n)
   const wordEnd = new Int32Array(n + 2).fill(n)
   const angleAt = new Int32Array(n + 2).fill(n)
   const doubleAt = new Int32Array(n + 2).fill(n)
   const singleAt = new Int32Array(n + 2).fill(n)
+  const parenthesisAt = new Int32Array(n + 2).fill(n)
   for (let i = n - 1; i >= 0; i--) {
     const c = text[i]!
     spaceEnd[i] = c === ' ' || c === '\t' ? spaceEnd[i + 1]! : i
@@ -360,20 +361,22 @@ const references = (text: string, identity: string): (number | null)[] => {
     angleAt[i] = c === '<' || c === '>' || c === '\n' ? i : angleAt[i + 1]!
     doubleAt[i] = c === '"' || c === '\n' ? i : doubleAt[i + 1]!
     singleAt[i] = c === "'" || c === '\n' ? i : singleAt[i + 1]!
+    parenthesisAt[i] = c === '(' || c === ')' || c === '\n' ? i : parenthesisAt[i + 1]!
   }
   // The link a link's parentheses hold, if they open just before `at`:
   // spaces, a link, then perhaps spaces and a title, then spaces and `)`. The
   // link is a run of characters but spaces, or one in `<…>`; the title one in
-  // `"…"` or `'…'`. Where the link starts and ends, and where `)` is.
+  // `"…"`, `'…'` or `(…)`, the last holding no parenthesis. Where the link
+  // starts and ends, and where `)` is.
   const linkAt = (at: number) => {
     const start = spaceEnd[at]!
     const end = text[start] !== '<' ? wordEnd[start]! : text[angleAt[start + 1]!] === '>' ? angleAt[start + 1]! + 1 : -1
     if (end === -1) return undefined
     let close = spaceEnd[end]!
-    const quote = text[close]
-    if (close > end && (quote === '"' || quote === "'")) {
-      const titleEnd = (quote === '"' ? doubleAt : singleAt)[close + 1]!
-      close = text[titleEnd] === quote ? spaceEnd[titleEnd + 1]! : n
+    const opens = text[close]
+    if (close > end && (opens === '"' || opens === "'" || opens === '(')) {
+      const titleEnd = (opens === '"' ? doubleAt : opens === "'" ? singleAt : parenthesisAt)[close + 1]!
+      close = text[titleEnd] === (opens === '(' ? ')' : opens) ? spaceEnd[titleEnd + 1]! : n
     }
     return text[close] === ')' ? { start, end, close } : undefined
   }
