@@ -316,11 +316,15 @@ const declared = (body: string, name: string): string | undefined => {
 // than `identity` is null: it is not this repository's issue of the same
 // number. A Markdown link `[text](link)` on one line whose link is to an issue
 // is that one reference, whatever its text says; any other link leaves its
-// text's. Its text may hold brackets nested once, `[#12 [draft]]`, and escaped
-// ones, `\[` and `\]`, which neither open nor close a pair. As GitHub renders
-// it, its text holds no link: in `[see [#12](link)](other)` only `[#12](link)`
-// is one, and the rest is text, `other` a bare link. An image `![…](…)` in its
-// text is not a link.
+// text's. Its parentheses hold, apart from spaces and tabs, a link and perhaps
+// a title after it, `(link "title")`; the link may be in angle brackets,
+// `(<a b>)`, or empty. Parentheses that hold anything else are text, and so are the
+// brackets before them. Its text may hold brackets nested once, `[#12
+// [draft]]`, and escaped ones, `\[` and `\]`, which neither open nor close a
+// pair. As GitHub renders it, its text holds no link: in `[see
+// [#12](link)](other)` only `[#12](link)` is one, and the rest is text, `other`
+// a bare link. An image `![…](…)` in its text is not a link; after an escaped
+// `\!` it is one.
 //
 // It reads as a regular expression would, left to right. A run of the
 // characters a repository's name holds, or a link's text or link, is measured
@@ -335,17 +339,53 @@ const references = (text: string, identity: string): (number | null)[] => {
   const isName = (c: string) => /[\w.-]/.test(c)
   // From each place, read right to left: where its run of name characters
   // ends; where the elements of a link's text, and of brackets nested in it,
-  // starting there end, and whether a link is among them; the first `)` or
-  // line break from there.
+  // starting there end, and whether a link is among them.
   const nameEnd = new Int32Array(n + 2).fill(n)
   const textEnd = new Int32Array(n + 2).fill(n)
   const nestedEnd = new Int32Array(n + 2).fill(n)
   const holdsLink = new Uint8Array(n + 2)
-  const closeAt = new Int32Array(n + 2).fill(n)
+  // And, for what a link's parentheses hold: where its run of spaces and
+  // tabs ends; where its run of characters but those, `)` and a line break
+  // ends; the first `<`, `>` or line break; the first `"` or line break; the
+  // first `'` or line break.
+  const spaceEnd = new Int32Array(n + 2).fill(n)
+  const wordEnd = new Int32Array(n + 2).fill(n)
+  const angleAt = new Int32Array(n + 2).fill(n)
+  const doubleAt = new Int32Array(n + 2).fill(n)
+  const singleAt = new Int32Array(n + 2).fill(n)
+  for (let i = n - 1; i >= 0; i--) {
+    const c = text[i]!
+    spaceEnd[i] = c === ' ' || c === '\t' ? spaceEnd[i + 1]! : i
+    wordEnd[i] = c === ' ' || c === '\t' || c === ')' || c === '\n' ? i : wordEnd[i + 1]!
+    angleAt[i] = c === '<' || c === '>' || c === '\n' ? i : angleAt[i + 1]!
+    doubleAt[i] = c === '"' || c === '\n' ? i : doubleAt[i + 1]!
+    singleAt[i] = c === "'" || c === '\n' ? i : singleAt[i + 1]!
+  }
+  // The link a link's parentheses hold, if they open just before `at`:
+  // spaces, a link, then perhaps spaces and a title, then spaces and `)`. The
+  // link is a run of characters but spaces, or one in `<…>`; the title one in
+  // `"…"` or `'…'`. Where the link starts and ends, and where `)` is.
+  const linkAt = (at: number) => {
+    const start = spaceEnd[at]!
+    const end = text[start] !== '<' ? wordEnd[start]! : text[angleAt[start + 1]!] === '>' ? angleAt[start + 1]! + 1 : -1
+    if (end === -1) return undefined
+    let close = spaceEnd[end]!
+    const quote = text[close]
+    if (close > end && (quote === '"' || quote === "'")) {
+      const titleEnd = (quote === '"' ? doubleAt : singleAt)[close + 1]!
+      close = text[titleEnd] === quote ? spaceEnd[titleEnd + 1]! : n
+    }
+    return text[close] === ')' ? { start, end, close } : undefined
+  }
+  // Whether a character is escaped: read left to right, a backslash and the
+  // character after it are an escape, so in `\\!` the `!` is not escaped.
+  const isEscaped = new Uint8Array(n + 1)
+  for (let i = 1; i <= n; i++) isEscaped[i] = text[i - 1] === '\\' && !isEscaped[i - 1] ? 1 : 0
+  // The elements of a link's text are read after the tables above, for a
+  // `[` asks whether the brackets it opens are a link's.
   for (let i = n - 1; i >= 0; i--) {
     const c = text[i]!
     nameEnd[i] = isName(c) ? nameEnd[i + 1]! : i
-    closeAt[i] = c === ')' || c === '\n' ? i : closeAt[i + 1]!
     if (c === '\\') {
       // An escape: a backslash and any character but a line break.
       const isEscape = i + 1 < n && !/[\n\r\u2028\u2029]/.test(text[i + 1]!)
@@ -357,7 +397,8 @@ const references = (text: string, identity: string): (number | null)[] => {
       const isPair = text[close] === ']'
       textEnd[i] = isPair ? textEnd[close + 1]! : i
       nestedEnd[i] = i
-      const isLink = isPair && text[i - 1] !== '!' && text[close + 1] === '(' && text[closeAt[close + 2]!] === ')'
+      const isImage = text[i - 1] === '!' && !isEscaped[i - 1]
+      const isLink = isPair && !isImage && text[close + 1] === '(' && linkAt(close + 2) !== undefined
       holdsLink[i] = isPair && (isLink || holdsLink[close + 1]!) ? 1 : 0
     } else if (c === ']' || c === '\n') {
       textEnd[i] = i
@@ -392,15 +433,15 @@ const references = (text: string, identity: string): (number | null)[] => {
   while (at < n) {
     if (text[at] === '[') {
       const textClose = textEnd[at + 1]!
-      const linkClose = closeAt[textClose + 2]!
-      if (text[textClose] === ']' && text[textClose + 1] === '(' && text[linkClose] === ')' && !holdsLink[at + 1]) {
+      const parentheses = text[textClose] === ']' && text[textClose + 1] === '(' ? linkAt(textClose + 2) : undefined
+      if (parentheses !== undefined && !holdsLink[at + 1]) {
         let link: ReturnType<typeof issueAt>
-        for (let from = textClose + 2; from < linkClose && link === undefined; from++) link = issueAt(from, true)
+        for (let from = parentheses.start; from < parentheses.end && link === undefined; from++) link = issueAt(from, true)
         if (link !== undefined) found.push(reference(link.repository, link.number))
         // One at a time: a text's references may be more than a call takes
         // as arguments.
         else for (const inText of references(text.slice(at + 1, textClose), identity)) found.push(inText)
-        at = linkClose + 1
+        at = parentheses.close + 1
         continue
       }
     }
