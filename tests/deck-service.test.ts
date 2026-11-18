@@ -1289,10 +1289,12 @@ const assertReadAsBefore = (read: any) => {
   )
 }
 
-// A line near GitHub's limit on a body, 65536 characters. A read that grows
-// with the line's length takes some milliseconds more; one that grows with
-// its square takes seconds more, on a faster machine too.
-const LONG = 65000
+// A line sixteen times as long as GitHub lets a body be, 65536 characters,
+// which the fake gh does not mind. A read that grows with the line's length
+// takes some tens of milliseconds more; one that grows with its square takes
+// half a minute more or far longer, so seconds more on a much faster machine
+// too.
+const LONG = 16 * 65000
 
 test('deck_tasks reads a long run of letters and digits in a Parent section or Blocked by about as fast as plain words', async t => {
   const { plainMs, lineMs, read } = await timedWithLine(t, 'a'.repeat(LONG - 6) + 'a.b-c_')
@@ -1316,11 +1318,8 @@ test('deck_tasks reads a long line of unclosed Markdown links in a Parent sectio
 })
 
 test('deck_tasks reads a long line of Markdown links in a Parent section or Blocked by about as fast as plain words', async t => {
-  // Eight times as long as GitHub lets a body be, which the fake gh does not
-  // mind: within the limit, a read that grows with the square of the number of
-  // links takes only some tens of milliseconds more. No issue here is #99, so
-  // the links block nothing.
-  const { plainMs, lineMs, read } = await timedWithLine(t, '[#99](x) '.repeat((8 * LONG) / 9))
+  // No issue here is #99, so the links block nothing.
+  const { plainMs, lineMs, read } = await timedWithLine(t, '[#99](x) '.repeat(LONG / 9))
 
   assertReadAsBefore(read)
   assert.ok(lineMs - plainMs < 1000, `${lineMs} ms with the line, ${plainMs} ms without`)
