@@ -314,12 +314,19 @@ const declared = (body: string, name: string): string | undefined => {
 // The issues a text points at: `#12`, `owner/repo#12`, or a link ending in
 // `/issues/12` or `owner/repo/issues/12`. One that names a repository other
 // than `identity` is null: it is not this repository's issue of the same
-// number.
-const references = (text: string, identity: string) =>
-  [...text.matchAll(/(?:([\w.-]+\/[\w.-]+)?\/issues\/|(?:([\w.-]+\/[\w.-]+))?#)(\d+)/g)].map(match => {
-    const repository = match[1] ?? match[2]
-    return repository === undefined || repository.toLowerCase() === identity.toLowerCase() ? Number(match[3]) : null
+// number. A Markdown link `[text](link)` whose link is to an issue is that one
+// reference, whatever its text says; any other link leaves its text's.
+const references = (text: string, identity: string): (number | null)[] => {
+  const reference = (repository: string | undefined, number: string) =>
+    repository === undefined || repository.toLowerCase() === identity.toLowerCase() ? Number(number) : null
+  return [
+    ...text.matchAll(/\[([^\]]*)\]\(([^)]*)\)|(?:([\w.-]+\/[\w.-]+)?\/issues\/|([\w.-]+\/[\w.-]+)?#)(\d+)/g),
+  ].flatMap(match => {
+    if (match[5] !== undefined) return [reference(match[3] ?? match[4], match[5])]
+    const link = match[2].match(/([\w.-]+\/[\w.-]+)?\/issues\/(\d+)/)
+    return link === null ? references(match[1], identity) : [reference(link[1], link[2])]
   })
+}
 
 type ViewedIssue = {
   number: number

@@ -903,6 +903,52 @@ test('deck_tasks takes no Blocking Edge from a body\'s Blocked by to another rep
   ])
 })
 
+test('deck_tasks reads a Markdown link to an issue in a body\'s Blocked by as the one reference its link names', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 3 }),
+    issue({ number: 4 }),
+    // The link names acme/web#3, whatever its text says.
+    issue({ number: 5, body: 'Blocked by: [#3](https://github.com/acme/web/issues/3)\n' }),
+    issue({ number: 12, body: '## Blocked by\n\n- [#3](https://github.com/acme/web/issues/3#issuecomment-1)\n' }),
+    issue({ number: 11, body: 'Blocked by: [上游](https://github.com/acme/web/issues/3)\n' }),
+    // Beside it, a reference to this repository still counts.
+    issue({ number: 6, body: '## Blocked by\n\n- [#3](https://github.com/acme/web/issues/3)\n- #4\n' }),
+    issue({ number: 14, body: 'Blocked by: [#3](https://github.com/acme/web/issues/3), #4\n' }),
+    // A link to this repository is its issue, once, whatever its text says.
+    issue({ number: 7, body: 'Blocked by: [acme/web#4](https://github.com/acme/shop/issues/4)\n' }),
+    issue({ number: 8, body: '## Blocked by\n\n- [#3](https://github.com/acme/shop/issues/3?x=1)\n' }),
+    // A link that is not to an issue leaves its text's reference.
+    issue({ number: 9, body: '## Blocked by\n\n- [see #3](https://example.com/doc)\n' }),
+    issue({ number: 13, body: 'Blocked by: [#4](https://github.com/acme/web/pull/4)\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+  const edges = [...groups.ready, ...groups.blocked].map(
+    ({ number, blockers, blockedBy }: { number: number; blockers: number[]; blockedBy: number[] }) => ({
+      number,
+      blockers,
+      blockedBy,
+    }),
+  )
+
+  assert.deepEqual(edges, [
+    { number: 3, blockers: [], blockedBy: [] },
+    { number: 4, blockers: [], blockedBy: [] },
+    { number: 5, blockers: [], blockedBy: [] },
+    { number: 11, blockers: [], blockedBy: [] },
+    { number: 12, blockers: [], blockedBy: [] },
+    { number: 6, blockers: [4], blockedBy: [4] },
+    { number: 7, blockers: [4], blockedBy: [4] },
+    { number: 8, blockers: [3], blockedBy: [3] },
+    { number: 9, blockers: [3], blockedBy: [3] },
+    { number: 13, blockers: [4], blockedBy: [4] },
+    { number: 14, blockers: [4], blockedBy: [4] },
+  ])
+})
+
 test('deck_tasks keeps every Blocking Edge a Task declares, to closed Tasks and from closed ones too', async t => {
   const gh = await fakeGh()
   await gh.issues([
@@ -1047,6 +1093,45 @@ test('deck_tasks takes no parent from a Parent section that first names another 
       { number: 12, parent: null },
       { number: 13, parent: null },
       { number: 14, parent: 10 },
+    ],
+  )
+})
+
+test('deck_tasks reads a Markdown link to an issue in a Parent section as the one reference its link names', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 10, labels: ['wayfinder:map'] }),
+    issue({ number: 12 }),
+    // The link names acme/web#12, not this repository's #12, whatever its text says.
+    issue({ number: 5, body: '## Parent\n\n[#12](https://github.com/acme/web/issues/12)\n' }),
+    issue({ number: 6, body: '## Parent\n\n[#12](https://github.com/acme/web/issues/12), like #10.\n' }),
+    issue({ number: 7, body: '## Parent\n\n[上游](https://github.com/acme/web/issues/12)\n' }),
+    // A `Part of` line still stands.
+    issue({ number: 8, body: 'Part of #10\n\n## Parent\n\n[#12](https://github.com/acme/web/issues/12)\n' }),
+    // A link to this repository is its issue, whatever its text says.
+    issue({ number: 9, body: '## Parent\n\n[acme/web#12](https://github.com/acme/shop/issues/10)\n' }),
+    // A link that is not to an issue leaves its text's reference.
+    issue({ number: 11, body: '## Parent\n\n[see #10](https://example.com/doc)\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { containers, groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(
+    containers.map(({ kind, number, children }: any) => ({ kind, number, children })),
+    [{ kind: 'map', number: 10, children: [8, 9, 11] }],
+  )
+  assert.deepEqual(
+    groups.ready.map(({ number, parent }: any) => ({ number, parent })),
+    [
+      { number: 5, parent: null },
+      { number: 6, parent: null },
+      { number: 7, parent: null },
+      { number: 8, parent: 10 },
+      { number: 9, parent: 10 },
+      { number: 11, parent: 10 },
+      { number: 12, parent: null },
     ],
   )
 })
