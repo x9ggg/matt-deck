@@ -1018,8 +1018,10 @@ test('deck_tasks takes no parent from a Parent section that first names another 
     issue({ number: 6, body: '## Parent\n\nhttps://github.com/acme/web/issues/12\n' }),
     // A later reference to this repository is not the parent either.
     issue({ number: 7, body: '## Parent\n\nacme/web#12, like #10.\n' }),
+    issue({ number: 13, body: '## Parent\n\nhttps://github.com/acme/web/issues/12, like #10.\n' }),
     // A `Part of` line still stands.
     issue({ number: 8, body: 'Part of #10\n\n## Parent\n\nhttps://github.com/acme/web/issues/12\n' }),
+    issue({ number: 14, body: 'Part of #10\n\n## Parent\n\nacme/web#12\n' }),
     // This repository named in full, in any case, is this repository.
     issue({ number: 9, body: '## Parent\n\nACME/Shop#10\n' }),
     issue({ number: 11, body: '## Parent\n\nhttps://github.com/Acme/SHOP/issues/10\n' }),
@@ -1031,7 +1033,7 @@ test('deck_tasks takes no parent from a Parent section that first names another 
 
   assert.deepEqual(
     containers.map(({ kind, number, children }: any) => ({ kind, number, children })),
-    [{ kind: 'map', number: 10, children: [8, 9, 11] }],
+    [{ kind: 'map', number: 10, children: [8, 9, 11, 14] }],
   )
   assert.deepEqual(
     groups.ready.map(({ number, parent }: any) => ({ number, parent })),
@@ -1043,6 +1045,8 @@ test('deck_tasks takes no parent from a Parent section that first names another 
       { number: 9, parent: 10 },
       { number: 11, parent: 10 },
       { number: 12, parent: null },
+      { number: 13, parent: null },
+      { number: 14, parent: 10 },
     ],
   )
 })
