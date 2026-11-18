@@ -318,16 +318,89 @@ const declared = (body: string, name: string): string | undefined => {
 // is that one reference, whatever its text says; any other link leaves its
 // text's. Its text may hold brackets nested once, `[#12 [draft]]`, and escaped
 // ones, `\[` and `\]`, which neither open nor close a pair.
+//
+// It reads as a regular expression would, in one pass: a run of the
+// characters a repository's name holds, or a link's text or link, is measured
+// once and not again from each place inside it, so the time grows with the
+// text's length and not with its square.
 const references = (text: string, identity: string): (number | null)[] => {
   const reference = (repository: string | undefined, number: string) =>
     repository === undefined || repository.toLowerCase() === identity.toLowerCase() ? Number(number) : null
-  return [
-    ...text.matchAll(/\[((?:[^[\]\\\n]|\\.|\[(?:[^[\]\\\n]|\\.)*\])*)\]\(([^)\n]*)\)|(?:([\w.-]+\/[\w.-]+)?\/issues\/|([\w.-]+\/[\w.-]+)?#)(\d+)/g),
-  ].flatMap(match => {
-    if (match[5] !== undefined) return [reference(match[3] ?? match[4], match[5])]
-    const link = match[2].match(/([\w.-]+\/[\w.-]+)?\/issues\/(\d+)/)
-    return link === null ? references(match[1], identity) : [reference(link[1], link[2])]
-  })
+  const n = text.length
+  const isName = (c: string) => /[\w.-]/.test(c)
+  // From each place, read right to left: where its run of name characters
+  // ends; where the elements of a link's text, and of brackets nested in it,
+  // starting there end; the first `)` or line break from there.
+  const nameEnd = new Int32Array(n + 2).fill(n)
+  const textEnd = new Int32Array(n + 2).fill(n)
+  const nestedEnd = new Int32Array(n + 2).fill(n)
+  const closeAt = new Int32Array(n + 2).fill(n)
+  for (let i = n - 1; i >= 0; i--) {
+    const c = text[i]!
+    nameEnd[i] = isName(c) ? nameEnd[i + 1]! : i
+    closeAt[i] = c === ')' || c === '\n' ? i : closeAt[i + 1]!
+    if (c === '\\') {
+      // An escape: a backslash and any character but a line break.
+      const isEscape = i + 1 < n && !/[\n\r\u2028\u2029]/.test(text[i + 1]!)
+      textEnd[i] = isEscape ? textEnd[i + 2]! : i
+      nestedEnd[i] = isEscape ? nestedEnd[i + 2]! : i
+    } else if (c === '[') {
+      const close = nestedEnd[i + 1]!
+      textEnd[i] = text[close] === ']' ? textEnd[close + 1]! : i
+      nestedEnd[i] = i
+    } else if (c === ']' || c === '\n') {
+      textEnd[i] = i
+      nestedEnd[i] = i
+    } else {
+      textEnd[i] = textEnd[i + 1]!
+      nestedEnd[i] = nestedEnd[i + 1]!
+    }
+  }
+  // An issue reference starting at `at`: `/issues/12` or `#12` after an
+  // optional `owner/repo`, tried in that order; only `/issues/12` in a link.
+  const issueAt = (at: number, isLink: boolean) => {
+    const slash = nameEnd[at]!
+    const repositoryEnd = slash > at && text[slash] === '/' && nameEnd[slash + 1]! > slash + 1 ? nameEnd[slash + 1]! : undefined
+    for (const marker of isLink ? ['/issues/'] : ['/issues/', '#']) {
+      for (const start of repositoryEnd === undefined ? [at] : [repositoryEnd, at]) {
+        if (!text.startsWith(marker, start)) continue
+        const digits = start + marker.length
+        let end = digits
+        while (end < n && text[end]! >= '0' && text[end]! <= '9') end++
+        if (end > digits) {
+          return { repository: start === at ? undefined : text.slice(at, start), number: text.slice(digits, end), end }
+        }
+      }
+    }
+    return undefined
+  }
+
+  let found: (number | null)[] = []
+  let at = 0
+  while (at < n) {
+    if (text[at] === '[') {
+      const textClose = textEnd[at + 1]!
+      const linkClose = closeAt[textClose + 2]!
+      if (text[textClose] === ']' && text[textClose + 1] === '(' && text[linkClose] === ')') {
+        let link: ReturnType<typeof issueAt>
+        for (let from = textClose + 2; from < linkClose && link === undefined; from++) link = issueAt(from, true)
+        found = found.concat(
+          link === undefined ? references(text.slice(at + 1, textClose), identity) : [reference(link.repository, link.number)],
+        )
+        at = linkClose + 1
+        continue
+      }
+    }
+    const issue = issueAt(at, false)
+    if (issue !== undefined) {
+      found.push(reference(issue.repository, issue.number))
+      at = issue.end
+      continue
+    }
+    at++
+  }
+
+  return found
 }
 
 type ViewedIssue = {

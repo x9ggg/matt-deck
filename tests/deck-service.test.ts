@@ -1246,6 +1246,75 @@ test('deck_tasks reads a Markdown link whose text holds brackets in a Parent sec
   )
 })
 
+// How long deck_tasks takes, in milliseconds, when a body's Blocked by
+// section, its top Blocked by line and its Parent section each hold `line`
+// beside a reference, and when they hold as many characters of plain words
+// instead; and what it reads with `line`.
+const timedWithLine = async (t: { after: (fn: () => void) => void }, line: string) => {
+  const gh = await fakeGh()
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+  const timed = async (text: string) => {
+    await gh.issues([
+      issue({ number: 3 }),
+      issue({ number: 10, labels: ['wayfinder:map'] }),
+      issue({ number: 5, body: `## Blocked by\n\n- #3\n- ${text}\n` }),
+      issue({ number: 6, body: `Blocked by: #3 ${text}\n` }),
+      issue({ number: 7, body: `## Parent\n\n#10 ${text}\n` }),
+    ])
+    const start = performance.now()
+    const { structuredContent } = await deck.callTool('deck_tasks', { refresh: true })
+    return { ms: performance.now() - start, structuredContent }
+  }
+  const plain = 'ab '.repeat(Math.ceil(line.length / 3)).slice(0, line.length)
+  // The first read warms the Deck service up.
+  await timed(plain)
+  const plainMs = (await timed(plain)).ms
+  const withLine = await timed(line)
+
+  return { plainMs, lineMs: withLine.ms, read: withLine.structuredContent }
+}
+
+const assertReadAsBefore = (read: any) => {
+  assert.deepEqual(
+    read.groups.blocked.map(({ number, blockers, blockedBy }: any) => ({ number, blockers, blockedBy })),
+    [
+      { number: 5, blockers: [3], blockedBy: [3] },
+      { number: 6, blockers: [3], blockedBy: [3] },
+    ],
+  )
+  assert.deepEqual(
+    read.containers.map(({ number, children }: any) => ({ number, children })),
+    [{ number: 10, children: [7] }],
+  )
+}
+
+// A line near GitHub's limit on a body, 65536 characters. A read that grows
+// with the line's length takes some milliseconds more; one that grows with
+// its square takes seconds more, on a faster machine too.
+const LONG = 65000
+
+test('deck_tasks reads a long run of letters and digits in a Parent section or Blocked by about as fast as plain words', async t => {
+  const { plainMs, lineMs, read } = await timedWithLine(t, 'a'.repeat(LONG - 6) + 'a.b-c_')
+
+  assertReadAsBefore(read)
+  assert.ok(lineMs - plainMs < 1000, `${lineMs} ms with the line, ${plainMs} ms without`)
+})
+
+test('deck_tasks reads a long line of open brackets and escapes in a Parent section or Blocked by about as fast as plain words', async t => {
+  const { plainMs, lineMs, read } = await timedWithLine(t, '[\\'.repeat(LONG / 2))
+
+  assertReadAsBefore(read)
+  assert.ok(lineMs - plainMs < 1000, `${lineMs} ms with the line, ${plainMs} ms without`)
+})
+
+test('deck_tasks reads a long line of unclosed Markdown links in a Parent section or Blocked by about as fast as plain words', async t => {
+  const { plainMs, lineMs, read } = await timedWithLine(t, '[x]('.repeat(LONG / 4))
+
+  assertReadAsBefore(read)
+  assert.ok(lineMs - plainMs < 1000, `${lineMs} ms with the line, ${plainMs} ms without`)
+})
+
 test('deck_tasks marks only open Specs with every Child Task closed as Pending Closeout, without closing them', async t => {
   const gh = await fakeGh()
   const deck = startDeck(await configured(), gh.env)
