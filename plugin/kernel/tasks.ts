@@ -319,10 +319,12 @@ const declared = (body: string, name: string): string | undefined => {
 // text's. Its text may hold brackets nested once, `[#12 [draft]]`, and escaped
 // ones, `\[` and `\]`, which neither open nor close a pair.
 //
-// It reads as a regular expression would, in one pass: a run of the
+// It reads as a regular expression would, left to right. A run of the
 // characters a repository's name holds, or a link's text or link, is measured
-// once and not again from each place inside it, so the time grows with the
-// text's length and not with its square.
+// once and not again from each place inside it. The text of a link to no
+// issue is read again for its references, a character a few times at most
+// since brackets nest only once, so the time grows with the text's length and
+// not with its square.
 const references = (text: string, identity: string): (number | null)[] => {
   const reference = (repository: string | undefined, number: string) =>
     repository === undefined || repository.toLowerCase() === identity.toLowerCase() ? Number(number) : null
