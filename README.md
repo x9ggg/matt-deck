@@ -37,7 +37,7 @@ Pane 只在 Configured Project 里出现，也就是仓库根目录有 `.matt-de
 
 之后新开一个 Session，Pane 会自动出现。
 
-Skill Source 是目录时，Pane 的“技能”列出目录里的全部技能，包括不属于 Matt skills 的；只想看 Matt skills，就把 Skill Source 选成 Matt skills 的插件。
+Skill Source 是目录时，Pane 的“技能”列出目录里的全部技能，包括不属于 Matt skills 的；只想看 Matt skills，就把 Skill Source 选成 Matt skills 的插件。这要先装上 Matt skills 的插件，它才会出现在配置技能的候选里；已经配置过的项目重跑 `/matt-deck:configure`，在配置技能问是否修改时选择修改。
 
 ## 命令行排查
 
