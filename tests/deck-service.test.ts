@@ -2284,9 +2284,10 @@ test('deck_occupy says when the Session holding the Task is Orphaned, and leaves
     await deck.callTool('deck_occupy', { task, session })
   }
   await deck.callTool('deck_heartbeat', { session: 'stale' })
-  await deck.callTool('deck_end_session', { session: 'ended' })
   // Past the last heartbeat by more than three minutes.
   await clock.set(start + 3 * 60_000 + 1)
+  // Ended only now, so no old heartbeat makes its Occupancy Orphaned.
+  await deck.callTool('deck_end_session', { session: 'ended' })
 
   const answers = []
   for (const task of [3, 5, 7]) {
