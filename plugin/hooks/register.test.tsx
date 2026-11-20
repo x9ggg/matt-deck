@@ -1480,6 +1480,52 @@ test("above the prompt the action bar dims a blocked Spec's words as its glyph, 
   }
 })
 
+test("above the prompt the action bar dims a blocked Map's words as a Spec's, and leaves a Spec's words undimmed when Pending Closeout, occupied itself or ready", async ($, on) => {
+  let answer = occupiedUnder([], { map: { group: 'blocked' } })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+
+  // A blocked Map with none of its Child Tasks in progress: its glyph and its
+  // words, the word Map, its number, title and progress, are dimmed, as is its
+  // row in the list below; not its four counts.
+  let ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  await focus($, 'task:21')
+  const bar = await ui.find({
+    type: 'Box',
+    text: /^□ Map #21 Codex 适配走哪条路 +0\/1 +◇ \d+ {2}▶ \d+ {2}□ \d+ {2}◆ \d+.*详情$/,
+  })
+  expect(bar).toBeDefined()
+  const words = await ui.find({ type: 'Text', text: /^ Map #21 / })
+  expect(words?.text).toMatch(/^ Map #21 Codex 适配走哪条路 +0\/1 +$/)
+  expect(words?.props.dimColor).toBe(true)
+  expect((await ui.findAll({ type: 'Text' })).filter(text => text.props.dimColor).map(text => text.text)).toEqual([
+    '□',
+    words?.text,
+    '□',
+    ' Map #21 0/1',
+  ])
+  await ui.unmount()
+
+  // Pending Closeout though blocked, occupied itself, or ready: the Spec's
+  // words are not dimmed. Pending Closeout, they end in 待收尾核对.
+  for (const [own, glyph, tail] of [
+    [{ group: 'blocked', isPendingCloseout: true }, '◈', / {3}待收尾核对$/],
+    [{ group: 'inProgress', occupant: 'a1b2c3d4-session' }, '▶', / +0\/4 +$/],
+    [{}, '◇', / +0\/4 +$/],
+  ] as const) {
+    answer = occupiedUnder([], { spec: own })
+    await seen.clock.advance(60_000)
+    ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+    await focus($, 'task:1')
+    expect(await ui.find({ type: 'Box', text: new RegExp(`^${glyph} Spec #1 规格：里程碑一 .*详情$`) })).toBeDefined()
+    const specWords = await ui.find({ type: 'Text', text: /^ Spec #1 规格：/ })
+    expect(specWords?.text).toMatch(tail)
+    expect(Boolean(specWords?.props.dimColor)).toBe(false)
+    await ui.unmount()
+  }
+})
+
 test('a Task Source with no Task says so, apart from a failed read', async ($, on) => {
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => tasks({}) })
   await start($)
