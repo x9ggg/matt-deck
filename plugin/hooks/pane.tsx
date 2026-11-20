@@ -328,23 +328,23 @@ export const drawPane = (
       {GLYPH[group]}
     </Text>
   )
-  // A Spec's or Map's glyph: ◈ when Pending Closeout; else, while it or a
-  // direct Child Task is in progress, ▶ if this Session holds one, else ▲ if
-  // one is Orphaned, else ◐; else its own group's.
+  // A Spec's or Map's glyph: ◈ when Pending Closeout and ◆ when closed; else
+  // by its direct Child Tasks in progress, ▲ if one is Orphaned, else ▶ if
+  // this Session holds one, else ◐; with none, its own group's.
   const containerMark = (container: Container) => {
-    const inProgress = [
-      ...[container, ...list!.containers.filter(child => child.parent === container.number)].filter(
-        task => task.group === 'inProgress',
-      ),
-      ...list!.groups.inProgress.filter(task => task.parent === container.number),
-    ]
+    const inProgress =
+      container.group === 'done'
+        ? []
+        : [...list!.containers.filter(child => child.group === 'inProgress'), ...list!.groups.inProgress].filter(
+            child => child.parent === container.number,
+          )
 
     return container.isPendingCloseout
       ? { text: '◈', color: 'warning' }
-      : inProgress.some(task => !task.isOrphaned && task.occupant === view.sessionId)
-        ? { text: '▶', color: GLYPH_COLOR.inProgress }
-        : inProgress.some(task => task.isOrphaned)
-          ? { text: '▲', color: 'warning' }
+      : inProgress.some(task => task.isOrphaned)
+        ? { text: '▲', color: 'warning' }
+        : inProgress.some(task => task.occupant === view.sessionId)
+          ? { text: '▶', color: GLYPH_COLOR.inProgress }
           : inProgress.length > 0
             ? { text: '◐', color: 'inactive' }
             : { text: GLYPH[container.group], color: GLYPH_COLOR[container.group] }

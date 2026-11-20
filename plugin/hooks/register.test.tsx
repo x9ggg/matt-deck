@@ -851,18 +851,18 @@ const CHILD_MINE = task(16, '命令行', { parent: 1, occupant: 'a1b2c3d4-sessio
 const CHILD_OTHERS = task(17, '从本仓库安装', { parent: 1, occupant: '3f9c21d0-other' })
 const CHILD_ORPHANED = task(4, '核对 Pane 的生命周期', { parent: 1, occupant: '77e0aa15-ended', isOrphaned: true })
 
-test("a Spec's row takes its glyph from its Child Tasks in progress, ▶ before ▲ before ◐, in both placements and the switch list", async ($, on) => {
+test("a Spec's row takes its glyph from its Child Tasks in progress, ▲ before ▶ before ◐, in both placements and the switch list, and a closed Spec stays ◆", async ($, on) => {
   let answer = occupiedUnder([CHILD_MINE, CHILD_OTHERS, CHILD_ORPHANED])
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
   await start($)
   await seen.clock.settle()
 
   for (const [inProgress, more, glyph, color] of [
-    [[CHILD_MINE, CHILD_OTHERS, CHILD_ORPHANED], {}, '▶', 'suggestion'],
-    [[CHILD_OTHERS, CHILD_ORPHANED], {}, '▲', 'warning'],
+    [[CHILD_MINE, CHILD_OTHERS, CHILD_ORPHANED], {}, '▲', 'warning'],
+    [[CHILD_MINE, CHILD_OTHERS], {}, '▶', 'suggestion'],
     [[CHILD_OTHERS], {}, '◐', 'inactive'],
-    // The Spec's own Occupancy counts as well.
-    [[], { group: 'inProgress', occupant: '3f9c21d0-other' }, '◐', 'inactive'],
+    // The Spec's own Occupancy does not count: its own group's glyph.
+    [[], { group: 'inProgress', occupant: '3f9c21d0-other' }, '▶', 'suggestion'],
     [[], {}, '◇', 'suggestion'],
   ] as const) {
     answer = occupiedUnder([...inProgress], more)
@@ -884,6 +884,18 @@ test("a Spec's row takes its glyph from its Child Tasks in progress, ▶ before 
       await ui.unmount()
     }
   }
+
+  // Closed, it is drawn in the switch list only, ◆ whatever its Child Tasks
+  // are doing.
+  answer = occupiedUnder([CHILD_MINE], { isOpen: false, group: 'done' })
+  await seen.clock.advance(60_000)
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:map' })
+  await ui.press({ key: 'switch' })
+  const closed = await ui.find({ key: 'switch:1' })
+  expect(closed?.text).toMatch(/^◆ Spec #1 /)
+  expect(closed?.children[0].props.color).toBe('warning')
+  await ui.unmount()
 })
 
 test('the action bar follows the focus from row to row and keeps the last row', async ($, on) => {
