@@ -37,7 +37,7 @@ Pane 不涂底色，颜色全部用引擎的主题色，跟着用户的终端主
 | --- | --- |
 | 不指定（主题的正文色） | 正文、标题、按钮的标签、选中的标签页 |
 | `inactive` | 说明、分组标题、未选中的标签页、编号、主按钮后面的键、Recommendation 的框、树的连线 |
-| `dimColor`（`Text` 的属性，不是颜色名） | 被阻塞的 Task 整行；进度条进行中的一段再加上它 |
+| `dimColor`（`Text` 的属性，不是颜色名） | 被阻塞的 Task 整行，被阻塞、直接的 Child Task 都不在进行中的 Spec 或 Map 那一行；进度条进行中的一段再加上它 |
 | `subtle` | 分隔线、普通的框、进度条其余的一段。它很淡，不拿来写字 |
 | `suggestion` | 可执行和进行中的图形、项目名、技能命令名、进度条已关闭的一段、“在 GitHub 打开” |
 | `warning` | 已关闭、Pending Closeout、“收尾核对”，以及 Orphaned、接管确认、过时的新鲜度、读取迟迟没有应答的提示 |
@@ -279,7 +279,7 @@ f: 全部 17  ◇ 1  ▶ 3  □ 11  ◆ 2             ◀ 选中“全部”
 - 每个 Task 一行：图形、编号、标题，右端是状态词、占用它的 Session 或关闭时间。有没有焦点都只占这一行。
 - 带 `needs-triage` 或 `needs-info`、没有 Occupancy 的 Task 在“阻塞”里，没被阻塞也一样：图形 □，整行 `dimColor`，右端写这个标签名，例如 `□ #19 等分诊                  needs-triage`；同时有未关闭的阻塞者时，右端照样写 `被 #n 阻塞`。有 Occupancy 时它在“进行中”，画法和别的进行中的 Task 一样。
 - Spec 和 Map 的行排在最前面，占两行：第二行是缩进 2 列的进度条。
-- Spec 或 Map 那一行的图形，按顺序取第一个成立的：Pending Closeout 是 ◈，已关闭是 ◆；它直接的 Child Task 里有 Orphaned 的是 ▲；有本 Session 占着的是 ▶；有别的 Session 占着的是 ◐；都没有，是它作为 Task 所在分组的图形。▲ 排在 ▶ 前面，因为 Orphaned 是唯一等人决定的状态。▲ ▶ ◐ 的颜色照图形表。孙辈不算，和计数一致。例子里 17 个 Task 都是 Spec #1 的 Child Task，其中 #4 是 Orphaned，所以画 ▲；输入框上方和 `s: 切换` 的列表也照这条画。
+- Spec 或 Map 那一行的图形，按顺序取第一个成立的：Pending Closeout 是 ◈，已关闭是 ◆；它直接的 Child Task 里有 Orphaned 的是 ▲；有本 Session 占着的是 ▶；有别的 Session 占着的是 ◐；都没有，照 Task 的行画：它自己被本 Session 占用是 ▶，被别的 Session 占用是 ◐，Occupancy 是 Orphaned 是 ▲，否则是它所在分组的图形，被阻塞时这一行整行 `dimColor`，下面的进度条不变暗。Child Task 有进行中的时候只看 Child Task，它自己的 Occupancy 不看，这一行也不变暗。▲ 排在 ▶ 前面，因为 Orphaned 是唯一等人决定的状态。▲ ▶ ◐ 的颜色照图形表。孙辈不算，和计数一致。例子里 17 个 Task 都是 Spec #1 的 Child Task，其中 #4 是 Orphaned，所以画 ▲；输入框上方和 `s: 切换` 的列表也照这条画。
 
 动作栏随焦点所在的行变（这里把各种情况排在一起对照，实际只有一行）：
 

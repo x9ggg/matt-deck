@@ -330,8 +330,9 @@ export const drawPane = (
   )
   // A Spec's or Map's glyph: ◈ when Pending Closeout and ◆ when closed; else
   // by its direct Child Tasks in progress, ▲ if one is Orphaned, else ▶ if
-  // this Session holds one, else ◐; with none, its own group's.
-  const containerMark = (container: Container) => {
+  // this Session holds one, else ◐; with none, a Task's row's by its own
+  // Occupancy and group, the row dimmed when blocked.
+  const containerMark = (container: Container): { text: string; color: string | undefined; dim: boolean } => {
     const inProgress =
       container.group === 'done'
         ? []
@@ -340,20 +341,28 @@ export const drawPane = (
           )
 
     return container.isPendingCloseout
-      ? { text: '◈', color: 'warning' }
+      ? { text: '◈', color: 'warning', dim: false }
       : inProgress.some(task => task.isOrphaned)
-        ? { text: '▲', color: 'warning' }
+        ? { text: '▲', color: 'warning', dim: false }
         : inProgress.some(task => task.occupant === view.sessionId)
-          ? { text: '▶', color: GLYPH_COLOR.inProgress }
+          ? { text: '▶', color: GLYPH_COLOR.inProgress, dim: false }
           : inProgress.length > 0
-            ? { text: '◐', color: 'inactive' }
-            : { text: GLYPH[container.group], color: GLYPH_COLOR[container.group] }
+            ? { text: '◐', color: 'inactive', dim: false }
+            : isOrphaned(container, container.group)
+              ? { text: '▲', color: 'warning', dim: false }
+              : isOthers(container, container.group)
+                ? { text: '◐', color: 'inactive', dim: false }
+                : { text: GLYPH[container.group], color: GLYPH_COLOR[container.group], dim: container.group === 'blocked' }
   }
   const containerGlyphText = (container: Container) => containerMark(container).text
   const containerGlyph = (container: Container) => {
-    const { text, color } = containerMark(container)
+    const { text, color, dim } = containerMark(container)
 
-    return <Text color={color}>{text}</Text>
+    return (
+      <Text color={color} dimColor={dim}>
+        {text}
+      </Text>
+    )
   }
   // A Task's glyph: its group's, but in progress ▲ when Orphaned and ◐ for
   // another Session.
@@ -695,18 +704,23 @@ export const drawPane = (
       const progress = progressText(container)
       const room = columns - 1 - width(head) - width(number) - 1 - 1 - width(progress)
       const title = cut(container.title, room)
+      const { dim } = containerMark(container)
 
       return (
         <Button key={row.key} plain autoFocus={isLanding ? true : undefined} onPress={onPress}>
           {containerGlyph(container)}
-          <Text>{head}</Text>
-          <Text color="inactive">{number}</Text>
-          <Text>
+          <Text dimColor={dim}>{head}</Text>
+          <Text color="inactive" dimColor={dim}>
+            {number}
+          </Text>
+          <Text dimColor={dim}>
             {' '}
             {title}
             {spaces(room - width(title) + 1)}
           </Text>
-          <Text color="inactive">{progress}</Text>
+          <Text color="inactive" dimColor={dim}>
+            {progress}
+          </Text>
         </Button>
       )
     }
@@ -996,7 +1010,9 @@ export const drawPane = (
               label: labelOf(row),
               draw: [
                 'container' in row ? containerGlyph(row.container) : taskGlyph(row.task, row.group, row.group === 'blocked'),
-                <Text dimColor={'group' in row && row.group === 'blocked'}>{labelOf(row).slice(1)}</Text>,
+                <Text dimColor={'container' in row ? containerMark(row.container).dim : row.group === 'blocked'}>
+                  {labelOf(row).slice(1)}
+                </Text>,
               ],
               isLanding: row.key === landing?.key,
               onPress: () => actions.openTask(numberOf(row)),

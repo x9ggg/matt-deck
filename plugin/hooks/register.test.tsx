@@ -851,32 +851,42 @@ const CHILD_MINE = task(16, '命令行', { parent: 1, occupant: 'a1b2c3d4-sessio
 const CHILD_OTHERS = task(17, '从本仓库安装', { parent: 1, occupant: '3f9c21d0-other' })
 const CHILD_ORPHANED = task(4, '核对 Pane 的生命周期', { parent: 1, occupant: '77e0aa15-ended', isOrphaned: true })
 
-test("a Spec's row takes its glyph from its Child Tasks in progress, ▲ before ▶ before ◐, in both placements and the switch list, and a closed Spec stays ◆", async ($, on) => {
+test("a Spec's row takes its glyph from its Child Tasks in progress, ▲ before ▶ before ◐, with none is drawn as a Task's row, dimmed when blocked, in both placements and the switch list, and a closed Spec stays ◆", async ($, on) => {
   let answer = occupiedUnder([CHILD_MINE, CHILD_OTHERS, CHILD_ORPHANED])
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
   await start($)
   await seen.clock.settle()
 
-  for (const [inProgress, more, glyph, color] of [
-    [[CHILD_MINE, CHILD_OTHERS, CHILD_ORPHANED], {}, '▲', 'warning'],
-    [[CHILD_MINE, CHILD_OTHERS], {}, '▶', 'suggestion'],
-    [[CHILD_OTHERS], {}, '◐', 'inactive'],
-    // The Spec's own Occupancy does not count: its own group's glyph.
-    [[], { group: 'inProgress', occupant: '3f9c21d0-other' }, '▶', 'suggestion'],
-    [[], {}, '◇', 'suggestion'],
+  for (const [inProgress, more, glyph, color, dim] of [
+    [[CHILD_MINE, CHILD_OTHERS, CHILD_ORPHANED], {}, '▲', 'warning', false],
+    [[CHILD_MINE, CHILD_OTHERS], {}, '▶', 'suggestion', false],
+    [[CHILD_OTHERS], {}, '◐', 'inactive', false],
+    // With a Child Task in progress the Spec's own Occupancy and group do not
+    // count, and the row is not dimmed.
+    [[CHILD_OTHERS], { group: 'blocked', occupant: 'a1b2c3d4-session' }, '◐', 'inactive', false],
+    // With none, its own Occupancy as a Task's row.
+    [[], { group: 'inProgress', occupant: 'a1b2c3d4-session' }, '▶', 'suggestion', false],
+    [[], { group: 'inProgress', occupant: '3f9c21d0-other' }, '◐', 'inactive', false],
+    [[], { group: 'inProgress', occupant: '77e0aa15-ended', isOrphaned: true }, '▲', 'warning', false],
+    [[], { group: 'blocked' }, '□', undefined, true],
+    [[], {}, '◇', 'suggestion', false],
   ] as const) {
     answer = occupiedUnder([...inProgress], more)
     await seen.clock.advance(60_000)
     for (const target of [PANE_TARGET, INLINE]) {
       const ui = await $.ui.mount({ ...target, surface: 'terminal' })
-      const row = await ui.find({ key: 'task:1' })
-      expect(row?.text).toMatch(new RegExp(`^${glyph} Spec #1 `))
-      expect(row?.children[0].props.color).toBe(color)
+      const drawn = async (key: string) => {
+        const row = await ui.find({ key })
+        expect(row?.text).toMatch(new RegExp(`^${glyph} Spec #1 `))
+        expect(row?.children[0].props.color).toBe(color)
+        expect(row?.children.map(child => Boolean(child.props?.dimColor))).toEqual(row?.children.map(() => dim))
+      }
+      await drawn('task:1')
       expect((await ui.find({ key: 'task:21' }))?.text).toMatch(/^◇ Map #21 /)
       if (target === PANE_TARGET) {
         await ui.press({ key: 'tab:map' })
         await ui.press({ key: 'switch' })
-        expect((await ui.find({ key: 'switch:1' }))?.text).toMatch(new RegExp(`^${glyph} Spec #1 `))
+        await drawn('switch:1')
         expect((await ui.find({ key: 'switch:21' }))?.text).toMatch(/^◇ Map #21 /)
         await ui.press({ key: 'back' })
         await ui.press({ key: 'tab:tasks' })
