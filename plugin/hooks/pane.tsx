@@ -203,6 +203,9 @@ const statusOf = (task: Task, group: Group, session: string) => {
 // One focusable row of the list: a Spec or Map, or a Task in its group.
 type Row = { key: string } & ({ container: Container } | { task: Task; group: Group })
 
+// A row's glyph: its character, its color and whether it is dimmed.
+type Mark = { text: string; color: string | undefined; dim: boolean }
+
 const keyOf = (number: number) => `task:${number}`
 
 // The list the filter shows: open Specs and Maps first under "all", then each
@@ -332,7 +335,7 @@ export const drawPane = (
   // by its direct Child Tasks in progress, ▲ if one is Orphaned, else ▶ if
   // this Session holds one, else ◐; with none, a Task's row's by its own
   // Occupancy and group, the row dimmed when blocked.
-  const containerMark = (container: Container): { text: string; color: string | undefined; dim: boolean } => {
+  const containerMark = (container: Container): Mark => {
     const inProgress =
       container.group === 'done'
         ? []
@@ -348,37 +351,22 @@ export const drawPane = (
           ? { text: '▶', color: GLYPH_COLOR.inProgress, dim: false }
           : inProgress.length > 0
             ? { text: '◐', color: 'inactive', dim: false }
-            : isOrphaned(container, container.group)
-              ? { text: '▲', color: 'warning', dim: false }
-              : isOthers(container, container.group)
-                ? { text: '◐', color: 'inactive', dim: false }
-                : { text: GLYPH[container.group], color: GLYPH_COLOR[container.group], dim: container.group === 'blocked' }
+            : taskMark(container, container.group, container.group === 'blocked')
   }
-  const containerGlyphText = (container: Container) => containerMark(container).text
-  const containerGlyph = (container: Container) => {
-    const { text, color, dim } = containerMark(container)
-
-    return (
-      <Text color={color} dimColor={dim}>
-        {text}
-      </Text>
-    )
-  }
-  // A Task's glyph: its group's, but in progress ▲ when Orphaned and ◐ for
-  // another Session.
-  const isOrphaned = (task: Task, group: Group) => group === 'inProgress' && task.isOrphaned
-  const isOthers = (task: Task, group: Group) =>
-    group === 'inProgress' && !task.isOrphaned && task.occupant !== view.sessionId
-  const glyphText = (task: Task, group: Group) =>
-    isOrphaned(task, group) ? '▲' : isOthers(task, group) ? '◐' : GLYPH[group]
-  const taskGlyph = (task: Task, group: Group, dim = false) =>
-    isOrphaned(task, group) ? (
-      <Text color="warning">▲</Text>
-    ) : isOthers(task, group) ? (
-      <Text color="inactive">◐</Text>
-    ) : (
-      glyph(group, dim)
-    )
+  // A Task's glyph: its group's, dimmed if asked, but in progress ▲ when
+  // Orphaned and ◐ for another Session.
+  const taskMark = (task: Task, group: Group, dim = false): Mark =>
+    group === 'inProgress' && task.isOrphaned
+      ? { text: '▲', color: 'warning', dim: false }
+      : group === 'inProgress' && task.occupant !== view.sessionId
+        ? { text: '◐', color: 'inactive', dim: false }
+        : { text: GLYPH[group], color: GLYPH_COLOR[group], dim }
+  const markGlyph = ({ text, color, dim }: Mark) => (
+    <Text color={color} dimColor={dim}>
+      {text}
+    </Text>
+  )
+  const taskGlyph = (task: Task, group: Group, dim = false) => markGlyph(taskMark(task, group, dim))
   const status = (task: Task, group: Group) => statusOf(task, group, view.sessionId)
   // This Session's Task in progress, for the top.
   const executing = list?.groups.inProgress.find(task => task.occupant === view.sessionId)
@@ -650,7 +638,7 @@ export const drawPane = (
       return (
         <Box flexDirection="row" justifyContent="space-between">
           <Box flexDirection="row">
-            {containerGlyph(container)}
+            {markGlyph(containerMark(container))}
             <Text>
               {' '}
               {head}
@@ -704,11 +692,12 @@ export const drawPane = (
       const progress = progressText(container)
       const room = columns - 1 - width(head) - width(number) - 1 - 1 - width(progress)
       const title = cut(container.title, room)
-      const { dim } = containerMark(container)
+      const mark = containerMark(container)
+      const { dim } = mark
 
       return (
         <Button key={row.key} plain autoFocus={isLanding ? true : undefined} onPress={onPress}>
-          {containerGlyph(container)}
+          {markGlyph(mark)}
           <Text dimColor={dim}>{head}</Text>
           <Text color="inactive" dimColor={dim}>
             {number}
@@ -995,28 +984,29 @@ export const drawPane = (
     if (takingOver !== undefined) {
       return takeOverConfirm(takingOver)
     }
-    const labelOf = (row: Row) =>
-      'container' in row
-        ? `${containerGlyphText(row.container)} ${row.container.kind === 'spec' ? 'Spec' : 'Map'} #${row.container.number} ${progressText(row.container)}`
-        : `${glyphText(row.task, row.group)} #${row.task.number} ${cut(row.task.title, 28)}`
-
     return (
       <Box flexDirection="column">
         {inlineActionBar(focused!)}
         <Box flexDirection="row" justifyContent="space-between">
           {inlineRow(
-            rows.map(row => ({
-              key: row.key,
-              label: labelOf(row),
-              draw: [
-                'container' in row ? containerGlyph(row.container) : taskGlyph(row.task, row.group, row.group === 'blocked'),
-                <Text dimColor={'container' in row ? containerMark(row.container).dim : row.group === 'blocked'}>
-                  {labelOf(row).slice(1)}
-                </Text>,
-              ],
-              isLanding: row.key === landing?.key,
-              onPress: () => actions.openTask(numberOf(row)),
-            })),
+            rows.map(row => {
+              const mark =
+                'container' in row
+                  ? containerMark(row.container)
+                  : taskMark(row.task, row.group, row.group === 'blocked')
+              const label =
+                'container' in row
+                  ? `${mark.text} ${row.container.kind === 'spec' ? 'Spec' : 'Map'} #${row.container.number} ${progressText(row.container)}`
+                  : `${mark.text} #${row.task.number} ${cut(row.task.title, 28)}`
+
+              return {
+                key: row.key,
+                label,
+                draw: [markGlyph(mark), <Text dimColor={mark.dim}>{label.slice(1)}</Text>],
+                isLanding: row.key === landing?.key,
+                onPress: () => actions.openTask(numberOf(row)),
+              }
+            }),
             columns - filterWidth - 2,
             nav.page,
           )}
