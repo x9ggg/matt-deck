@@ -837,9 +837,9 @@ test("the action bar counts a Spec's Child Tasks that are Specs by their own gro
 })
 
 // Spec #1 over #3, ready, and the Child Tasks in progress given; Map #21
-// beside it with nothing in progress. `more` is the Spec's own, `mapMore`
-// the Map's.
-const occupiedUnder = (inProgress: object[], more: object = {}, mapMore: object = {}) =>
+// beside it with nothing in progress. `spec` is the Spec's own, `map` the
+// Map's.
+const occupiedUnder = (inProgress: object[], { spec: more = {}, map: mapMore = {} }: { spec?: object; map?: object } = {}) =>
   tasks({
     containers: [
       spec(1, '规格：里程碑一', [3, 4, 16, 17], { closed: 0, inProgress: inProgress.length, total: 4 }, more),
@@ -872,7 +872,7 @@ test("a Spec's row takes its glyph from its Child Tasks in progress, ▲ before 
     [[], { group: 'blocked' }, '□', undefined, true],
     [[], {}, '◇', 'suggestion', false],
   ] as const) {
-    answer = occupiedUnder([...inProgress], more)
+    answer = occupiedUnder([...inProgress], { spec: more })
     await seen.clock.advance(60_000)
     for (const target of [PANE_TARGET, INLINE]) {
       const ui = await $.ui.mount({ ...target, surface: 'terminal' })
@@ -898,7 +898,7 @@ test("a Spec's row takes its glyph from its Child Tasks in progress, ▲ before 
 
   // Closed, it is drawn in the switch list only, ◆ whatever its Child Tasks
   // are doing.
-  answer = occupiedUnder([CHILD_MINE], { isOpen: false, group: 'done' })
+  answer = occupiedUnder([CHILD_MINE], { spec: { isOpen: false, group: 'done' } })
   await seen.clock.advance(60_000)
   const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
   await ui.press({ key: 'tab:map' })
@@ -909,16 +909,13 @@ test("a Spec's row takes its glyph from its Child Tasks in progress, ▲ before 
   await ui.unmount()
 })
 
-test("with none of its Child Tasks in progress, a Map's row is drawn as a Task's row as a Spec's is, and inline the action bar's glyph of a Spec or a Map is taken the same way", async ($, on) => {
-  let answer = occupiedUnder([])
+test('a blocked Map with none of its Child Tasks in progress is a dimmed □ row, in both placements and the switch list', async ($, on) => {
+  // Blocked, the Map's □ and its whole row are dimmed, in both placements and
+  // the switch list.
+  const answer = occupiedUnder([], { map: { group: 'blocked' } })
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
   await start($)
   await seen.clock.settle()
-
-  // Blocked, the Map's □ and its whole row are dimmed, in both placements and
-  // the switch list.
-  answer = occupiedUnder([], {}, { group: 'blocked' })
-  await seen.clock.advance(60_000)
   for (const target of [PANE_TARGET, INLINE]) {
     const ui = await $.ui.mount({ ...target, surface: 'terminal' })
     const drawn = async (key: string) => {
@@ -937,6 +934,13 @@ test("with none of its Child Tasks in progress, a Map's row is drawn as a Task's
     }
     await ui.unmount()
   }
+})
+
+test("with none of its Child Tasks in progress, the action bar above the prompt takes a Spec's or a Map's glyph as a Task's row does", async ($, on) => {
+  let answer = occupiedUnder([])
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
 
   for (const [own, glyph, color, dim] of [
     [{ group: 'inProgress', occupant: 'a1b2c3d4-session' }, '▶', 'suggestion', false],
@@ -944,11 +948,11 @@ test("with none of its Child Tasks in progress, a Map's row is drawn as a Task's
     [{ group: 'inProgress', occupant: '77e0aa15-ended', isOrphaned: true }, '▲', 'warning', false],
     [{ group: 'blocked' }, '□', undefined, true],
   ] as const) {
-    for (const [number, head] of [
-      [1, 'Spec'],
-      [21, 'Map'],
+    for (const [number, head, given] of [
+      [1, 'Spec', { spec: own }],
+      [21, 'Map', { map: own }],
     ] as const) {
-      answer = number === 1 ? occupiedUnder([], own) : occupiedUnder([], {}, own)
+      answer = occupiedUnder([], given)
       await seen.clock.advance(60_000)
       const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
       await focus($, `task:${number}`)
@@ -1444,7 +1448,7 @@ test('above the prompt the action bar names a Spec once, then its progress and i
 })
 
 test("above the prompt the action bar dims a blocked Spec's words as its glyph, not its counts or actions, unless a Child Task is in progress", async ($, on) => {
-  let answer = occupiedUnder([], { group: 'blocked' })
+  let answer = occupiedUnder([], { spec: { group: 'blocked' } })
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
   await start($)
   await seen.clock.settle()
@@ -1452,7 +1456,7 @@ test("above the prompt the action bar dims a blocked Spec's words as its glyph, 
     [[], '□', true],
     [[CHILD_OTHERS], '◐', false],
   ] as const) {
-    answer = occupiedUnder([...inProgress], { group: 'blocked' })
+    answer = occupiedUnder([...inProgress], { spec: { group: 'blocked' } })
     await seen.clock.advance(60_000)
     const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
     await focus($, 'task:1')
