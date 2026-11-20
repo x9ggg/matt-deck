@@ -40,7 +40,7 @@ Work lands on `main`. This working copy is shared by other sessions, so a branch
 
 - **Commit and push** each wait for the user to ask. `origin` is public: a push publishes.
 - **Commit message**: a title saying what Deck now does, ending in `(#<number>)`; a body describing the behaviour in the glossary's terms.
-- **Before a push**: `npm test` and `npm run check`. `.githooks/pre-push` refuses a private email or a path of this machine; a fresh clone turns it on with `git config core.hooksPath .githooks`.
+- **Before a push**: `npm test` and `npm run check`. `check` type-checks the Deck service, the command-line entries and the Node tests; it leaves out the Mod and its tests (`plugin/hooks/*.tsx`), because the engine writes the types they need only when it loads the Mod from the user's own folder, so a fresh clone has none. The Mod tests in `npm test` guard the Mod instead. `.githooks/pre-push` refuses a private email or a path of this machine; a fresh clone turns it on with `git config core.hooksPath .githooks`.
 - **Close**: `gh issue close <number> --comment "..."`, the comment in Chinese: `已由 <sha> 实现。` with the test counts, what was built as a few bullets, then where each acceptance criterion stands.
 - **Process notes** (how the work went, tool reports) live outside the repo. What a later reader needs goes in the commit message and the closing comment.
 
