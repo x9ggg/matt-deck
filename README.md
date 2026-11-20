@@ -37,6 +37,8 @@ Pane 只在 Configured Project 里出现，也就是仓库根目录有 `.matt-de
 
 之后新开一个 Session，Pane 会自动出现。
 
+Skill Source 是目录时，Pane 的“技能”列出目录里的全部技能，包括不属于 Matt skills 的；只想看 Matt skills，就把 Skill Source 选成 Matt skills 的插件。
+
 ## 命令行排查
 
 不打开 Claude Code，也可以在要排查的项目目录或其子目录运行：
