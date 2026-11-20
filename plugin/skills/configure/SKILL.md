@@ -39,7 +39,7 @@ Deck 服务连不上时，告诉用户原因并停止。
 
 ## 4. Skill Source
 
-Skill Source 选定后固定，Deck 展示和 agent 执行都用这一份。
+Skill Source 选定后，Deck 展示和 agent 执行都用这一份；要改就重跑配置。
 
 候选是 `skillSources`。修改已有配置时，把现有的 `skillSource` 排在候选最前；它不在 `skillSources` 里时也加进候选，并说明本机这次没找到它。
 

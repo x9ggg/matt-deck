@@ -34,7 +34,7 @@ _Avoid_: 绑定会话、当前会话
 完成了 Deck 首次配置、选定了 Task Source 和 Skill Source 的项目。Pane 只在这类项目里出现。
 
 **Skill Source（技能来源）**:
-一个项目使用的那一份 Matt skills 所在的位置，首次配置时选定，之后固定。
+一个项目使用的那一份 Matt skills 所在的位置，Deck 展示和 agent 执行都用这一份。首次配置时选定，之后只有重跑配置才会改。
 
 **Workspace（工作区）**:
 一个项目在本机的一份检出目录。同一个项目可以有多个 Workspace，它们共用同一个 Task Source。
