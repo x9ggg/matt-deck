@@ -794,10 +794,11 @@ test('with no Task ready the focus lands on the first row, a Spec or a Map as we
       expect(await landings(ui)).toEqual(['task:1'])
       // The engine moves the focus onto that row as the pane takes the
       // keyboard (`docs/pane-layout.md`, the eighth round), and the action
-      // bar follows it: docked `#1 …`, above the prompt `◇ Spec #1 <title> …`.
+      // bar follows it: docked `#1 …`, above the prompt `◐ Spec #1 <title> …`,
+      // ◐ since #3 is held by another Session.
       await focus($, 'task:1')
       expect(
-        await ui.find({ type: 'Box', text: new RegExp(`^(#1 |◇ ${head} #1 .*)◇ 0  ▶ 1  □ 2  ◆ 0地图  详情$`) }),
+        await ui.find({ type: 'Box', text: new RegExp(`^(#1 |◐ ${head} #1 .*)◇ 0  ▶ 1  □ 2  ◆ 0地图  详情$`) }),
       ).toBeDefined()
 
       // The map tab's tree has no ready Task either: its first row.
@@ -832,6 +833,56 @@ test("the action bar counts a Spec's Child Tasks that are Specs by their own gro
     // Progress 1/3: #2 and #5 ready, #4 done, #3 not counted.
     expect(await ui.find({ type: 'Box', text: /^(#1 |◇ Spec #1 .*)◇ 2  ▶ 0  □ 0  ◆ 1地图  详情$/ })).toBeDefined()
     await ui.unmount()
+  }
+})
+
+// Spec #1 over #3, ready, and the Child Tasks in progress given; Map #21
+// beside it with nothing in progress. `more` is the Spec's own.
+const occupiedUnder = (inProgress: object[], more: object = {}) =>
+  tasks({
+    containers: [
+      spec(1, '规格：里程碑一', [3, 4, 16, 17], { closed: 0, inProgress: inProgress.length, total: 4 }, more),
+      { ...spec(21, 'Codex 适配走哪条路', [22], { closed: 0, inProgress: 0, total: 1 }), kind: 'map' },
+    ],
+    ready: [task(3, 'Pane 布局设计', { parent: 1 }), task(22, '要定的事', { parent: 21 })],
+    inProgress,
+  })
+const CHILD_MINE = task(16, '命令行', { parent: 1, occupant: 'a1b2c3d4-session' })
+const CHILD_OTHERS = task(17, '从本仓库安装', { parent: 1, occupant: '3f9c21d0-other' })
+const CHILD_ORPHANED = task(4, '核对 Pane 的生命周期', { parent: 1, occupant: '77e0aa15-ended', isOrphaned: true })
+
+test("a Spec's row takes its glyph from its Child Tasks in progress, ▶ before ▲ before ◐, in both placements and the switch list", async ($, on) => {
+  let answer = occupiedUnder([CHILD_MINE, CHILD_OTHERS, CHILD_ORPHANED])
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+
+  for (const [inProgress, more, glyph, color] of [
+    [[CHILD_MINE, CHILD_OTHERS, CHILD_ORPHANED], {}, '▶', 'suggestion'],
+    [[CHILD_OTHERS, CHILD_ORPHANED], {}, '▲', 'warning'],
+    [[CHILD_OTHERS], {}, '◐', 'inactive'],
+    // The Spec's own Occupancy counts as well.
+    [[], { group: 'inProgress', occupant: '3f9c21d0-other' }, '◐', 'inactive'],
+    [[], {}, '◇', 'suggestion'],
+  ] as const) {
+    answer = occupiedUnder([...inProgress], more)
+    await seen.clock.advance(60_000)
+    for (const target of [PANE_TARGET, INLINE]) {
+      const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+      const row = await ui.find({ key: 'task:1' })
+      expect(row?.text).toMatch(new RegExp(`^${glyph} Spec #1 `))
+      expect(row?.children[0].props.color).toBe(color)
+      expect((await ui.find({ key: 'task:21' }))?.text).toMatch(/^◇ Map #21 /)
+      if (target === PANE_TARGET) {
+        await ui.press({ key: 'tab:map' })
+        await ui.press({ key: 'switch' })
+        expect((await ui.find({ key: 'switch:1' }))?.text).toMatch(new RegExp(`^${glyph} Spec #1 `))
+        expect((await ui.find({ key: 'switch:21' }))?.text).toMatch(/^◇ Map #21 /)
+        await ui.press({ key: 'back' })
+        await ui.press({ key: 'tab:tasks' })
+      }
+      await ui.unmount()
+    }
   }
 })
 

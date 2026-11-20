@@ -233,7 +233,6 @@ const childCounts = (list: TaskList, container: Container) =>
 const progressText = (container: Container) => `${container.progress.closed}/${container.progress.total}`
 
 const CLOSEOUT = '待收尾核对'
-const containerGlyphText = (container: Container) => (container.isPendingCloseout ? '◈' : GLYPH[container.group])
 
 export const drawPane = (
   el: El,
@@ -329,8 +328,33 @@ export const drawPane = (
       {GLYPH[group]}
     </Text>
   )
-  const containerGlyph = (container: Container) =>
-    container.isPendingCloseout ? <Text color="warning">◈</Text> : glyph(container.group)
+  // A Spec's or Map's glyph: ◈ when Pending Closeout; else, while it or a
+  // direct Child Task is in progress, ▶ if this Session holds one, else ▲ if
+  // one is Orphaned, else ◐; else its own group's.
+  const containerMark = (container: Container) => {
+    const inProgress = [
+      ...[container, ...list!.containers.filter(child => child.parent === container.number)].filter(
+        task => task.group === 'inProgress',
+      ),
+      ...list!.groups.inProgress.filter(task => task.parent === container.number),
+    ]
+
+    return container.isPendingCloseout
+      ? { text: '◈', color: 'warning' }
+      : inProgress.some(task => !task.isOrphaned && task.occupant === view.sessionId)
+        ? { text: '▶', color: GLYPH_COLOR.inProgress }
+        : inProgress.some(task => task.isOrphaned)
+          ? { text: '▲', color: 'warning' }
+          : inProgress.length > 0
+            ? { text: '◐', color: 'inactive' }
+            : { text: GLYPH[container.group], color: GLYPH_COLOR[container.group] }
+  }
+  const containerGlyphText = (container: Container) => containerMark(container).text
+  const containerGlyph = (container: Container) => {
+    const { text, color } = containerMark(container)
+
+    return <Text color={color}>{text}</Text>
+  }
   // A Task's glyph: its group's, but in progress ▲ when Orphaned and ◐ for
   // another Session.
   const isOrphaned = (task: Task, group: Group) => group === 'inProgress' && task.isOrphaned
