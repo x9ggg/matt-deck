@@ -837,12 +837,13 @@ test("the action bar counts a Spec's Child Tasks that are Specs by their own gro
 })
 
 // Spec #1 over #3, ready, and the Child Tasks in progress given; Map #21
-// beside it with nothing in progress. `more` is the Spec's own.
-const occupiedUnder = (inProgress: object[], more: object = {}) =>
+// beside it with nothing in progress. `more` is the Spec's own, `mapMore`
+// the Map's.
+const occupiedUnder = (inProgress: object[], more: object = {}, mapMore: object = {}) =>
   tasks({
     containers: [
       spec(1, '规格：里程碑一', [3, 4, 16, 17], { closed: 0, inProgress: inProgress.length, total: 4 }, more),
-      { ...spec(21, 'Codex 适配走哪条路', [22], { closed: 0, inProgress: 0, total: 1 }), kind: 'map' },
+      { ...spec(21, 'Codex 适配走哪条路', [22], { closed: 0, inProgress: 0, total: 1 }, mapMore), kind: 'map' },
     ],
     ready: [task(3, 'Pane 布局设计', { parent: 1 }), task(22, '要定的事', { parent: 21 })],
     inProgress,
@@ -906,6 +907,48 @@ test("a Spec's row takes its glyph from its Child Tasks in progress, ▲ before 
   expect(closed?.text).toMatch(/^◆ Spec #1 /)
   expect(closed?.children[0].props.color).toBe('warning')
   await ui.unmount()
+})
+
+test("with none of its Child Tasks in progress, a Map's row is drawn as a Task's row as a Spec's is, and inline the action bar's glyph of a Spec or a Map is taken the same way", async ($, on) => {
+  let answer = occupiedUnder([])
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+
+  // Blocked, the Map's □ and its whole row are dimmed, in both placements.
+  answer = occupiedUnder([], {}, { group: 'blocked' })
+  await seen.clock.advance(60_000)
+  for (const target of [PANE_TARGET, INLINE]) {
+    const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+    const row = await ui.find({ key: 'task:21' })
+    expect(row?.text).toMatch(/^□ Map #21 /)
+    expect(row?.children[0].props.color).toBe(undefined)
+    expect(row?.children.map(child => Boolean(child.props?.dimColor))).toEqual(row?.children.map(() => true))
+    await ui.unmount()
+  }
+
+  for (const [own, glyph, color, dim] of [
+    [{ group: 'inProgress', occupant: 'a1b2c3d4-session' }, '▶', 'suggestion', false],
+    [{ group: 'inProgress', occupant: '3f9c21d0-other' }, '◐', 'inactive', false],
+    [{ group: 'inProgress', occupant: '77e0aa15-ended', isOrphaned: true }, '▲', 'warning', false],
+    [{ group: 'blocked' }, '□', undefined, true],
+  ] as const) {
+    for (const [number, head] of [
+      [1, 'Spec'],
+      [21, 'Map'],
+    ] as const) {
+      answer = number === 1 ? occupiedUnder([], own) : occupiedUnder([], {}, own)
+      await seen.clock.advance(60_000)
+      const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+      await focus($, `task:${number}`)
+      const bar = await ui.find({ type: 'Box', text: new RegExp(`^${glyph} ${head} #${number} .*详情$`) })
+      const drawn = bar?.children[0].children[0]
+      expect(drawn?.children).toEqual([glyph])
+      expect(drawn?.props.color).toBe(color)
+      expect(Boolean(drawn?.props.dimColor)).toBe(dim)
+      await ui.unmount()
+    }
+  }
 })
 
 test('the action bar follows the focus from row to row and keeps the last row', async ($, on) => {
