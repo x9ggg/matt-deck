@@ -915,15 +915,26 @@ test("with none of its Child Tasks in progress, a Map's row is drawn as a Task's
   await start($)
   await seen.clock.settle()
 
-  // Blocked, the Map's □ and its whole row are dimmed, in both placements.
+  // Blocked, the Map's □ and its whole row are dimmed, in both placements and
+  // the switch list.
   answer = occupiedUnder([], {}, { group: 'blocked' })
   await seen.clock.advance(60_000)
   for (const target of [PANE_TARGET, INLINE]) {
     const ui = await $.ui.mount({ ...target, surface: 'terminal' })
-    const row = await ui.find({ key: 'task:21' })
-    expect(row?.text).toMatch(/^□ Map #21 /)
-    expect(row?.children[0].props.color).toBe(undefined)
-    expect(row?.children.map(child => Boolean(child.props?.dimColor))).toEqual(row?.children.map(() => true))
+    const drawn = async (key: string) => {
+      const row = await ui.find({ key })
+      expect(row?.text).toMatch(/^□ Map #21 /)
+      expect(row?.children[0].props.color).toBe(undefined)
+      expect(row?.children.map(child => Boolean(child.props?.dimColor))).toEqual(row?.children.map(() => true))
+    }
+    await drawn('task:21')
+    if (target === PANE_TARGET) {
+      await ui.press({ key: 'tab:map' })
+      await ui.press({ key: 'switch' })
+      await drawn('switch:21')
+      await ui.press({ key: 'back' })
+      await ui.press({ key: 'tab:tasks' })
+    }
     await ui.unmount()
   }
 
