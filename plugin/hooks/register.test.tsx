@@ -1448,12 +1448,6 @@ test("above the prompt the action bar dims a blocked Spec's words as its glyph, 
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
   await start($)
   await seen.clock.settle()
-  type Drawn = { props?: { dimColor?: boolean }; children?: (Drawn | string)[] }
-  const textOf = (drawn: Drawn | string): string =>
-    typeof drawn === 'string' ? drawn : (drawn.children ?? []).map(textOf).join('')
-  const dimmed = (drawn: Drawn | string): boolean =>
-    typeof drawn !== 'string' && (Boolean(drawn.props?.dimColor) || (drawn.children ?? []).some(dimmed))
-
   for (const [inProgress, glyph, dim] of [
     [[], '□', true],
     [[CHILD_OTHERS], '◐', false],
@@ -1462,17 +1456,22 @@ test("above the prompt the action bar dims a blocked Spec's words as its glyph, 
     await seen.clock.advance(60_000)
     const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
     await focus($, 'task:1')
-    const bar = await ui.find({ type: 'Box', text: new RegExp(`^${glyph} Spec #1 .*详情$`) })
-    const [named, actions] = bar!.children as Drawn[]
-    const [drawnGlyph, words, ...counts] = named.children as Drawn[]
-    expect(Boolean(drawnGlyph.props?.dimColor)).toBe(dim)
-    // The word Spec, its number, title and progress.
-    expect(textOf(words)).toMatch(/^ Spec #1 规格：里程碑一 +\d\/4 +$/)
-    expect(Boolean(words.props?.dimColor)).toBe(dim)
-    // The four counts and the actions are not dimmed.
-    expect(textOf({ children: counts })).toMatch(/^◇ \d+ {2}▶ \d+ {2}□ \d+ {2}◆ \d+$/)
-    expect(counts.some(dimmed)).toBe(false)
-    expect(dimmed(actions)).toBe(false)
+    // The Spec's glyph, then its words: the word Spec, its number, title and
+    // progress; then its four counts; the actions at the right end.
+    const bar = await ui.find({
+      type: 'Box',
+      text: new RegExp(`^${glyph} Spec #1 规格：里程碑一 +\\d/4 +◇ \\d+ {2}▶ \\d+ {2}□ \\d+ {2}◆ \\d+.*详情$`),
+    })
+    expect(bar).toBeDefined()
+    const words = await ui.find({ type: 'Text', text: /^ Spec #1 规格：/ })
+    expect(words?.text).toMatch(/^ Spec #1 规格：里程碑一 +\d\/4 +$/)
+    expect(Boolean(words?.props.dimColor)).toBe(dim)
+    // Dimmed are the action bar's glyph and words, and the Spec's row in the
+    // list below: not the counts, nor the actions.
+    expect((await ui.findAll({ type: 'Text' })).filter(text => text.props.dimColor).map(text => text.text)).toEqual(
+      dim ? [glyph, words?.text, glyph, ' Spec #1 0/4'] : [],
+    )
+    expect((await ui.findAll({ type: 'Button' })).filter(button => button.props.dimColor).map(button => button.key)).toEqual([])
     await ui.unmount()
   }
 })
