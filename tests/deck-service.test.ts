@@ -2261,14 +2261,45 @@ test('deck_occupy keeps a Task to one Occupancy, and says which Session holds it
   t.after(deck.stop)
 
   const first = await deck.callTool('deck_occupy', { session: 'session-a', task: 3 })
+  await deck.callTool('deck_heartbeat', { session: 'session-a' })
   const again = await deck.callTool('deck_occupy', { session: 'session-a', task: 3 })
   const second = await deck.callTool('deck_occupy', { session: 'session-b', task: 3 })
   const { groups } = (await deck.callTool('deck_tasks')).structuredContent
 
   assert.deepEqual(first.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
   assert.deepEqual(again.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
-  assert.deepEqual(second.structuredContent, { ok: true, occupied: false, occupant: 'session-a' })
+  assert.deepEqual(second.structuredContent, { ok: true, occupied: false, occupant: 'session-a', isOrphaned: false })
   assert.deepEqual(occupants(groups.inProgress), { 3: 'session-a' })
+})
+
+test('deck_occupy says when the Session holding the Task is Orphaned, and leaves the Task with it', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  const start = Date.UTC(2026, 11, 2, 9, 0)
+  const clock = await fakeClock(start)
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 }), issue({ number: 7 })])
+  const deck = startDeck(await configured(), { ...gh.env, ...clock.env, HOME: user })
+  t.after(deck.stop)
+  for (const [task, session] of [[3, 'ended'], [5, 'stale'], [7, 'never-beat']] as const) {
+    await deck.callTool('deck_occupy', { task, session })
+  }
+  await deck.callTool('deck_heartbeat', { session: 'stale' })
+  await deck.callTool('deck_end_session', { session: 'ended' })
+  // Past the last heartbeat by more than three minutes.
+  await clock.set(start + 3 * 60_000 + 1)
+
+  const answers = []
+  for (const task of [3, 5, 7]) {
+    answers.push((await deck.callTool('deck_occupy', { session: 'session-b', task })).structuredContent)
+  }
+  const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(answers, [
+    { ok: true, occupied: false, occupant: 'ended', isOrphaned: true },
+    { ok: true, occupied: false, occupant: 'stale', isOrphaned: true },
+    { ok: true, occupied: false, occupant: 'never-beat', isOrphaned: true },
+  ])
+  assert.deepEqual(occupants(groups.inProgress), { 3: 'ended', 5: 'stale', 7: 'never-beat' })
 })
 
 test('a closed Task\'s Occupancy is released', async t => {
@@ -2390,6 +2421,7 @@ test('deck_occupy with takeOver moves the Occupancy of the Session it names to t
   t.after(elsewhere.stop)
   await elsewhere.callTool('deck_occupy', { session: 'session-b', task: 3 })
   await elsewhere.callTool('deck_occupy', { session: 'session-c', task: 7 })
+  await elsewhere.callTool('deck_heartbeat', { session: 'session-c' })
 
   const taken = await here.callTool('deck_occupy', { session: 'session-a', task: 3, takeOver: 'session-b' })
   // A Task nobody holds is occupied as without takeOver.
@@ -2402,7 +2434,7 @@ test('deck_occupy with takeOver moves the Occupancy of the Session it names to t
 
   assert.deepEqual(taken.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
   assert.deepEqual(free.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
-  assert.deepEqual(passed.structuredContent, { ok: true, occupied: false, occupant: 'session-c' })
+  assert.deepEqual(passed.structuredContent, { ok: true, occupied: false, occupant: 'session-c', isOrphaned: false })
   assert.deepEqual(
     malformed.map(result => result.isError),
     [true, true],

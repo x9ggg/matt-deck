@@ -182,7 +182,7 @@ const tools = {
   },
   deck_occupy: {
     description:
-      'For the Pane: record that a Session executes a Task, as the prompt starting it is sent. A Task held by another Session stays with it unless takeOver names that Session; the answer names the Session holding it.',
+      'For the Pane: record that a Session executes a Task, as the prompt starting it is sent. A Task held by another Session stays with it unless takeOver names that Session; the answer names the Session holding it and, when it is another, whether that Occupancy is Orphaned.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -234,8 +234,11 @@ const tools = {
           const message = found === undefined ? `the Task Source has no Task #${task}` : `#${task} is closed`
           answer = { ok: false, failure: { kind: 'not-open', message } }
         } else {
-          const occupant = occupy(homedir(), source.identity, task, session, Date.now(), takeOver)
-          answer = { ok: true, occupied: occupant === session, occupant }
+          const held = occupy(homedir(), source.identity, task, session, Date.now(), takeOver)
+          answer =
+            held.session === session
+              ? { ok: true, occupied: true, occupant: session }
+              : { ok: true, occupied: false, occupant: held.session, isOrphaned: held.isOrphaned }
         }
       } catch (error: any) {
         if (!(error instanceof TaskSourceError)) {

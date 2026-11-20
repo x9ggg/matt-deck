@@ -403,8 +403,8 @@ const releaseTask = async ($: EngineInterface, number: number, session: string) 
 // Records this Session's Occupancy of the Task `number`, as a prompt
 // executing it is sent, and shows it. `repository` is the one a link to the
 // Task named: the Deck service occupies nothing in a repository that is not
-// the Task Source's. A Task another Session holds stays with it: the person
-// is told.
+// the Task Source's. A Task another Session holds stays with it, an
+// Orphaned one too: the person is told.
 const occupyTask = async ($: EngineInterface, number: number, repository: string | undefined) => {
   const deck = await $.mcp.connect('deck')
   let answer: DeckOccupyAnswer
@@ -423,7 +423,11 @@ const occupyTask = async ($: EngineInterface, number: number, repository: string
   if (!answer.ok) {
     $.ui.toast(`#${number} 没有登记 Occupancy：${answer.failure.message}`)
   } else if (!answer.occupied) {
-    $.ui.toast(`#${number} 正由 Session ${answer.occupant.slice(0, 8)} 执行，本 Session 没有登记 Occupancy。`)
+    $.ui.toast(
+      answer.isOrphaned
+        ? `#${number} 的 Session 已结束，本 Session 没有登记 Occupancy。在 Pane 里按 t 接管或 x 释放。`
+        : `#${number} 正由 Session ${answer.occupant.slice(0, 8)} 执行，本 Session 没有登记 Occupancy。`,
+    )
   }
   await loadTasks($, false)
 }

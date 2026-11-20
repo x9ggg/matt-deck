@@ -65,7 +65,7 @@ export const endSession = (home: string, session: string, now: number) => {
 // holds one; the Occupancy `takeOverFrom` holds, the Session the person
 // confirmed taking the Task over from, moves to `session`. One that passed
 // to a third Session since stays with it. Answers the Session that holds
-// the Task now.
+// the Task now, and whether that Occupancy is Orphaned at `now`.
 export const occupy = (
   home: string,
   source: string,
@@ -86,9 +86,8 @@ export const occupy = (
       )
     }
     db.prepare('INSERT OR IGNORE INTO occupancies VALUES (?, ?, ?, ?)').run(source, task, session, now)
-    const row = db.prepare('SELECT session FROM occupancies WHERE source = ? AND task = ?').get(source, task)
 
-    return row!.session as string
+    return occupantsIn(db, source, now).get(task)!
   } finally {
     db.close()
   }

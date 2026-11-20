@@ -2667,7 +2667,7 @@ test('a Task held by another Session stays with it, and the person is told who h
   const seen = engine(on, {
     config: { structuredContent: CONFIGURED, isError: false },
     skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
-    occupy: () => ({ isError: false, structuredContent: { ok: true, occupied: false, occupant: '3f9c21d0-other' } }),
+    occupy: () => ({ isError: false, structuredContent: { ok: true, occupied: false, occupant: '3f9c21d0-other', isOrphaned: false } }),
   })
   await start($)
   await seen.clock.settle()
@@ -2676,6 +2676,27 @@ test('a Task held by another Session stays with it, and the person is told who h
   await seen.clock.settle()
 
   expect(seen.toasts).toEqual(['#3 正由 Session 3f9c21d0 执行，本 Session 没有登记 Occupancy。'])
+})
+
+test('a Task whose Session has ended stays Orphaned, and the person is told that Session has ended', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
+    occupy: () => ({
+      isError: false,
+      structuredContent: { ok: true, occupied: false, occupant: '9043fe32-ended', isOrphaned: true },
+    }),
+  })
+  await start($)
+  await seen.clock.settle()
+
+  await submit($, '/mattpocock-skills:implement #3', { name: 'mattpocock-skills:implement', args: '#3' })
+  await seen.clock.settle()
+
+  expect(seen.toasts).toEqual(['#3 的 Session 已结束，本 Session 没有登记 Occupancy。在 Pane 里按 t 接管或 x 释放。'])
+  expect(seen.calls.filter(call => call.tool === 'deck_occupy').map(call => call.args)).toEqual([
+    { session: 'a1b2c3d4-session', task: 3 },
+  ])
 })
 
 // The project with #16 executed by this Session and #17 by another.

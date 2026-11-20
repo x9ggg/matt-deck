@@ -88,9 +88,11 @@ export type Report = {
 export type DeckTaskAnswer = { ok: true; task: TaskDetail; reports: Report[] } | { ok: false; failure: TaskFailure }
 
 // What `deck_occupy` answers: whether the Session's Occupancy was recorded,
-// and the Session holding the Task now; or why the Task cannot be occupied.
+// and the Session holding the Task now and, when another Session holds it,
+// whether that Occupancy is Orphaned; or why the Task cannot be occupied.
 export type DeckOccupyAnswer =
-  | { ok: true; occupied: boolean; occupant: string }
+  | { ok: true; occupied: true; occupant: string }
+  | { ok: true; occupied: false; occupant: string; isOrphaned: boolean }
   | { ok: false; failure: { kind: TaskFailure['kind'] | 'not-open'; message: string } }
 
 // What `deck_release` answers: whether the Session held an Occupancy of the
