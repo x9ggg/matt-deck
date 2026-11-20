@@ -634,12 +634,13 @@ export const drawPane = (
               .map(({ group, count }) => `${GLYPH[group]} ${count}`)
               .join('  '),
           )
+      const mark = containerMark(container)
 
       return (
         <Box flexDirection="row" justifyContent="space-between">
           <Box flexDirection="row">
-            {markGlyph(containerMark(container))}
-            <Text>
+            {markGlyph(mark)}
+            <Text dimColor={mark.dim}>
               {' '}
               {head}
               {cut(container.title, columns - 2 - width(head) - width(tail) - countsWidth - actionsWidth(row))}

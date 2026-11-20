@@ -1432,6 +1432,40 @@ test('above the prompt the action bar names a Spec once, then its progress and i
   await ui.unmount()
 })
 
+test("above the prompt the action bar dims a blocked Spec's words as its glyph, not its counts or actions, unless a Child Task is in progress", async ($, on) => {
+  let answer = occupiedUnder([], { group: 'blocked' })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+  type Drawn = { props?: { dimColor?: boolean }; children?: (Drawn | string)[] }
+  const textOf = (drawn: Drawn | string): string =>
+    typeof drawn === 'string' ? drawn : (drawn.children ?? []).map(textOf).join('')
+  const dimmed = (drawn: Drawn | string): boolean =>
+    typeof drawn !== 'string' && (Boolean(drawn.props?.dimColor) || (drawn.children ?? []).some(dimmed))
+
+  for (const [inProgress, glyph, dim] of [
+    [[], '□', true],
+    [[CHILD_OTHERS], '◐', false],
+  ] as const) {
+    answer = occupiedUnder([...inProgress], { group: 'blocked' })
+    await seen.clock.advance(60_000)
+    const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+    await focus($, 'task:1')
+    const bar = await ui.find({ type: 'Box', text: new RegExp(`^${glyph} Spec #1 .*详情$`) })
+    const [named, actions] = bar!.children as Drawn[]
+    const [drawnGlyph, words, ...counts] = named.children as Drawn[]
+    expect(Boolean(drawnGlyph.props?.dimColor)).toBe(dim)
+    // The word Spec, its number, title and progress.
+    expect(textOf(words)).toMatch(/^ Spec #1 规格：里程碑一 +\d\/4 +$/)
+    expect(Boolean(words.props?.dimColor)).toBe(dim)
+    // The four counts and the actions are not dimmed.
+    expect(textOf({ children: counts })).toMatch(/^◇ \d+ {2}▶ \d+ {2}□ \d+ {2}◆ \d+$/)
+    expect(counts.some(dimmed)).toBe(false)
+    expect(dimmed(actions)).toBe(false)
+    await ui.unmount()
+  }
+})
+
 test('a Task Source with no Task says so, apart from a failed read', async ($, on) => {
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => tasks({}) })
   await start($)
