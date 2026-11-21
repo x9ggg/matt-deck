@@ -326,11 +326,6 @@ export const drawPane = (
     </Box>
   )
 
-  const glyph = (group: Group, dim = false) => (
-    <Text color={GLYPH_COLOR[group]} dimColor={dim}>
-      {GLYPH[group]}
-    </Text>
-  )
   // A Spec's or Map's glyph: ◈ when Pending Closeout and ◆ when closed; else
   // by its direct Child Tasks in progress, ▲ if one is Orphaned, else ▶ if
   // this Session holds one, else ◐; with none, a Task's row's by its own
@@ -366,6 +361,7 @@ export const drawPane = (
       {text}
     </Text>
   )
+  const glyph = (group: Group) => markGlyph({ text: GLYPH[group], color: GLYPH_COLOR[group], dim: false })
   const taskGlyph = (task: Task, group: Group, dim = false) => markGlyph(taskMark(task, group, dim))
   const status = (task: Task, group: Group) => statusOf(task, group, view.sessionId)
   // This Session's Task in progress, for the top.
