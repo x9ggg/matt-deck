@@ -2980,3 +2980,86 @@ test('deck_report takes a Task, a result, Acceptance Evidence each with where it
   await gh.answer({ stdout: viewed({ number: 3 }) })
   assert.deepEqual((await deck.callTool('deck_task', { number: 3 })).structuredContent.reports, [])
 })
+
+// The Pane in a Codex tab: a page the Deck service serves, opened from the
+// tab menu of a Session through a tool with a tab entry.
+const PANE_PAGE = join(import.meta.dirname, '..', 'plugin', 'codex', 'pane.html')
+
+test('started for Codex, the Deck service offers the Pane in a tab: a tool with a tab entry, and its page', async t => {
+  const deck = startDeck(await workspace(), {}, 'codex')
+  t.after(deck.stop)
+
+  const { result: started } = await deck.request('initialize', { protocolVersion: '2025-06-18' })
+  const { result: listed } = await deck.request('tools/list')
+  const pane = listed.tools.find((tool: any) => tool.name === 'deck_pane')
+  const { result: resources } = await deck.request('resources/list')
+  const { result: read } = await deck.request('resources/read', { uri: pane._meta.ui.resourceUri })
+
+  assert.deepEqual(started.capabilities.resources, {})
+  assert.deepEqual(pane._meta['openai/ui'].entrypoints, [{ type: 'thread' }])
+  assert.match(pane.description, /tab menu/)
+  assert.deepEqual(
+    resources.resources.map(({ uri, mimeType }: any) => ({ uri, mimeType })),
+    [{ uri: pane._meta.ui.resourceUri, mimeType: 'text/html;profile=mcp-app' }],
+  )
+  assert.deepEqual(read.contents, [
+    { uri: pane._meta.ui.resourceUri, mimeType: 'text/html;profile=mcp-app', text: await readFile(PANE_PAGE, 'utf8') },
+  ])
+  assert.equal((await deck.request('resources/read', { uri: 'ui://matt-deck/elsewhere.html' })).error.code, -32602)
+  assert.deepEqual((await deck.request('resources/templates/list')).result, { resourceTemplates: [] })
+})
+
+test('started for Claude Code, the Deck service offers no Pane in a tab', async t => {
+  const deck = startDeck(await workspace())
+  t.after(deck.stop)
+
+  const { result: started } = await deck.request('initialize', { protocolVersion: '2025-06-18' })
+  const { result: listed } = await deck.request('tools/list')
+
+  assert.deepEqual(started.capabilities, { tools: {} })
+  assert.deepEqual(
+    listed.tools.filter((tool: any) => tool._meta !== undefined),
+    [],
+  )
+  assert.equal(listed.tools.some((tool: any) => tool.name === 'deck_pane' || tool.name === 'deck_session'), false)
+})
+
+test('started for Codex, deck_session names the Session a call comes from by its _meta.threadId, for the page only', async t => {
+  const deck = startDeck(await workspace(), {}, 'codex')
+  t.after(deck.stop)
+
+  const { result: listed } = await deck.request('tools/list')
+  const { result: named } = await deck.request('tools/call', {
+    name: 'deck_session',
+    arguments: {},
+    _meta: { threadId: CODEX_SESSION, progressToken: 1 },
+  })
+  const unnamed = await Promise.all(
+    [undefined, {}, { threadId: '' }].map(_meta =>
+      deck.request('tools/call', { name: 'deck_session', arguments: {}, _meta }).then(reply => reply.result),
+    ),
+  )
+
+  assert.deepEqual(listed.tools.find((tool: any) => tool.name === 'deck_session')._meta, { ui: { visibility: ['app'] } })
+  assert.deepEqual(named.structuredContent, { session: CODEX_SESSION, sessionHost: 'codex', sessionShort: '045b96fc' })
+  for (const result of unnamed) {
+    assert.equal(result.isError, true)
+    assert.match(result.content[0].text, /_meta\.threadId/)
+  }
+})
+
+// Codex also starts Deck services that live a few seconds and receive no tool
+// call (ADR-0006): until a tool is called, a Deck service writes nothing.
+test('started for Codex, the Deck service writes no local state before its first tool call', async t => {
+  const user = await home()
+  const deck = startDeck(await workspace(), { HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  await deck.request('initialize', { protocolVersion: '2025-06-18' })
+  await deck.request('tools/list')
+  await deck.request('resources/list')
+  await deck.request('resources/read', { uri: 'ui://matt-deck/pane.html' })
+  await deck.request('ping')
+
+  assert.deepEqual(await readdir(user), [])
+})

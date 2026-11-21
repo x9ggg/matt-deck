@@ -627,26 +627,91 @@ const tools = {
   },
 }
 
+// The Pane in a Codex tab (ADR-0006): a page this service serves, which the
+// Host opens from the tab menu of a Session through a tool with a tab entry.
+const PANE = { uri: 'ui://matt-deck/pane.html', name: 'pane', mimeType: 'text/html;profile=mcp-app' }
+
+const tabTools = {
+  deck_pane: {
+    title: 'Matt Deck',
+    description:
+      'The Matt Deck Pane, for the person to open from the tab menu of a Session; not for the agent to call.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    _meta: {
+      ui: { resourceUri: PANE.uri },
+      'openai/ui': { entrypoints: [{ type: 'thread' }], preferredModelDisplayMode: 'fullscreen' },
+    },
+    run: async (): Promise<ToolResult> => ({ content: [{ type: 'text', text: 'The Matt Deck Pane.' }], isError: false }),
+  },
+  deck_session: {
+    description: 'For the Pane in a tab: name the Session this call comes from.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    _meta: { ui: { visibility: ['app'] } },
+    // Codex names the Session in every call's _meta.threadId, the page's, the
+    // agent's and a hook's alike; the page itself cannot read it.
+    run: async (_args: object, meta: any): Promise<ToolResult> => {
+      const session = meta?.threadId
+      if (typeof session !== 'string' || session === '') {
+        return {
+          content: [{ type: 'text', text: 'deck_session needs the id of the Session, which Codex sends as _meta.threadId; this call has none' }],
+          isError: true,
+        }
+      }
+      const named = nameSession(session, host)
+      const result = { session, sessionHost: named.host, sessionShort: named.short }
+
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
+    },
+  },
+}
+
+type Tool = {
+  title?: string
+  description: string
+  inputSchema: { properties: object }
+  _meta?: object
+  run: (args: any, meta: unknown) => Promise<ToolResult>
+}
+
+// Only Codex opens the Pane in a tab; Claude Code's Pane is the Mod.
+const served: { tools: Record<string, Tool>; resources: (typeof PANE)[] } =
+  host === 'codex' ? { tools: { ...tools, ...tabTools }, resources: [PANE] } : { tools, resources: [] }
+
 const handle = async (method: string, params: any): Promise<object> => {
   switch (method) {
     case 'initialize':
       return {
         protocolVersion: params?.protocolVersion ?? '2025-06-18',
-        capabilities: { tools: {} },
-        serverInfo: { name: 'matt-deck', version: '0.1.0' },
+        capabilities: served.resources.length > 0 ? { tools: {}, resources: {} } : { tools: {} },
+        serverInfo: { name: 'matt-deck', title: 'Matt Deck', version: '0.1.0' },
       }
     case 'ping':
       return {}
     case 'tools/list':
       return {
-        tools: Object.entries(tools).map(([name, { description, inputSchema }]) => ({
+        tools: Object.entries(served.tools).map(([name, tool]) => ({
           name,
-          description,
-          inputSchema,
+          ...(tool.title === undefined ? {} : { title: tool.title }),
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          ...(tool._meta === undefined ? {} : { _meta: tool._meta }),
         })),
       }
+    case 'resources/list':
+      return { resources: served.resources }
+    case 'resources/templates/list':
+      return { resourceTemplates: [] }
+    case 'resources/read': {
+      const resource = served.resources.find(each => each.uri === params?.uri)
+      if (resource === undefined) {
+        throw Object.assign(new Error(`Unknown resource: ${params?.uri}`), { code: -32602 })
+      }
+      const text = await readFile(join(import.meta.dirname, '..', 'codex', 'pane.html'), 'utf8')
+
+      return { contents: [{ uri: resource.uri, mimeType: resource.mimeType, text }] }
+    }
     case 'tools/call': {
-      const tool = tools[params?.name as keyof typeof tools]
+      const tool = served.tools[params?.name]
       if (tool === undefined) {
         throw Object.assign(new Error(`Unknown tool: ${params?.name}`), { code: -32602 })
       }
@@ -663,7 +728,7 @@ const handle = async (method: string, params: any): Promise<object> => {
 
       // A failing tool answers as a tool error the caller can show, not a
       // protocol error.
-      return tool.run(args).catch(
+      return tool.run(args, params?._meta).catch(
         (error: Error): ToolResult => ({
           content: [{ type: 'text', text: error.message }],
           isError: true,
