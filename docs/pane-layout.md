@@ -277,6 +277,7 @@ f: 全部 17  ◇ 1  ▶ 3  □ 11  ◆ 2             ◀ 选中“全部”
 
 - 筛选一行五项：只有“全部”写字，其余是分组的图形加计数，为 0 也写。`f` 换到下一项。
 - 每个 Task 一行：图形、编号、标题，右端是状态词、占用它的 Session 或关闭时间。有没有焦点都只占这一行。
+- 别的 Session 按宿主名和 8 位缩写写，两样都用 Deck 服务读取结果里给的，Pane 不自己截。Claude Code 的 Session 只写缩写，即标识的前 8 位，如 `3f9c21d0`；Codex 的 Session 写 `Codex` 加标识的后 8 位，如 `Codex 045b96fc`，因为 Codex 的标识开头一段是时间，前后脚开的两个 Session 前 8 位相同。在句子里 Claude Code 的写成 `Session 3f9c21d0`，Codex 的照样是 `Codex 045b96fc`：接管确认、执行记录、Occupancy 没有登记上或接管没有成功时的提示都照这条。停靠时一行只有 42 列，宿主名多占的列从标题里截：`◐ #17 从本仓库安装并在 Cod… Codex 045b96fc`。
 - 带 `needs-triage` 或 `needs-info`、没有 Occupancy 的 Task 在“阻塞”里，没被阻塞也一样：图形 □，整行 `dimColor`，右端写这个标签名，例如 `□ #19 等分诊                  needs-triage`；同时有未关闭的阻塞者时，右端照样写 `被 #n 阻塞`。有 Occupancy 时它在“进行中”，画法和别的进行中的 Task 一样。
 - Spec 和 Map 的行排在最前面，占两行：第二行是缩进 2 列的进度条。
 - Spec 或 Map 那一行的图形，按顺序取第一个成立的：Pending Closeout 是 ◈，已关闭是 ◆；它直接的 Child Task 里有 Orphaned 的是 ▲；有本 Session 占着的是 ▶；有别的 Session 占着的是 ◐；都没有，照 Task 的行画：它自己被本 Session 占用是 ▶，被别的 Session 占用是 ◐，Occupancy 是 Orphaned 是 ▲，否则是它所在分组的图形，被阻塞时这一行整行 `dimColor`，下面的进度条不变暗。Child Task 有进行中的时候只看 Child Task，它自己的 Occupancy 不看，这一行也不变暗。▲ 排在 ▶ 前面，因为 Orphaned 是唯一等人决定的状态。▲ ▶ ◐ 的颜色照图形表。孙辈不算，和计数一致。例子里 17 个 Task 都是 Spec #1 的 Child Task，其中 #4 是 Orphaned，所以画 ▲；输入框上方和 `s: 切换` 的列表也照这条画。
@@ -334,7 +335,7 @@ f: 全部 17  ◇ 1  ▶ 3  □ 11  ◆ 2             ◀ 选中“▶ 3”
 ▲ #4  核对 Pane 的生命周期        Orphaned  ◀ 焦点
 ```
 
-对 Orphaned 的 Task 按 `t` 也先确认，第一句换成 `▲ #4 的 Session 已结束`。`x` 直接释放。
+对 Orphaned 的 Task 按 `t` 也先确认，第一句换成 `▲ #4 的 Session 已结束`。`x` 直接释放。被 Codex 的 Session 占着时第一句写 `◐ #17 正由 Codex 045b96fc 执行`。
 
 Pending Closeout。Child Task 全部关闭而 Spec 还开着：图形换成 ◈，进度条整条用 `warning`，动作栏写“待收尾核对”，这几个字用 `warning`，给 `k: 收尾核对`。不写“已完成”：
 

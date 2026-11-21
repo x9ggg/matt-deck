@@ -22,8 +22,13 @@ const CONFIGURED = {
 type Answer = { structuredContent?: unknown; isError: boolean; text?: string }
 
 // A Task as `deck_tasks` lists it. Unless told otherwise it declares a
-// Blocking Edge to each of its blockers and to nothing else.
-const task = (number: number, title: string, more: { blockers?: number[]; [field: string]: unknown } = {}) => ({
+// Blocking Edge to each of its blockers and to nothing else, and its
+// occupant is a Claude Code Session, cut short as the Deck service does.
+const task = (
+  number: number,
+  title: string,
+  more: { blockers?: number[]; occupant?: string; [field: string]: unknown } = {},
+) => ({
   number,
   title,
   isOpen: true,
@@ -33,13 +38,18 @@ const task = (number: number, title: string, more: { blockers?: number[]; [field
   blockedBy: more.blockers ?? ([] as number[]),
   closedAt: null as string | null,
   occupant: null as string | null,
+  occupantHost: more.occupant === undefined ? null : 'claude-code',
+  occupantShort: more.occupant?.slice(0, 8) ?? null,
   isOrphaned: false,
   hasEvidence: false,
   ...more,
 })
 
-const spec = (number: number, title: string, children: number[], progress: object, more: object = {}) => ({
-  ...task(number, title),
+// The Claude Code Session `session` holding a Task, as `deck_occupy` names it.
+const heldBy = (session: string) => ({ occupant: session, occupantHost: 'claude-code', occupantShort: session.slice(0, 8) })
+
+const spec = (number: number, title: string, children: number[], progress: object, more: Parameters<typeof task>[2] = {}) => ({
+  ...task(number, title, more),
   kind: 'spec',
   isPendingCloseout: false,
   group: 'ready',
@@ -233,7 +243,7 @@ const engine = (
     connecting = () => undefined,
     ask = asked,
     recommendation = () => ({ isError: false, structuredContent: { found: false } }),
-    occupy = session => ({ isError: false, structuredContent: { ok: true, occupied: true, occupant: session } }),
+    occupy = session => ({ isError: false, structuredContent: { ok: true, occupied: true, ...heldBy(session) } }),
     release = () => ({ isError: false, structuredContent: { ok: true, released: true } }),
     isDropped = () => false,
     run = () => ({ exitCode: 0, stdout: '', stderr: '' }),
@@ -839,7 +849,7 @@ test("the action bar counts a Spec's Child Tasks that are Specs by their own gro
 // Spec #1 over #3, ready, and the Child Tasks in progress given; Map #21
 // beside it with nothing in progress. `spec` is the Spec's own, `map` the
 // Map's.
-const occupiedUnder = (inProgress: object[], { spec: more = {}, map: mapMore = {} }: { spec?: object; map?: object } = {}) =>
+const occupiedUnder = (inProgress: object[], { spec: more = {}, map: mapMore = {} }: { spec?: Parameters<typeof spec>[4]; map?: Parameters<typeof spec>[4] } = {}) =>
   tasks({
     containers: [
       spec(1, '规格：里程碑一', [3, 4, 16, 17], { closed: 0, inProgress: inProgress.length, total: 4 }, more),
@@ -2865,7 +2875,7 @@ test('a Task held by another Session stays with it, and the person is told who h
   const seen = engine(on, {
     config: { structuredContent: CONFIGURED, isError: false },
     skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
-    occupy: () => ({ isError: false, structuredContent: { ok: true, occupied: false, occupant: '3f9c21d0-other', isOrphaned: false } }),
+    occupy: () => ({ isError: false, structuredContent: { ok: true, occupied: false, ...heldBy('3f9c21d0-other'), isOrphaned: false } }),
   })
   await start($)
   await seen.clock.settle()
@@ -2882,7 +2892,7 @@ test('a Task whose Session has ended stays Orphaned, and the person is told that
     skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
     occupy: () => ({
       isError: false,
-      structuredContent: { ok: true, occupied: false, occupant: '9043fe32-ended', isOrphaned: true },
+      structuredContent: { ok: true, occupied: false, ...heldBy('9043fe32-ended'), isOrphaned: true },
     }),
   })
   await start($)
@@ -3126,7 +3136,7 @@ test('a take-over of a Task that passed to a third Session says who holds it and
     config: { structuredContent: CONFIGURED, isError: false },
     tasks: () => OCCUPIED,
     skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
-    occupy: () => ({ isError: false, structuredContent: { ok: true, occupied: false, occupant: '77e0aa15-third' } }),
+    occupy: () => ({ isError: false, structuredContent: { ok: true, occupied: false, ...heldBy('77e0aa15-third') } }),
   })
   await start($)
   await seen.clock.settle()
@@ -3138,6 +3148,92 @@ test('a take-over of a Task that passed to a third Session says who holds it and
   await seen.clock.settle()
 
   expect(seen.toasts).toEqual(['#17 已改由 Session 77e0aa15 执行，没有接管。'])
+  expect(seen.filled).toEqual([])
+  await ui.unmount()
+})
+
+// A Codex Session, as the Deck service names it: its id begins with the time
+// it was started, so it goes by its last 8 characters.
+const BY_CODEX = {
+  occupant: '019a8c3e-1f2b-7c4d-9e0f-0a1b045b96fc',
+  occupantHost: 'codex',
+  occupantShort: '045b96fc',
+}
+
+// The project with #16 executed by this Session and #17, under Spec #1, by a
+// Codex Session; #17's title too long for its row docked.
+const CODEX_OCCUPIED = tasks({
+  containers: [spec(1, '规格：里程碑二', [16, 17], { closed: 0, inProgress: 2, total: 2 })],
+  inProgress: [
+    task(16, '命令行', { parent: 1, occupant: 'a1b2c3d4-session' }),
+    task(17, '从本仓库安装并在 Codex 里打开', { parent: 1, ...BY_CODEX }),
+  ],
+})
+
+test('a Task a Codex Session holds is written Codex and the last 8 of its id, in the list, the Map View and above the prompt, its title cut to make room', async ($, on) => {
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => CODEX_OCCUPIED })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  // Docked the row is the pane's 42 columns, the title giving way.
+  expect((await ui.find({ key: 'task:17' }))?.text).toBe('◐ #17 从本仓库安装并在 Cod… Codex 045b96fc')
+  await ui.press({ key: 'tab:map' })
+  expect((await ui.find({ key: 'task:17' }))?.text).toBe('◐ #17 从本仓库安装并在 Cod… Codex 045b96fc')
+  await ui.press({ key: 'task:17' })
+  await seen.clock.settle()
+  expect(await texts(ui, 'Box')).toContain('◐ 进行中 · Codex 045b96fc')
+  await ui.unmount()
+
+  const inline = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  await inline.press({ key: 'back' })
+  await inline.press({ key: 'tab:tasks' })
+  await focus($, 'task:17')
+  expect((await texts(inline)).join('')).toMatch(/◐ #17 从本仓库安装并在 Codex 里打开 +Codex 045b96fc/)
+  await inline.unmount()
+})
+
+test('the take-over confirmation of a Task a Codex Session holds names that Session by its host', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => CODEX_OCCUPIED,
+    skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
+  })
+  await start($)
+  await seen.clock.settle()
+
+  for (const target of [PANE_TARGET, INLINE]) {
+    const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+    await focus($, 'task:17')
+    await ui.press({ key: 'takeover' })
+    expect((await texts(ui)).join('\n')).toContain('◐ #17 正由 Codex 045b96fc 执行')
+    await ui.press({ key: 'takeover:cancel' })
+    await ui.unmount()
+  }
+})
+
+test('a Task a Codex Session holds, or passed to while taking it over, says so in the toast', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => OCCUPIED,
+    skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
+    occupy: () => ({ isError: false, structuredContent: { ok: true, occupied: false, ...BY_CODEX, isOrphaned: false } }),
+  })
+  await start($)
+  await seen.clock.settle()
+
+  await submit($, '/mattpocock-skills:implement #3', { name: 'mattpocock-skills:implement', args: '#3' })
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await focus($, 'task:17')
+  await ui.press({ key: 'takeover' })
+  await ui.press({ key: 'takeover:confirm' })
+  await seen.clock.settle()
+
+  expect(seen.toasts).toEqual([
+    '#3 正由 Codex 045b96fc 执行，本 Session 没有登记 Occupancy。',
+    '#17 已改由 Codex 045b96fc 执行，没有接管。',
+  ])
   expect(seen.filled).toEqual([])
   await ui.unmount()
 })
@@ -3889,9 +3985,11 @@ test('a deck_report the agent calls is sent with the id of this Session, never o
 
 // The reports of the example of a closed Task in `docs/pane-layout.md`.
 const REPORTS = [
-  { session: '3f9c21d0-other', reportedAt: Date.UTC(2026, 10, 11, 9, 30), result: '先做了一半。', evidence: [] },
+  { session: '3f9c21d0-other', sessionHost: 'claude-code', sessionShort: '3f9c21d0', reportedAt: Date.UTC(2026, 10, 11, 9, 30), result: '先做了一半。', evidence: [] },
   {
     session: '9d04c6f1-session',
+    sessionHost: 'claude-code',
+    sessionShort: '9d04c6f1',
     reportedAt: Date.UTC(2026, 10, 11, 14, 2),
     result: '已实现并在本仓库运行通过。',
     evidence: [{ text: '在本仓库运行配置技能，生成 .matt-deck/config.json', source: '提交 8254bd7' }],
@@ -3948,6 +4046,33 @@ test('a Task\'s detail shows its execution records, each Session\'s with its tim
   expect(await ui.find({ type: 'Text', text: '✓ 验收证据' })).toBeUndefined()
   expect(await texts(ui)).toContain('执行记录')
   expect(await texts(ui)).toContain('还没有 Session 执行过这个 Task。')
+  await ui.unmount()
+})
+
+test('an execution record a Codex Session reported names that Session by its host', async ($, on) => {
+  const seen = engine(on, {
+    config: { structuredContent: CONFIGURED, isError: false },
+    tasks: () => EVIDENCED,
+    detail: number =>
+      detailOf(number, [
+        {
+          session: '019a8c3e-1f2b-7c4d-9e0f-0a1b045b96fc',
+          sessionHost: 'codex',
+          sessionShort: '045b96fc',
+          reportedAt: Date.UTC(2026, 10, 11, 14, 2),
+          result: '在 Codex 里做完了。',
+          evidence: [],
+        },
+      ]),
+  })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+
+  await ui.press({ key: 'task:15' })
+  await seen.clock.settle()
+
+  expect(await texts(ui, 'Box')).toContainEqual(expect.stringMatching(/^Codex 045b96fc *11-1[12] \d\d:\d\d$/))
   await ui.unmount()
 })
 

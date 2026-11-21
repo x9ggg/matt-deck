@@ -10,6 +10,7 @@ import type {
   DetailView,
   Filter,
   Group,
+  Host,
   Nav,
   Recommendation,
   RequestStatus,
@@ -182,9 +183,16 @@ const shortTime = (at: string | number) => {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+// Another Session as the Pane writes it, by the host and the cut-short id
+// the Deck service gave: a Codex Session `Codex 045b96fc`; a Claude Code
+// one, of the Pane's own host, by its cut-short id alone in a row, and after
+// `Session` in a sentence.
+export const sessionName = (host: Host, short: string, isInSentence = false) =>
+  host === 'codex' ? `Codex ${short}` : isInSentence ? `Session ${short}` : short
+
 // The status word at a Task row's right end; in progress, the Session
-// occupying it: this one, `session`, or another by its id's start; or that
-// it is Orphaned.
+// occupying it: this one, `session`, or another by its name; or that it is
+// Orphaned.
 const statusOf = (task: Task, group: Group, session: string) => {
   switch (group) {
     case 'ready':
@@ -196,7 +204,11 @@ const statusOf = (task: Task, group: Group, session: string) => {
     case 'done':
       return task.closedAt === null ? '已解锁' : shortTime(task.closedAt)
     case 'inProgress':
-      return task.isOrphaned ? 'Orphaned' : task.occupant === session ? '本 Session' : task.occupant!.slice(0, 8)
+      return task.isOrphaned
+        ? 'Orphaned'
+        : task.occupant === session
+          ? '本 Session'
+          : sessionName(task.occupantHost!, task.occupantShort!)
   }
 }
 
@@ -549,7 +561,7 @@ export const drawPane = (
       <Text color="warning">
         {task.isOrphaned
           ? `▲ #${task.number} 的 Session 已结束`
-          : `◐ #${task.number} 正由 Session ${task.occupant!.slice(0, 8)} 执行`}
+          : `◐ #${task.number} 正由 ${sessionName(task.occupantHost!, task.occupantShort!, true)} 执行`}
       </Text>
     )
     const note = <Text>接管会把 Occupancy 转给本 Session。</Text>
@@ -1454,7 +1466,7 @@ export const drawPane = (
           : reports.flatMap((report, index) => [
               ...(index === 0 ? [] : [<Text> </Text>]),
               <Box flexDirection="row" justifyContent="space-between">
-                <Text>Session {report.session.slice(0, 8)}</Text>
+                <Text>{sessionName(report.sessionHost, report.sessionShort, true)}</Text>
                 <Text>{shortTime(report.reportedAt)}</Text>
               </Box>,
               <Text>{report.result}</Text>,

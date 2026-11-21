@@ -12,11 +12,15 @@ export type DeckConfigAnswer =
   | { configured: false; workspace: string }
   | { configured: true; workspace: string; config: ProjectConfig }
 
+// The host a Session runs in, as the Deck service names it.
+export type Host = 'claude-code' | 'codex'
+
 export type Group = 'ready' | 'inProgress' | 'blocked' | 'done'
 
 // A Task as `deck_tasks` lists it: `blockers` are the open Tasks blocking an
 // open one, `blockedBy` every Task it declares a Blocking Edge to, closed
-// ones too; `occupant` the Session whose Occupancy holds it, or null, and
+// ones too; `occupant` the Session whose Occupancy holds it, or null,
+// `occupantHost` and `occupantShort` its host and its id cut short, and
 // `isOrphaned` whether that Session has ended while the Task is open;
 // `hasEvidence` whether a report gave Acceptance Evidence for it.
 export type Task = {
@@ -29,6 +33,8 @@ export type Task = {
   blockedBy: number[]
   closedAt: string | null
   occupant: string | null
+  occupantHost: Host | null
+  occupantShort: string | null
   isOrphaned: boolean
   hasEvidence: boolean
 }
@@ -74,11 +80,13 @@ export type TaskDetail = {
   acceptance: { text: string; isChecked: boolean }[]
 }
 
-// One report `deck_report` kept of a Task: the Session reporting it, when, in
-// milliseconds since the epoch, its result and its Acceptance Evidence, each
-// with where it comes from.
+// One report `deck_report` kept of a Task: the Session reporting it, with its
+// host and its id cut short, when, in milliseconds since the epoch, its
+// result and its Acceptance Evidence, each with where it comes from.
 export type Report = {
   session: string
+  sessionHost: Host
+  sessionShort: string
   reportedAt: number
   result: string
   evidence: { text: string; source: string }[]
@@ -88,11 +96,12 @@ export type Report = {
 export type DeckTaskAnswer = { ok: true; task: TaskDetail; reports: Report[] } | { ok: false; failure: TaskFailure }
 
 // What `deck_occupy` answers: whether the Session's Occupancy was recorded,
-// and the Session holding the Task now and, when another Session holds it,
-// whether that Occupancy is Orphaned; or why the Task cannot be occupied.
+// and the Session holding the Task now, with its host and its id cut short,
+// and, when another Session holds it, whether that Occupancy is Orphaned; or
+// why the Task cannot be occupied.
 export type DeckOccupyAnswer =
-  | { ok: true; occupied: true; occupant: string }
-  | { ok: true; occupied: false; occupant: string; isOrphaned: boolean }
+  | { ok: true; occupied: true; occupant: string; occupantHost: Host; occupantShort: string }
+  | { ok: true; occupied: false; occupant: string; occupantHost: Host; occupantShort: string; isOrphaned: boolean }
   | { ok: false; failure: { kind: TaskFailure['kind'] | 'not-open'; message: string } }
 
 // What `deck_release` answers: whether the Session held an Occupancy of the

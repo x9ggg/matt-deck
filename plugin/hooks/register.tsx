@@ -27,7 +27,7 @@ import type {
   TasksView,
   View,
 } from '../types'
-import { drawPane } from './pane.tsx'
+import { drawPane, sessionName } from './pane.tsx'
 
 const PANE = 'matt-deck'
 const TITLE = 'Matt Deck'
@@ -371,7 +371,7 @@ const takeOverTask = async ($: EngineInterface, number: number, from: string, su
   if (!answer.ok) {
     $.ui.toast(`#${number} 没有接管：${answer.failure.message}`)
   } else if (!answer.occupied) {
-    $.ui.toast(`#${number} 已改由 Session ${answer.occupant.slice(0, 8)} 执行，没有接管。`)
+    $.ui.toast(`#${number} 已改由 ${sessionName(answer.occupantHost, answer.occupantShort, true)} 执行，没有接管。`)
   } else {
     await executeTask($, number, surface)
   }
@@ -426,7 +426,7 @@ const occupyTask = async ($: EngineInterface, number: number, repository: string
     $.ui.toast(
       answer.isOrphaned
         ? `#${number} 的 Session 已结束，本 Session 没有登记 Occupancy。在 Pane 里按 t 接管或 x 释放。`
-        : `#${number} 正由 Session ${answer.occupant.slice(0, 8)} 执行，本 Session 没有登记 Occupancy。`,
+        : `#${number} 正由 ${sessionName(answer.occupantHost, answer.occupantShort, true)} 执行，本 Session 没有登记 Occupancy。`,
     )
   }
   await loadTasks($, false)
