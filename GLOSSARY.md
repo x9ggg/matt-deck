@@ -19,8 +19,8 @@ _Avoid_: agent、客户端、平台
 _Avoid_: 聊天、线程、thread
 
 **Pane（面板）**:
-Deck 在宿主窗口内的可见界面，属于且只属于一个 Session。
-_Avoid_: 侧边栏、侧栏、sidebar、panel
+Deck 在宿主窗口内的可见界面，属于且只属于一个 Session。它有两种位置：停靠在侧边，英文写 docked；在输入框上方，英文写 above the prompt。引擎把后一种叫 `inline`，这个词只用在代码的标识符里。
+_Avoid_: 侧边栏、侧栏、sidebar、panel、side Pane
 
 **Standalone Window（独立窗口）**:
 宿主没有内嵌位置时 Deck 的界面形态。它不属于任何 Session，由用户显式选择 Target Session。

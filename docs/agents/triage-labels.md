@@ -12,4 +12,7 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
-Edit the "Label in our tracker" column to match whatever vocabulary you actually use.
+## Triage in this repo
+
+- A `wontfix` issue is closed as not planned with the reason in a comment. That comment is the record, in place of the `.out-of-scope/` file the triage skill writes.
+- Every sentence of an Agent Brief that names a place in the code or its callers rests on a search run during that triage, at the commit the Brief names.
