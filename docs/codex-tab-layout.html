@@ -1,0 +1,1282 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="deck">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codex 标签页布局稿</title>
+<style>
+/* ==== 1. 颜色、间距、字体：深色是 deck，浅色是 deck-light，写在根元素的 data-theme 上 ==== */
+:root,[data-theme="deck"]{--ground:#131a22;--surface:#1b2633;--surface-raised:#25364a;--surface-sunken:#0d1218;--line:#33475c;--line-strong:#6885a1;--ink:#e6edf3;--ink-muted:#a3b5c7;--ink-faint:#8195a9;--progress:#57b8f2;--progress-dim:#33709c;--on-progress:#06131e;--unlock:#f2c14e;--on-unlock:#1c1300;--warn:#f59a4a;--danger:#ff8273;--pass:#6fd6c0;--focus:#e6edf3;--glow-unlock:0 0 0 1px #f2c14e, 0 0 18px rgba(242, 193, 78, 0.28);--shadow-toast:0 12px 32px rgba(0, 0, 0, 0.55);}
+[data-theme="deck-light"]{--ground:#f4f6f8;--surface:#ffffff;--surface-raised:#dce6f1;--surface-sunken:#e7ebf0;--line:#d3dbe4;--line-strong:#6b8096;--ink:#131a22;--ink-muted:#465768;--ink-faint:#5a6b7d;--progress:#14639f;--progress-dim:#5f9fd0;--on-progress:#ffffff;--unlock:#825b00;--on-unlock:#ffffff;--warn:#a84a06;--danger:#b82f29;--pass:#0a6960;--focus:#131a22;--glow-unlock:0 0 0 1px #825b00, 0 0 18px rgba(130, 91, 0, 0.22);--shadow-toast:0 12px 32px rgba(19, 26, 34, 0.18);}
+:root{--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-6:24px;--space-8:32px;--radius-xs:2px;--radius-sm:3px;--radius-md:4px;--plate-sm:24px;--plate-md:40px;--plate-lg:56px;--bar-height:8px;--control-height:32px;--control-sm:24px;--font-sans:Barlow, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;--font-display:"Barlow Condensed", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;--font-mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;}
+.display{font-family:var(--font-display);font-size:32px;line-height:32px;font-weight:600;letter-spacing:0.01em;}
+.label{font-family:var(--font-display);font-size:12px;line-height:16px;font-weight:600;letter-spacing:0.08em;}
+.title{font-family:var(--font-sans);font-size:18px;line-height:24px;font-weight:600;}
+.heading{font-family:var(--font-sans);font-size:15px;line-height:20px;font-weight:600;}
+.body{font-family:var(--font-sans);font-size:14px;line-height:20px;font-weight:400;}
+.caption{font-family:var(--font-sans);font-size:12px;line-height:16px;font-weight:500;}
+.mono{font-family:var(--font-mono);font-size:13px;line-height:20px;font-weight:400;}
+
+/* ==== 2. 组件 ==== */
+/* Matt Deck — 网页一侧的组件样式。所有取值来自 tokens.css；文字样式用 tokens.css 生成的 .display .label .title .heading .body .caption .mono 类。 */
+
+/* ---- Pane ---- */
+.dk-pane{box-sizing:border-box;display:flex;flex-direction:column;gap:var(--space-4);min-width:0;padding:var(--space-4);background:var(--ground);color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:20px}
+.dk-pane *,.dk-pane *::before,.dk-pane *::after{box-sizing:border-box}
+.dk-pane p,.dk-pane ul,.dk-pane dl,.dk-pane dd{margin:0;padding:0}
+.dk-pane ul{list-style:none}
+.dk-pane :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.dk-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);min-width:0}
+.dk-head__fresh{margin-left:auto;color:var(--ink-muted);white-space:nowrap}
+.dk-head__fresh.is-stale{color:var(--warn)}
+.dk-chip{display:inline-flex;align-items:center;gap:var(--space-1);min-width:0;height:var(--control-sm);padding:0 var(--space-2);border:1px solid var(--line-strong);border-radius:var(--radius-xs);color:var(--ink-muted);font-family:var(--font-mono);font-size:12px;line-height:16px;white-space:nowrap}
+.dk-chip>span{overflow:hidden;text-overflow:ellipsis}
+.dk-chip svg{flex:none;width:9px;height:9px;color:var(--progress)}
+.dk-chip--project{border-color:var(--progress);color:var(--progress)}
+.dk-chip b{color:var(--ink);font-weight:400}
+
+/* ---- Button ---- */
+.dk-btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);height:var(--control-height);padding:0 var(--space-3);border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface);color:var(--ink);font:inherit;font-weight:600;white-space:nowrap;cursor:pointer}
+.dk-btn:hover{background:var(--surface-raised)}
+.dk-btn--primary,.dk-btn--primary:hover{border-color:var(--progress);background:var(--progress);color:var(--on-progress)}
+.dk-btn--unlock,.dk-btn--unlock:hover{border-color:var(--unlock);background:var(--unlock);color:var(--on-unlock)}
+.dk-btn--quiet{border-color:transparent;background:transparent;color:var(--ink-muted)}
+.dk-btn--quiet:hover{color:var(--ink)}
+.dk-btn--block{width:100%;height:40px}
+.dk-btn--sm{gap:var(--space-1);height:var(--control-sm);padding:0 var(--space-2);font-size:12px;line-height:16px}
+.dk-btn--sm .dk-key{min-width:16px;font-size:10px;line-height:14px}
+.dk-btn--go{border-color:var(--progress);background:transparent;color:var(--progress)}
+.dk-btn--go:hover{background:var(--surface-sunken)}
+.dk-btn[disabled],.dk-btn[disabled]:hover{border-color:var(--line);background:transparent;color:var(--ink-faint);cursor:not-allowed}
+.dk-why{color:var(--ink-muted)}
+.dk-key{display:inline-block;min-width:18px;padding:0 var(--space-1);border:1px solid currentColor;border-radius:var(--radius-xs);font-family:var(--font-mono);font-size:11px;font-weight:400;line-height:16px;text-align:center}
+
+/* ---- Tabs ---- */
+.dk-tabs{display:flex;gap:var(--space-1);border-bottom:1px solid var(--line)}
+.dk-tab{display:inline-flex;align-items:center;gap:var(--space-2);margin-bottom:-1px;padding:var(--space-2) var(--space-2);border:0;border-bottom:2px solid transparent;background:none;color:var(--ink-muted);font:inherit;font-weight:600;white-space:nowrap;cursor:pointer}
+.dk-tab:hover{color:var(--ink)}
+.dk-tab[aria-selected="true"]{border-bottom-color:var(--progress);color:var(--ink)}
+
+/* ---- StatusGlyph ---- */
+.dk-plate{display:grid;flex:none;place-items:center;width:var(--plate-md);height:var(--plate-md);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface-sunken);color:var(--ink-faint)}
+.dk-plate svg{display:block;width:45%;height:45%}
+.dk-plate--sm{width:var(--plate-sm);height:var(--plate-sm);border-radius:var(--radius-xs)}
+.dk-plate--sm svg{width:50%;height:50%}
+.dk-plate--lg{width:var(--plate-lg);height:var(--plate-lg)}
+.dk-plate.is-ready{color:var(--progress)}
+.dk-plate.is-running{border-color:var(--progress);color:var(--progress)}
+.dk-plate.is-other{color:var(--ink-muted)}
+.dk-plate.is-orphaned{border-color:var(--warn);color:var(--warn)}
+.dk-plate.is-closeout{border-style:dashed;border-color:var(--unlock);color:var(--unlock)}
+.dk-plate.is-closed{border-color:var(--unlock);color:var(--unlock)}
+.dk-plate.is-error{border-color:var(--danger);color:var(--danger)}
+.dk-plate.is-evidence{border-color:var(--pass);color:var(--pass)}
+.dk-plate--glow{border-color:transparent;box-shadow:var(--glow-unlock)}
+
+/* ---- Badge ---- */
+.dk-badge{display:inline-flex;align-items:center;gap:var(--space-1);height:20px;padding:0 var(--space-2);border:1px solid var(--line-strong);border-radius:var(--radius-xs);color:var(--ink-muted);white-space:nowrap}
+.dk-badge svg{flex:none;width:10px;height:10px}
+.dk-badge.is-ready,.dk-badge.is-running{border-color:var(--progress);color:var(--progress)}
+.dk-badge.is-orphaned{border-color:var(--warn);color:var(--warn)}
+.dk-badge.is-blocked{border-color:var(--line);color:var(--ink-faint)}
+.dk-badge.is-closeout{border-style:dashed;border-color:var(--unlock);color:var(--unlock)}
+.dk-badge.is-closed{border-color:var(--unlock);background:var(--unlock);color:var(--on-unlock)}
+.dk-badge.is-error{border-color:var(--danger);color:var(--danger)}
+.dk-badge.is-evidence{border-color:var(--pass);color:var(--pass)}
+
+/* ---- ProgressBar ---- */
+.dk-progress{display:flex;flex-direction:column;gap:var(--space-2);min-width:0}
+.dk-progress__head{display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-3);color:var(--ink-muted)}
+.dk-progress__nums{display:inline-flex;align-items:baseline;gap:var(--space-2)}
+.dk-progress__count{color:var(--ink)}
+.dk-progress__pct{color:var(--ink-muted)}
+.dk-progress__track{display:flex;height:var(--bar-height);overflow:hidden;border-radius:var(--radius-xs);background:var(--surface-sunken);box-shadow:inset 0 0 0 1px var(--line)}
+.dk-progress__track i{display:block;flex:none;height:100%;transition:width .4s ease-out}
+.dk-progress__closed{background:var(--progress)}
+.dk-progress__active{background:var(--progress-dim)}
+.dk-progress.is-complete .dk-progress__closed{background:var(--unlock)}
+.dk-progress.is-complete .dk-progress__count{color:var(--unlock)}
+
+/* ---- FilterBar ---- */
+.dk-filter{display:flex;flex-wrap:wrap;gap:var(--space-1)}
+.dk-filter__chip{display:inline-flex;align-items:center;gap:var(--space-1);height:var(--control-sm);padding:0 var(--space-2);border:1px solid var(--line);border-radius:var(--radius-xs);background:transparent;color:var(--ink-muted);font:inherit;font-size:12px;line-height:16px;font-weight:500;white-space:nowrap;cursor:pointer}
+.dk-filter__chip:hover{border-color:var(--line-strong);color:var(--ink)}
+.dk-filter__chip[aria-pressed="true"]{border-color:var(--progress);background:var(--surface-raised);color:var(--ink)}
+.dk-filter__chip svg{flex:none;width:9px;height:9px}
+.dk-filter__chip .mono{font-size:12px;line-height:16px}
+.dk-filter__chip.is-ready svg,.dk-filter__chip.is-running svg{color:var(--progress)}
+.dk-filter__chip.is-closed svg{color:var(--unlock)}
+
+/* ---- TaskRow ---- */
+.dk-id{display:inline-flex;flex:none;align-items:center;height:20px;padding:0 6px;border:1px solid var(--line-strong);border-radius:var(--radius-xs);color:var(--ink-muted);font-family:var(--font-mono);font-size:12px;line-height:16px}
+.dk-id.is-ready,.dk-id.is-running{border-color:var(--progress);color:var(--progress)}
+.dk-id.is-orphaned{border-color:var(--warn);color:var(--warn)}
+.dk-id.is-blocked{border-color:var(--line);color:var(--ink-faint)}
+.dk-id.is-closed,.dk-id.is-closeout{border-color:var(--unlock);color:var(--unlock)}
+.dk-tag{display:inline-flex;flex:none;align-items:center;height:20px;padding:0 6px;border:1px solid var(--line);border-radius:var(--radius-xs);color:var(--ink-muted);font-family:var(--font-mono);font-size:11px;line-height:16px;white-space:nowrap}
+.dk-kind{flex:none;color:var(--progress)}
+.dk-ring{display:inline-flex;flex:none;align-items:center;gap:var(--space-1);color:var(--ink);font-family:var(--font-mono);font-size:12px;line-height:16px;white-space:nowrap}
+.dk-ring svg{flex:none;width:16px;height:16px;transform:rotate(-90deg)}
+.dk-ring circle{fill:none;stroke-width:3}
+.dk-ring__track{stroke:var(--line)}
+.dk-ring__arc{stroke:var(--progress)}
+.dk-ring.is-complete{color:var(--unlock)}
+.dk-ring.is-complete .dk-ring__arc{stroke:var(--unlock)}
+.dk-list{display:flex;flex-direction:column;gap:var(--space-1)}
+.dk-row{display:flex;align-items:flex-start;gap:var(--space-3);min-width:0;padding:var(--space-2);padding-right:var(--space-3);border:1px solid transparent;border-radius:var(--radius-sm);background:var(--surface);cursor:pointer}
+.dk-row:hover,.dk-row:focus-within,.dk-row.is-selected{border-color:var(--line);background:var(--surface-raised)}
+.dk-row--container{box-shadow:inset 3px 0 0 var(--progress)}
+.dk-row--container.is-closeout{border-style:dashed;border-color:var(--unlock);box-shadow:inset 3px 0 0 var(--unlock)}
+.dk-row__main{display:flex;flex:1;flex-direction:column;gap:var(--space-1);min-width:0}
+.dk-row__line{display:flex;align-items:center;gap:var(--space-2);min-width:0;min-height:var(--control-sm)}
+.dk-row__line:first-child{align-items:flex-start;min-height:20px}
+.dk-row__title{display:-webkit-box;flex:1;min-width:0;overflow:hidden;color:var(--ink);-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.dk-row__meta{display:flex;flex:1;align-items:center;gap:var(--space-2);min-width:0;overflow:hidden;color:var(--ink-muted);white-space:nowrap}
+.dk-row__aside{flex:none;color:var(--ink-muted);text-align:right;white-space:nowrap}
+.dk-row__actions{display:flex;flex:none;gap:var(--space-1)}
+.dk-row .dk-key{display:none}
+.dk-row.is-selected .dk-key{display:inline-block}
+.dk-row.is-blocked .dk-row__title,.dk-row.is-blocked .dk-row__meta{color:var(--ink-faint)}
+.dk-row.is-blocked:hover .dk-row__title,.dk-row.is-blocked:hover .dk-row__meta,.dk-row.is-blocked:focus-within .dk-row__title,.dk-row.is-blocked:focus-within .dk-row__meta,.dk-row.is-blocked.is-selected .dk-row__title,.dk-row.is-blocked.is-selected .dk-row__meta{color:var(--ink-muted)}
+.dk-pane .is-warn{color:var(--warn)}
+.dk-pane .is-unlock{color:var(--unlock)}
+.dk-pane .is-pass{display:inline-flex;align-items:center;gap:var(--space-1);color:var(--pass)}
+.dk-pane .is-pass svg{width:10px;height:10px}
+.dk-group{display:flex;flex-direction:column;gap:var(--space-1)}
+.dk-group__head{display:flex;align-items:baseline;gap:var(--space-2);padding-bottom:var(--space-1);color:var(--ink-muted)}
+.dk-group__count{color:var(--ink-faint);font-size:12px;line-height:16px}
+.dk-group__more{padding:var(--space-1) var(--space-2);color:var(--ink-muted)}
+
+/* ---- TaskCard ---- */
+.dk-wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(152px,1fr));gap:var(--space-2)}
+.dk-card{display:flex;flex-direction:column;gap:var(--space-2);min-width:0;padding:var(--space-3);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);cursor:pointer}
+.dk-card:hover,.dk-card:focus-within,.dk-card.is-selected{border-color:var(--line-strong);background:var(--surface-raised)}
+.dk-card__head{display:flex;align-items:center;gap:var(--space-2);min-width:0}
+.dk-card__state{margin-left:auto;overflow:hidden;color:var(--ink-muted);text-overflow:ellipsis;white-space:nowrap}
+.dk-card.is-ready .dk-card__state,.dk-card.is-running .dk-card__state{color:var(--progress)}
+.dk-card.is-orphaned .dk-card__state{color:var(--warn)}
+.dk-card.is-closed .dk-card__state{color:var(--unlock)}
+.dk-card__title{display:-webkit-box;min-height:40px;overflow:hidden;color:var(--ink);-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.dk-card__meta{overflow:hidden;color:var(--ink-muted);text-overflow:ellipsis;white-space:nowrap}
+.dk-card__foot{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);min-height:33px;margin-top:auto;padding-top:var(--space-2);border-top:1px solid var(--line);color:var(--ink-muted);white-space:nowrap}
+.dk-card .dk-key{display:none}
+.dk-card.is-selected .dk-key{display:inline-block}
+.dk-card.is-blocked{background:transparent}
+.dk-card.is-blocked .dk-card__title,.dk-card.is-blocked .dk-card__state{color:var(--ink-faint)}
+.dk-card.is-closed{background:var(--surface-sunken)}
+
+/* ---- TaskDetail ---- */
+.dk-bar{display:flex;align-items:center;gap:var(--space-2);min-width:0}
+.dk-crumbs{flex:1;min-width:0;overflow:hidden;color:var(--ink-muted);font-family:var(--font-mono);font-size:12px;line-height:16px;text-overflow:ellipsis;white-space:nowrap}
+.dk-crumbs b{color:var(--ink);font-weight:400}
+.dk-detail{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
+.dk-detail__title{display:flex;align-items:flex-start;gap:var(--space-2);color:var(--ink)}
+.dk-detail__title .dk-id{margin-top:2px}
+.dk-detail__meta{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);color:var(--ink-muted)}
+.dk-parent{display:flex;align-items:center;gap:var(--space-2);min-width:0;padding:var(--space-2) var(--space-3);border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);color:var(--ink-muted);box-shadow:inset 3px 0 0 var(--progress)}
+.dk-parent a{overflow:hidden;color:var(--progress);text-decoration:underline;text-overflow:ellipsis;text-underline-offset:3px;white-space:nowrap}
+.dk-section{display:flex;flex-direction:column;gap:var(--space-2);min-width:0;padding-top:var(--space-3);border-top:1px solid var(--line)}
+.dk-section__head{display:flex;align-items:baseline;gap:var(--space-2);color:var(--ink-muted)}
+.dk-prose{display:flex;flex-direction:column;gap:var(--space-2);color:var(--ink)}
+.dk-prose code{color:var(--ink);font-family:var(--font-mono);font-size:13px}
+.dk-prose ul{display:flex;flex-direction:column;gap:var(--space-1)}
+.dk-prose li{position:relative;padding-left:var(--space-6)}
+.dk-prose li::before{content:"";position:absolute;top:4px;left:var(--space-1);width:12px;height:12px;border:1px solid var(--line-strong);border-radius:var(--radius-xs)}
+.dk-edge{display:flex;align-items:center;gap:var(--space-2);min-width:0;color:var(--ink-muted)}
+.dk-edge svg{flex:none;width:10px;height:10px;color:var(--ink-faint)}
+.dk-edge>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dk-log{display:flex;flex-direction:column;gap:var(--space-2)}
+.dk-log__item{display:flex;flex-direction:column;gap:2px;min-width:0;padding:var(--space-2) var(--space-3);border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface)}
+.dk-log__who{display:flex;justify-content:space-between;gap:var(--space-2);color:var(--ink-muted);font-family:var(--font-mono);font-size:12px;line-height:16px}
+.dk-log__text{color:var(--ink)}
+
+/* ---- SpecCard ---- */
+.dk-spec{display:flex;flex-direction:column;gap:var(--space-3);min-width:0;padding:var(--space-4);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}
+.dk-spec.is-closeout{border-style:dashed;border-color:var(--unlock)}
+.dk-spec__head{display:flex;align-items:center;gap:var(--space-3);min-width:0}
+.dk-spec__titles{display:flex;flex:1;flex-direction:column;gap:var(--space-1);min-width:0}
+.dk-spec__kind{color:var(--ink-muted)}
+.dk-spec__title{display:-webkit-box;overflow:hidden;color:var(--ink);-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.dk-spec__goal{color:var(--ink-muted)}
+.dk-spec__stats{display:flex;flex-wrap:wrap;gap:var(--space-1)}
+.dk-spec__foot{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);color:var(--ink-muted)}
+
+/* ---- NextUp ---- */
+.dk-next{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
+.dk-next__hint{color:var(--ink-muted)}
+.dk-next__line{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);color:var(--ink-muted)}
+.dk-phases{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:var(--space-1)}
+.dk-phase{display:flex;flex-direction:column;gap:var(--space-1);padding-top:var(--space-1);border-top:3px solid var(--surface-raised);color:var(--ink-faint)}
+.dk-phase.is-done{border-top-color:var(--progress);color:var(--ink-muted)}
+.dk-phase.is-now{border-top-color:var(--progress-dim);color:var(--ink);font-weight:600}
+.dk-phase.is-cancelled{border-top-color:var(--ink-faint);color:var(--ink-muted);text-decoration:line-through}
+.dk-rec{display:flex;flex-direction:column;gap:var(--space-3);min-width:0;padding:var(--space-4);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--surface-raised)}
+.dk-rec__head{display:flex;align-items:center;gap:var(--space-3);min-width:0}
+.dk-rec__titles{display:flex;flex:1;flex-direction:column;gap:var(--space-1);min-width:0}
+.dk-rec__overline{color:var(--progress)}
+.dk-rec__title{color:var(--ink)}
+.dk-rec__fields{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--space-1) var(--space-3)}
+.dk-rec__fields dt{padding-top:2px;color:var(--ink-muted)}
+.dk-rec__fields dd{color:var(--ink)}
+.dk-rec__fields .mono{color:var(--progress)}
+
+/* ---- UnlockToast ---- */
+@keyframes dk-toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.dk-toast{display:flex;align-items:center;gap:var(--space-3);width:340px;max-width:100%;padding:var(--space-3);border-radius:var(--radius-md);background:var(--surface-raised);box-shadow:var(--glow-unlock),var(--shadow-toast);animation:dk-toast-in .2s ease-out}
+.dk-toast__body{display:flex;flex:1;flex-direction:column;gap:2px;min-width:0}
+.dk-toast__overline{color:var(--unlock)}
+.dk-toast__title{overflow:hidden;color:var(--ink);text-overflow:ellipsis;white-space:nowrap}
+.dk-toast__meta{color:var(--ink-muted)}
+
+/* ---- MapTree ---- */
+.dk-tree,.dk-tree ul{display:flex;flex-direction:column}
+.dk-tree ul{padding-left:var(--space-6)}
+.dk-tree li{position:relative}
+.dk-tree ul>li::before{content:"";position:absolute;top:0;bottom:0;left:calc(var(--space-2) * -1);border-left:1px solid var(--line-strong)}
+.dk-tree ul>li:last-child::before{bottom:auto;height:16px}
+.dk-tree ul>li::after{content:"";position:absolute;top:16px;left:calc(var(--space-2) * -1);width:var(--space-3);border-top:1px solid var(--line-strong)}
+.dk-tree__node{display:flex;align-items:center;gap:var(--space-2);min-width:0;min-height:32px;padding:var(--space-1);border-radius:var(--radius-sm)}
+.dk-tree__node:hover,.dk-tree__node.is-selected{background:var(--surface-raised)}
+.dk-tree__id{flex:none;color:var(--ink-muted)}
+.dk-tree__title{flex:1;overflow:hidden;color:var(--ink);text-overflow:ellipsis;white-space:nowrap}
+.dk-tree__edge{flex:none;color:var(--ink-muted)}
+.dk-tree__node.is-blocked .dk-tree__title{color:var(--ink-faint)}
+.dk-tree__node.is-blocked:hover .dk-tree__title,.dk-tree__node.is-blocked.is-selected .dk-tree__title{color:var(--ink-muted)}
+.dk-tree__node.is-root .dk-tree__title{font-weight:600}
+
+/* ---- SkillRow ---- */
+.dk-skill{display:flex;align-items:center;gap:var(--space-3);min-width:0;padding:var(--space-2) var(--space-3);border:1px solid transparent;border-radius:var(--radius-sm);background:var(--surface);cursor:pointer}
+.dk-skill:hover,.dk-skill:focus-within,.dk-skill.is-selected{border-color:var(--line);background:var(--surface-raised)}
+.dk-skill__main{display:flex;flex:1;flex-direction:column;gap:2px;min-width:0}
+.dk-skill__name{overflow:hidden;color:var(--progress);text-overflow:ellipsis;white-space:nowrap}
+.dk-skill__desc{overflow:hidden;color:var(--ink-muted);text-overflow:ellipsis;white-space:nowrap}
+.dk-skill__actions{display:flex;flex:none;gap:var(--space-1)}
+.dk-skill .dk-key{display:none}
+.dk-skill.is-selected .dk-key{display:inline-block}
+.dk-source{display:flex;align-items:baseline;gap:var(--space-2);color:var(--ink-muted)}
+.dk-source .mono{overflow:hidden;color:var(--ink);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---- Notice ---- */
+.dk-notice{display:flex;align-items:flex-start;gap:var(--space-3);min-width:0;padding:var(--space-3);border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface)}
+.dk-notice.is-warn{border-color:var(--warn)}
+.dk-notice.is-danger{border-color:var(--danger)}
+.dk-notice__body{display:flex;flex:1;flex-direction:column;gap:var(--space-2);min-width:0}
+.dk-notice__title{color:var(--ink)}
+.dk-notice__text{color:var(--ink-muted)}
+.dk-notice__text code{color:var(--ink);font-family:var(--font-mono);font-size:13px}
+.dk-notice__actions{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+.dk-empty{display:flex;flex-direction:column;align-items:center;gap:var(--space-2);padding:var(--space-8) var(--space-4);border:1px dashed var(--line-strong);border-radius:var(--radius-sm);color:var(--ink-muted);text-align:center}
+.dk-empty__title{color:var(--ink)}
+
+@media (prefers-reduced-motion:reduce){
+  .dk-progress__track i{transition:none}
+  .dk-toast{animation:none}
+}
+
+/* ---- 标签页里的 Pane（Codex）---- */
+.dk-top{position:sticky;top:0;z-index:1;display:flex;flex-direction:column;gap:var(--space-4);margin:calc(var(--space-4) * -1) calc(var(--space-4) * -1) 0;padding:var(--space-4) var(--space-4) 0;background:var(--ground)}
+.dk-head__fresh.is-failed{color:var(--danger)}
+.dk-notice__line{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);min-width:0}
+.dk-steps{display:flex;flex-direction:column;gap:var(--space-1);margin:0;padding-left:var(--space-6);color:var(--ink)}
+.dk-steps code{font-family:var(--font-mono);font-size:13px}
+button.dk-group__more{align-self:flex-start;border:0;background:none;text-align:left;cursor:pointer}
+button.dk-group__more:hover{color:var(--ink);text-decoration:underline}
+.dk-spec__head .dk-btn{margin-left:auto}
+.dk-empty .dk-btn{margin-top:var(--space-2)}
+.dk-edge.is-ready svg,.dk-edge.is-running svg{color:var(--progress)}
+.dk-edge.is-other svg{color:var(--ink-muted)}
+.dk-edge.is-orphaned svg{color:var(--warn)}
+.dk-edge.is-closed svg{color:var(--unlock)}
+
+/* ==== 3. 页面自己：铺满标签页，超过 720px 时居中 ==== */
+body{margin:0;background:var(--ground)}
+.dk-pane{max-width:720px;margin:0 auto}
+
+/* ==== 4. 这份稿子自己的排版，不属于页面 ==== */
+html{background:var(--surface-sunken)}
+body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:20px}
+.sheet{box-sizing:border-box;width:672px;max-width:100%;margin:0 auto;padding:16px 16px 96px;overflow-x:auto}
+.sheet h1{margin:16px 0 4px;font-size:18px;line-height:24px}
+.sheet h2{margin:48px 0 0;padding-bottom:4px;border-bottom:1px solid var(--line);font-size:15px;line-height:20px}
+.sheet p{margin:0;color:var(--ink-muted)}
+.sheet__bar{display:flex;align-items:center;gap:8px;margin-top:12px}
+.shot{margin-top:24px}
+.shot h3{display:flex;align-items:baseline;gap:8px;margin:0 0 4px;font-size:14px;line-height:20px}
+.shot h3 code{color:var(--ink-faint);font-family:var(--font-mono);font-size:12px;font-weight:400}
+.shot__part{color:var(--ink-faint);font-size:12px;font-weight:400}
+.shot__frame{box-sizing:content-box;width:638px;margin-top:8px;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.shot__frame .dk-top{position:static}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <h1>Codex 标签页布局稿</h1>
+  <p>每个画面宽 638px，和 Codex 桌面应用里标签页的实测宽度相同。字体是系统字体，标签页里不加载外部字体。</p>
+  <div class="sheet__bar"><span>外观</span><button class="dk-filter__chip" type="button" data-set-theme="deck" aria-pressed="true">深色</button><button class="dk-filter__chip" type="button" data-set-theme="deck-light" aria-pressed="false">浅色</button></div>
+  <h2>下一步</h2>
+  <section class="shot" id="next-idle">
+    <h3>没有请求<code>#next-idle</code></h3>
+    <p>整屏。抬头和标签页贴在顶上，四个标签页里都在。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-head__fresh caption">3 分钟前</span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">技能</button>
+      </div>
+      </div>
+      <div class="dk-next">
+        <button class="dk-btn dk-btn--primary dk-btn--block" type="button">我现在该做什么</button>
+        <p class="dk-next__hint caption">把 $ask-matt 填进输入框，附带 Task Snapshot。</p>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="next-waiting">
+    <h3>已填入，等待回报<code>#next-waiting</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>点过主按钮之后。每 2 秒读一次回报，最多等 10 分钟。没有取消。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-next">
+        <div class="dk-phases caption"><span class="dk-phase is-done">已填入</span><span class="dk-phase is-now">等待回报</span><span class="dk-phase">已回答</span></div>
+        <div class="dk-next__line"><span>已填入输入框，等你发送。</span><button class="dk-btn" type="button">再问一次</button></div>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="next-answered">
+    <h3>已回答<code>#next-answered</code></h3>
+    <p>Recommendation 画成“下一个成就”。五个字段都写，没有内容的写“无”。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-head__fresh caption">3 分钟前</span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">技能</button>
+      </div>
+      </div>
+      <div class="dk-next">
+        <div class="dk-phases caption"><span class="dk-phase is-done">已填入</span><span class="dk-phase is-done">等待回报</span><span class="dk-phase is-done">已回答</span></div>
+        <article class="dk-rec">
+          <div class="dk-rec__head">
+            <span class="dk-plate is-ready dk-plate--lg" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+            <div class="dk-rec__titles"><span class="dk-rec__overline label">下一个成就</span><span class="dk-rec__title title">Map View</span></div>
+            <span class="mono">#71</span>
+          </div>
+          <dl class="dk-rec__fields">
+            <dt class="caption">下一步</dt><dd>先画成就墙，再把 Blocking Edge 写到卡片上。</dd>
+            <dt class="caption">技能</dt><dd><span class="mono">$implement</span></dd>
+            <dt class="caption">理由</dt><dd>它挡着 #78，做完之后 Pending Closeout 可以开工。</dd>
+            <dt class="caption">阻塞</dt><dd>无</dd>
+          </dl>
+          <button class="dk-btn dk-btn--primary dk-btn--block" type="button">执行这个 Task</button>
+        </article>
+      </div>
+      <button class="dk-btn" type="button">再问一次</button>
+    </div></div>
+  </section>
+  <section class="shot" id="next-timeout">
+    <h3>超时停止<code>#next-timeout</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>当前那一格划线，主按钮回来。页面读不到回答，不显示原文。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-next">
+        <div class="dk-phases caption"><span class="dk-phase is-done">已填入</span><span class="dk-phase is-cancelled">等待回报</span><span class="dk-phase">已回答</span></div>
+        <p class="dk-next__hint caption">等了 10 分钟，没有收到回报，已停止等待。回答在对话里。</p>
+        <button class="dk-btn dk-btn--primary dk-btn--block" type="button">我现在该做什么</button>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="next-unavailable">
+    <h3>ask-matt 不能预填<code>#next-unavailable</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>主按钮停用，下面一句原因和“重跑配置”。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-next">
+        <button class="dk-btn dk-btn--primary dk-btn--block" type="button" disabled>我现在该做什么</button>
+        <div class="dk-next__line"><span class="dk-why caption">Codex 里的 ask-matt 不是同一份，不能预填。</span><button class="dk-btn" type="button">重跑配置</button></div>
+      </div>
+    </div></div>
+  </section>
+  <h2>任务</h2>
+  <section class="shot" id="tasks">
+    <h3>全部<code>#tasks</code></h3>
+    <p>筛选、Spec 和 Map 的行、四个分组。鼠标所在的行多出“详情”；点一行也进详情。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-head__fresh caption">3 分钟前</span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">技能</button>
+      </div>
+      </div>
+      <div class="dk-filter" role="group" aria-label="筛选">
+        <button class="dk-filter__chip" type="button" aria-pressed="true">全部<span class="mono">17</span></button>
+        <button class="dk-filter__chip is-ready" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>可执行<span class="mono">2</span></button>
+        <button class="dk-filter__chip is-running" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg>进行中<span class="mono">4</span></button>
+        <button class="dk-filter__chip is-blocked" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>阻塞<span class="mono">7</span></button>
+        <button class="dk-filter__chip is-closed" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg>已完成<span class="mono">4</span></button>
+      </div>
+      <ul class="dk-list">
+      <li class="dk-row is-orphaned dk-row--container" tabindex="0">
+        <span class="dk-plate is-orphaned" role="img" aria-label="Orphaned"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 14.6 13.5H1.4z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-kind label">Spec</span><span class="dk-id is-orphaned">#64</span><span class="dk-row__title heading">规格：里程碑二，Codex 桌面应用上的 Matt Deck</span><span class="dk-ring"><svg viewBox="0 0 16 16" aria-hidden="true"><circle class="dk-ring__track" cx="8" cy="8" r="6"/><circle class="dk-ring__arc" cx="8" cy="8" r="6" stroke-dasharray="8.87 37.70"/></svg>4/17</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>2 可执行 · 4 进行中 · 7 阻塞</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">地图</button></span></div>
+        </div>
+      </li>
+      </ul>
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">可执行</span><span class="dk-group__count mono">2</span></header>
+        <ul class="dk-list">
+      <li class="dk-row is-ready is-selected" tabindex="0">
+        <span class="dk-plate is-ready" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-ready">#70</span><span class="dk-row__title heading">Task 详情</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>可执行</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button">执行</button><button class="dk-btn dk-btn--sm" type="button">详情</button></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-ready" tabindex="0">
+        <span class="dk-plate is-ready" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-ready">#71</span><span class="dk-row__title heading">Map View</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>可执行</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button">执行</button></span></div>
+        </div>
+      </li>
+        </ul>
+      </section>
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">进行中</span><span class="dk-group__count mono">4</span></header>
+        <ul class="dk-list">
+      <li class="dk-row is-running" tabindex="0">
+        <span class="dk-plate is-running" role="img" aria-label="进行中 · 本 Session"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-running">#74</span><span class="dk-row__title heading">执行与 Occupancy 登记</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>进行中 · 本 Session</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">释放</button></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-other" tabindex="0">
+        <span class="dk-plate is-other" role="img" aria-label="进行中 · 其他 Session"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 2.4a5.6 5.6 0 0 0 0 11.2z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-other">#72</span><span class="dk-row__title heading">Matt 技能</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>进行中 · <span class="mono">045b96fc</span></span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">接管</button></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-other" tabindex="0">
+        <span class="dk-plate is-other" role="img" aria-label="进行中 · 其他 Session"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 2.4a5.6 5.6 0 0 0 0 11.2z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-other">#69</span><span class="dk-row__title heading">任务列表</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>进行中 · Claude Code <span class="mono">3f9c21d0</span></span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">接管</button></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-orphaned" tabindex="0">
+        <span class="dk-plate is-orphaned" role="img" aria-label="Orphaned"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 14.6 13.5H1.4z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-orphaned">#75</span><span class="dk-row__title heading">心跳与 Orphaned</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span class="is-warn">Orphaned</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">接管</button><button class="dk-btn dk-btn--sm" type="button">释放</button></span></div>
+        </div>
+      </li>
+        </ul>
+      </section>
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">阻塞</span><span class="dk-group__count mono">7</span></header>
+        <ul class="dk-list">
+      <li class="dk-row is-blocked" tabindex="0">
+        <span class="dk-plate is-blocked" role="img" aria-label="被阻塞"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-blocked">#73</span><span class="dk-row__title heading">推荐：我现在该做什么</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>被 #72 阻塞</span><span class="dk-tag">ready-for-agent</span></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-blocked" tabindex="0">
+        <span class="dk-plate is-blocked" role="img" aria-label="被阻塞"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-blocked">#76</span><span class="dk-row__title heading">接管与手动释放</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>被 #74 阻塞</span><span class="dk-tag">ready-for-agent</span></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-blocked" tabindex="0">
+        <span class="dk-plate is-blocked" role="img" aria-label="被阻塞"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-blocked">#77</span><span class="dk-row__title heading">钩子未生效的提示</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>被 #74 阻塞</span><span class="dk-tag">ready-for-agent</span></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-blocked" tabindex="0">
+        <span class="dk-plate is-blocked" role="img" aria-label="被阻塞"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-blocked">#78</span><span class="dk-row__title heading">Pending Closeout</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>被 #71 阻塞</span><span class="dk-tag">ready-for-agent</span></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-blocked" tabindex="0">
+        <span class="dk-plate is-blocked" role="img" aria-label="被阻塞"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-blocked">#79</span><span class="dk-row__title heading">在 Codex 里做首次配置</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>被 #72 阻塞</span><span class="dk-tag">ready-for-agent</span></span></div>
+        </div>
+      </li>
+        </ul>
+        <button class="dk-group__more caption" type="button">还有 2 个</button>
+      </section>
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">已完成</span><span class="dk-group__count mono">4</span></header>
+        <ul class="dk-list">
+      <li class="dk-row is-closed" tabindex="0">
+        <span class="dk-plate is-closed" role="img" aria-label="已解锁"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-closed">#67</span><span class="dk-row__title heading">标签页布局设计</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span class="is-unlock">已解锁</span></span><span class="dk-row__aside caption">11-22 03:30</span></div>
+        </div>
+      </li>
+      <li class="dk-row is-closed" tabindex="0">
+        <span class="dk-plate is-closed" role="img" aria-label="已解锁"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-closed">#68</span><span class="dk-row__title heading">核对骨架：在真实桌面应用里安装并打开</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span class="is-unlock">已解锁</span></span><span class="dk-row__aside caption">11-22 02:15</span></div>
+        </div>
+      </li>
+      <li class="dk-row is-closed" tabindex="0">
+        <span class="dk-plate is-closed" role="img" aria-label="已解锁"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-closed">#66</span><span class="dk-row__title heading">骨架：在 Codex 里打开 Pane</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span class="is-unlock">已解锁</span><span class="is-pass"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8.6 6.4 12.2 13.2 4.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>验收证据</span></span><span class="dk-row__aside caption">11-22 01:40</span></div>
+        </div>
+      </li>
+      <li class="dk-row is-closed" tabindex="0">
+        <span class="dk-plate is-closed" role="img" aria-label="已解锁"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-closed">#65</span><span class="dk-row__title heading">预先重构：宿主由启动参数写明，技能的调用写法归宿主</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span class="is-unlock">已解锁</span><span class="is-pass"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8.6 6.4 12.2 13.2 4.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>验收证据</span></span><span class="dk-row__aside caption">11-21 22:10</span></div>
+        </div>
+      </li>
+        </ul>
+      </section>
+    </div></div>
+  </section>
+  <section class="shot" id="tasks-filled">
+    <h3>预填之后<code>#tasks-filled</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>预填的按钮点过之后停用 5 秒，字换成“已填入”，然后换回。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">可执行</span><span class="dk-group__count mono">2</span></header>
+        <ul class="dk-list">
+      <li class="dk-row is-ready is-selected" tabindex="0">
+        <span class="dk-plate is-ready" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-ready">#70</span><span class="dk-row__title heading">Task 详情</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>可执行</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button" disabled>已填入</button><button class="dk-btn dk-btn--sm" type="button">详情</button></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-ready" tabindex="0">
+        <span class="dk-plate is-ready" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-ready">#71</span><span class="dk-row__title heading">Map View</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>可执行</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button">执行</button></span></div>
+        </div>
+      </li>
+        </ul>
+      </section>
+    </div></div>
+  </section>
+  <section class="shot" id="tasks-takeover">
+    <h3>接管确认<code>#tasks-takeover</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>对其他 Session 占用的 Task 点“接管”，或从 Recommendation、详情里对它点“执行”。提示出现在这一行的位置上。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">进行中</span><span class="dk-group__count mono">4</span></header>
+        <ul class="dk-list">
+      <li class="dk-row is-running" tabindex="0">
+        <span class="dk-plate is-running" role="img" aria-label="进行中 · 本 Session"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-running">#74</span><span class="dk-row__title heading">执行与 Occupancy 登记</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>进行中 · 本 Session</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">释放</button></span></div>
+        </div>
+      </li>
+      <li>
+      <div class="dk-notice is-warn" role="status">
+        <span class="dk-plate is-other dk-plate--sm" role="img" aria-label="进行中 · 其他 Session"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 2.4a5.6 5.6 0 0 0 0 11.2z" fill="currentColor"/></svg></span>
+        <div class="dk-notice__body">
+          <span class="dk-notice__title heading">#72 正由 Session <span class="mono">045b96fc</span> 执行</span>
+          <span class="dk-notice__text">接管会把 Occupancy 转给本 Session。</span>
+          <div class="dk-notice__actions"><button class="dk-btn" type="button">接管</button><button class="dk-btn dk-btn--quiet" type="button">取消</button></div>
+        </div>
+      </div>
+      </li>
+      <li class="dk-row is-other" tabindex="0">
+        <span class="dk-plate is-other" role="img" aria-label="进行中 · 其他 Session"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 2.4a5.6 5.6 0 0 0 0 11.2z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-other">#69</span><span class="dk-row__title heading">任务列表</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>进行中 · Claude Code <span class="mono">3f9c21d0</span></span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">接管</button></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-orphaned" tabindex="0">
+        <span class="dk-plate is-orphaned" role="img" aria-label="Orphaned"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 14.6 13.5H1.4z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-orphaned">#75</span><span class="dk-row__title heading">心跳与 Orphaned</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span class="is-warn">Orphaned</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">接管</button><button class="dk-btn dk-btn--sm" type="button">释放</button></span></div>
+        </div>
+      </li>
+        </ul>
+      </section>
+    </div></div>
+  </section>
+  <section class="shot" id="tasks-takeover-host">
+    <h3>接管确认：另一个 Host 的 Session<code>#tasks-takeover-host</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>标识前面写 Host 名。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-notice is-warn" role="status">
+        <span class="dk-plate is-other dk-plate--sm" role="img" aria-label="进行中 · 其他 Session"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 2.4a5.6 5.6 0 0 0 0 11.2z" fill="currentColor"/></svg></span>
+        <div class="dk-notice__body">
+          <span class="dk-notice__title heading">#69 正由 Claude Code <span class="mono">3f9c21d0</span> 执行</span>
+          <span class="dk-notice__text">接管会把 Occupancy 转给本 Session。</span>
+          <div class="dk-notice__actions"><button class="dk-btn" type="button">接管</button><button class="dk-btn dk-btn--quiet" type="button">取消</button></div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="tasks-takeover-orphaned">
+    <h3>接管确认：Orphaned<code>#tasks-takeover-orphaned</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>第一句换成 Session 已结束。行上的“释放”不用确认。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-notice is-warn" role="status">
+        <span class="dk-plate is-orphaned dk-plate--sm" role="img" aria-label="Orphaned"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 14.6 13.5H1.4z" fill="currentColor"/></svg></span>
+        <div class="dk-notice__body">
+          <span class="dk-notice__title heading">#75 的 Session 已结束</span>
+          <span class="dk-notice__text">接管会把 Occupancy 转给本 Session。</span>
+          <div class="dk-notice__actions"><button class="dk-btn" type="button">接管</button><button class="dk-btn dk-btn--quiet" type="button">取消</button></div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="tasks-closeout">
+    <h3>Pending Closeout<code>#tasks-closeout</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>Child Task 全部关闭而 Spec 还开着。不写“已完成”。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-filter" role="group" aria-label="筛选">
+        <button class="dk-filter__chip" type="button" aria-pressed="true">全部<span class="mono">17</span></button>
+        <button class="dk-filter__chip is-ready" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>可执行<span class="mono">0</span></button>
+        <button class="dk-filter__chip is-running" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg>进行中<span class="mono">0</span></button>
+        <button class="dk-filter__chip is-blocked" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>阻塞<span class="mono">0</span></button>
+        <button class="dk-filter__chip is-closed" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg>已完成<span class="mono">17</span></button>
+      </div>
+      <ul class="dk-list">
+      <li class="dk-row is-closeout dk-row--container is-closeout" tabindex="0">
+        <span class="dk-plate is-closeout" role="img" aria-label="Pending Closeout"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6 14.4 8 8 14.4 1.6 8z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 5.2 10.8 8 8 10.8 5.2 8z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-kind label">Spec</span><span class="dk-id is-closeout">#64</span><span class="dk-row__title heading">规格：里程碑二，Codex 桌面应用上的 Matt Deck</span><span class="dk-ring is-complete"><svg viewBox="0 0 16 16" aria-hidden="true"><circle class="dk-ring__track" cx="8" cy="8" r="6"/><circle class="dk-ring__arc" cx="8" cy="8" r="6" stroke-dasharray="37.70 37.70"/></svg>17/17</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span class="is-unlock">待收尾核对</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-btn--unlock" type="button">收尾核对</button><button class="dk-btn dk-btn--sm" type="button">地图</button></span></div>
+        </div>
+      </li>
+      </ul>
+    </div></div>
+  </section>
+  <section class="shot" id="tasks-noexec">
+    <h3>“执行”不能用<code>#tasks-noexec</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>原因在内容最上面说一次，每一行的“执行”停用，不重复原因。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-notice is-warn" role="status">
+        <div class="dk-notice__body">
+          <div class="dk-notice__line"><span class="dk-notice__title heading">Codex 里的 implement 不是同一份，不能预填执行。</span><button class="dk-btn dk-btn--sm" type="button">重跑配置</button></div>
+          <span class="dk-notice__text">所有 Task 的“执行”先停用，重跑配置之后恢复。</span>
+        </div>
+      </div>
+      <div class="dk-filter" role="group" aria-label="筛选">
+        <button class="dk-filter__chip" type="button" aria-pressed="true">全部<span class="mono">17</span></button>
+        <button class="dk-filter__chip is-ready" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>可执行<span class="mono">2</span></button>
+        <button class="dk-filter__chip is-running" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg>进行中<span class="mono">4</span></button>
+        <button class="dk-filter__chip is-blocked" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>阻塞<span class="mono">7</span></button>
+        <button class="dk-filter__chip is-closed" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg>已完成<span class="mono">4</span></button>
+      </div>
+      <ul class="dk-list">
+      <li class="dk-row is-orphaned dk-row--container" tabindex="0">
+        <span class="dk-plate is-orphaned" role="img" aria-label="Orphaned"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 14.6 13.5H1.4z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-kind label">Spec</span><span class="dk-id is-orphaned">#64</span><span class="dk-row__title heading">规格：里程碑二，Codex 桌面应用上的 Matt Deck</span><span class="dk-ring"><svg viewBox="0 0 16 16" aria-hidden="true"><circle class="dk-ring__track" cx="8" cy="8" r="6"/><circle class="dk-ring__arc" cx="8" cy="8" r="6" stroke-dasharray="8.87 37.70"/></svg>4/17</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>2 可执行 · 4 进行中 · 7 阻塞</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">地图</button></span></div>
+        </div>
+      </li>
+      </ul>
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">可执行</span><span class="dk-group__count mono">2</span></header>
+        <ul class="dk-list">
+      <li class="dk-row is-ready is-selected" tabindex="0">
+        <span class="dk-plate is-ready" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-ready">#70</span><span class="dk-row__title heading">Task 详情</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>可执行</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button" disabled>执行</button><button class="dk-btn dk-btn--sm" type="button">详情</button></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-ready" tabindex="0">
+        <span class="dk-plate is-ready" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-ready">#71</span><span class="dk-row__title heading">Map View</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>可执行</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button" disabled>执行</button></span></div>
+        </div>
+      </li>
+        </ul>
+      </section>
+    </div></div>
+  </section>
+  <section class="shot" id="tasks-empty">
+    <h3>空列表：没有 Task<code>#tasks-empty</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>不是报错。一句事实，一句去处。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-filter" role="group" aria-label="筛选">
+        <button class="dk-filter__chip" type="button" aria-pressed="true">全部<span class="mono">0</span></button>
+        <button class="dk-filter__chip is-ready" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>可执行<span class="mono">0</span></button>
+        <button class="dk-filter__chip is-running" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg>进行中<span class="mono">0</span></button>
+        <button class="dk-filter__chip is-blocked" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>阻塞<span class="mono">0</span></button>
+        <button class="dk-filter__chip is-closed" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg>已完成<span class="mono">0</span></button>
+      </div>
+      <div class="dk-empty">
+        <span class="dk-empty__title heading">Task Source 里还没有 Task。</span>
+        <span>在 Session 里用 Matt skills 建立。</span>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="tasks-empty-group">
+    <h3>空列表：筛选出来的分组是空的<code>#tasks-empty-group</code><span class="shot__part">只画变化的部分</span></h3>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-filter" role="group" aria-label="筛选">
+        <button class="dk-filter__chip" type="button" aria-pressed="false">全部<span class="mono">15</span></button>
+        <button class="dk-filter__chip is-ready" type="button" aria-pressed="true"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>可执行<span class="mono">0</span></button>
+        <button class="dk-filter__chip is-running" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg>进行中<span class="mono">4</span></button>
+        <button class="dk-filter__chip is-blocked" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>阻塞<span class="mono">7</span></button>
+        <button class="dk-filter__chip is-closed" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg>已完成<span class="mono">4</span></button>
+      </div>
+      <div class="dk-empty">
+        <span class="dk-empty__title heading">没有可执行的 Task。</span>
+        <span>到“下一步”问该做什么。</span>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="tasks-error">
+    <h3>读取失败<code>#tasks-error</code></h3>
+    <p>新鲜度的位置写“读取失败”。提示里不放按钮，重试用“刷新”。之前读到过的列表留在下面。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-head__fresh caption is-failed">读取失败</span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">技能</button>
+      </div>
+      </div>
+      <div class="dk-notice is-danger" role="status">
+        <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+        <div class="dk-notice__body">
+          <span class="dk-notice__title heading">读取 Task 失败</span>
+          <span class="dk-notice__text"><code>gh</code> 未登录。运行 <code>gh auth login</code> 后点“刷新”重试。</span>
+        </div>
+      </div>
+      <div class="dk-filter" role="group" aria-label="筛选">
+        <button class="dk-filter__chip" type="button" aria-pressed="true">全部<span class="mono">17</span></button>
+        <button class="dk-filter__chip is-ready" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>可执行<span class="mono">2</span></button>
+        <button class="dk-filter__chip is-running" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg>进行中<span class="mono">4</span></button>
+        <button class="dk-filter__chip is-blocked" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>阻塞<span class="mono">7</span></button>
+        <button class="dk-filter__chip is-closed" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg>已完成<span class="mono">4</span></button>
+      </div>
+      <ul class="dk-list">
+      <li class="dk-row is-orphaned dk-row--container" tabindex="0">
+        <span class="dk-plate is-orphaned" role="img" aria-label="Orphaned"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 14.6 13.5H1.4z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-kind label">Spec</span><span class="dk-id is-orphaned">#64</span><span class="dk-row__title heading">规格：里程碑二，Codex 桌面应用上的 Matt Deck</span><span class="dk-ring"><svg viewBox="0 0 16 16" aria-hidden="true"><circle class="dk-ring__track" cx="8" cy="8" r="6"/><circle class="dk-ring__arc" cx="8" cy="8" r="6" stroke-dasharray="8.87 37.70"/></svg>4/17</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>2 可执行 · 4 进行中 · 7 阻塞</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">地图</button></span></div>
+        </div>
+      </li>
+      </ul>
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">可执行</span><span class="dk-group__count mono">2</span></header>
+        <ul class="dk-list">
+      <li class="dk-row is-ready is-selected" tabindex="0">
+        <span class="dk-plate is-ready" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-ready">#70</span><span class="dk-row__title heading">Task 详情</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>可执行</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button">执行</button><button class="dk-btn dk-btn--sm" type="button">详情</button></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-ready" tabindex="0">
+        <span class="dk-plate is-ready" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-ready">#71</span><span class="dk-row__title heading">Map View</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>可执行</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button">执行</button></span></div>
+        </div>
+      </li>
+        </ul>
+      </section>
+    </div></div>
+  </section>
+  <section class="shot" id="tasks-loading">
+    <h3>正在读取<code>#tasks-loading</code></h3>
+    <p>第一次读取返回之前。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-head__fresh"></span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">技能</button>
+      </div>
+      </div>
+      <p class="dk-why">正在读取 Task…</p>
+    </div></div>
+  </section>
+  <h2>Task 详情</h2>
+  <section class="shot" id="detail">
+    <h3>被阻塞的 Task<code>#detail</code></h3>
+    <p>从“地图”钻进来。返回栏：返回、来路、这个 Task 的动作、在 GitHub 打开。被阻塞的 Task 没有动作。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-head__fresh caption">3 分钟前</span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">技能</button>
+      </div>
+      </div>
+      <div class="dk-bar">
+        <button class="dk-btn dk-btn--sm" type="button">返回</button>
+        <span class="dk-crumbs">地图 / #64 / <b>#76</b></span>
+        <a class="dk-btn dk-btn--sm dk-btn--quiet" href="#">在 GitHub 打开</a>
+      </div>
+      <div class="dk-detail">
+        <div class="dk-detail__title title"><span class="dk-id is-blocked">#76</span><span>接管与手动释放</span></div>
+        <div class="dk-detail__meta caption">
+          <span class="dk-badge caption is-blocked"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>被 #74 阻塞</span><span class="dk-tag">ready-for-agent</span><span>未指派</span><span>更新 11-22</span>
+        </div>
+        <div class="dk-parent caption"><span>属于</span><a href="#">Spec #64 规格：里程碑二，Codex 桌面应用上的 Matt Deck</a></div>
+        <section class="dk-section">
+          <header class="dk-section__head label">描述</header>
+          <div class="dk-prose"><p>对一个已被其他 Session 占用的 Task 发起执行时，Pane 先提示并要求明确接管，确认后 Occupancy 转给当前 Session，再预填 Execute Prompt。用户也可以手动释放一个 Occupancy，让别的 Session 接手。</p></div>
+        </section>
+        <section class="dk-section">
+          <header class="dk-section__head label">验收条件</header>
+          <div class="dk-prose"><ul>
+            <li>对已被占用的 Task 点执行时先出现接管确认，不确认就不转移、不预填</li>
+            <li>确认后 Occupancy 转给当前 Session，然后预填 Execute Prompt</li>
+            <li>可以手动释放一个 Occupancy，释放后 Task 回到它该在的分组</li>
+          </ul></div>
+        </section>
+        <section class="dk-section">
+          <header class="dk-section__head label">被阻塞<span class="mono">1</span></header>
+          <div class="dk-edge is-running"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><span class="dk-id is-running">#74</span><span>执行与 Occupancy 登记</span></div>
+        </section>
+        <section class="dk-section">
+          <header class="dk-section__head label">执行记录</header>
+          <span class="dk-why caption">还没有 Session 执行过这个 Task。</span>
+        </section>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="detail-bar">
+    <h3>返回栏：可执行的 Task<code>#detail-bar</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>动作和它在列表那一行里的相同。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-bar">
+        <button class="dk-btn dk-btn--sm" type="button">返回</button>
+        <span class="dk-crumbs">任务 / <b>#70</b></span>
+        <button class="dk-btn dk-btn--sm dk-btn--go" type="button">执行</button>
+        <a class="dk-btn dk-btn--sm dk-btn--quiet" href="#">在 GitHub 打开</a>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="detail-log">
+    <h3>已解锁的 Task：执行记录<code>#detail-log</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>一条一个 Session。Acceptance Evidence 写在回报它的那一条里。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-detail">
+        <div class="dk-detail__title title"><span class="dk-id is-closed">#66</span><span>骨架：在 Codex 里打开 Pane</span></div>
+        <div class="dk-detail__meta caption">
+          <span class="dk-badge caption is-closed"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg>已解锁</span><span class="dk-badge caption is-evidence"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8.6 6.4 12.2 13.2 4.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>验收证据</span><span class="dk-tag">ready-for-agent</span><span>未指派</span><span>关闭 11-22 01:40</span>
+        </div>
+        <section class="dk-section">
+          <header class="dk-section__head label">执行记录</header>
+          <div class="dk-log">
+            <div class="dk-log__item">
+              <div class="dk-log__who"><span>Session 8186a893</span><span>11-22 01:38</span></div>
+              <span class="dk-log__text">页面在标签页里打开，四个部分能切换。</span>
+              <span class="is-pass caption"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8.6 6.4 12.2 13.2 4.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>验收证据：<code>npm test</code> 全部通过。来自 deck_report。</span>
+            </div>
+            <div class="dk-log__item">
+              <div class="dk-log__who"><span>Claude Code 3f9c21d0</span><span>11-21 23:05</span></div>
+              <span class="dk-log__text">预先重构合并之后重新跑了一遍测试。</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div></div>
+  </section>
+  <h2>地图</h2>
+  <section class="shot" id="map">
+    <h3>Map View<code>#map</code></h3>
+    <p>档案卡，下面是成就墙，638px 时三列。Blocking Edge 写在卡片的第三行。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-head__fresh caption">3 分钟前</span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">技能</button>
+      </div>
+      </div>
+      <article class="dk-spec">
+        <div class="dk-spec__head"><span class="dk-kind label">Spec</span><span class="dk-id is-orphaned">#64</span><button class="dk-btn dk-btn--sm" type="button">切换</button></div>
+        <span class="dk-spec__title title">规格：里程碑二，Codex 桌面应用上的 Matt Deck</span>
+        <span class="dk-spec__goal">在 Codex 桌面应用的标签页里放一个 Pane。</span>
+        <div class="dk-spec__stats"><span class="dk-badge caption is-ready"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>可执行 2</span><span class="dk-badge caption is-running"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg>进行中 4</span><span class="dk-badge caption is-blocked"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>阻塞 7</span><span class="dk-badge caption is-closed"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg>已解锁 4</span></div>
+        <div class="dk-progress dk-progress--hero" role="progressbar" aria-label="解锁进度" aria-valuemin="0" aria-valuemax="17" aria-valuenow="4">
+          <div class="dk-progress__head"><span class="label">解锁进度</span><span class="dk-progress__nums"><span class="dk-progress__count display">4 / 17</span><span class="dk-progress__pct caption">24%</span></span></div>
+          <div class="dk-progress__track"><i class="dk-progress__closed" style="width:23.53%"></i><i class="dk-progress__active" style="width:23.53%"></i></div>
+        </div>
+      </article>
+      <div class="dk-wall">
+      <article class="dk-card is-ready is-selected" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-ready dk-plate--sm" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span><span class="dk-id is-ready">#71</span><span class="dk-card__state caption">可执行</span></div>
+        <span class="dk-card__title heading">Map View</span>
+        <span class="dk-card__meta caption">挡着 #78</span>
+        <div class="dk-card__foot caption"><span>更新 11-22</span><button class="dk-btn dk-btn--sm dk-btn--go" type="button">执行</button></div>
+      </article>
+      <article class="dk-card is-ready" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-ready dk-plate--sm" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span><span class="dk-id is-ready">#70</span><span class="dk-card__state caption">可执行</span></div>
+        <span class="dk-card__title heading">Task 详情</span>
+        <span class="dk-card__meta caption">&nbsp;</span>
+        <div class="dk-card__foot caption"><span>更新 11-22</span><button class="dk-btn dk-btn--sm dk-btn--go" type="button">执行</button></div>
+      </article>
+      <article class="dk-card is-running" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-running dk-plate--sm" role="img" aria-label="进行中 · 本 Session"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg></span><span class="dk-id is-running">#74</span><span class="dk-card__state caption">进行中</span></div>
+        <span class="dk-card__title heading">执行与 Occupancy 登记</span>
+        <span class="dk-card__meta caption">挡着 #76 #77</span>
+        <div class="dk-card__foot caption"><span>更新 11-22</span><button class="dk-btn dk-btn--sm" type="button">释放</button></div>
+      </article>
+      <article class="dk-card is-other" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-other dk-plate--sm" role="img" aria-label="进行中 · 其他 Session"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 2.4a5.6 5.6 0 0 0 0 11.2z" fill="currentColor"/></svg></span><span class="dk-id is-other">#72</span><span class="dk-card__state caption">进行中</span></div>
+        <span class="dk-card__title heading">Matt 技能</span>
+        <span class="dk-card__meta caption">挡着 #73 #79</span>
+        <div class="dk-card__foot caption"><span>更新 11-22</span><button class="dk-btn dk-btn--sm" type="button">接管</button></div>
+      </article>
+      <article class="dk-card is-other" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-other dk-plate--sm" role="img" aria-label="进行中 · 其他 Session"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 2.4a5.6 5.6 0 0 0 0 11.2z" fill="currentColor"/></svg></span><span class="dk-id is-other">#69</span><span class="dk-card__state caption">进行中</span></div>
+        <span class="dk-card__title heading">任务列表</span>
+        <span class="dk-card__meta caption">Claude Code <span class="mono">3f9c21d0</span></span>
+        <div class="dk-card__foot caption"><span>更新 11-22</span><button class="dk-btn dk-btn--sm" type="button">接管</button></div>
+      </article>
+      <article class="dk-card is-orphaned" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-orphaned dk-plate--sm" role="img" aria-label="Orphaned"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 14.6 13.5H1.4z" fill="currentColor"/></svg></span><span class="dk-id is-orphaned">#75</span><span class="dk-card__state caption">Orphaned</span></div>
+        <span class="dk-card__title heading">心跳与 Orphaned</span>
+        <span class="dk-card__meta caption">Session 已结束</span>
+        <div class="dk-card__foot caption"><span>更新 11-21</span><button class="dk-btn dk-btn--sm" type="button">接管</button></div>
+      </article>
+      <article class="dk-card is-blocked" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-blocked dk-plate--sm" role="img" aria-label="被阻塞"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span><span class="dk-id is-blocked">#73</span><span class="dk-card__state caption">阻塞</span></div>
+        <span class="dk-card__title heading">推荐：我现在该做什么</span>
+        <span class="dk-card__meta caption">被 #72 阻塞</span>
+        <div class="dk-card__foot caption"><span>更新 11-22</span></div>
+      </article>
+      <article class="dk-card is-blocked" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-blocked dk-plate--sm" role="img" aria-label="被阻塞"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span><span class="dk-id is-blocked">#76</span><span class="dk-card__state caption">阻塞</span></div>
+        <span class="dk-card__title heading">接管与手动释放</span>
+        <span class="dk-card__meta caption">被 #74 阻塞</span>
+        <div class="dk-card__foot caption"><span>更新 11-22</span></div>
+      </article>
+      <article class="dk-card is-blocked" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-blocked dk-plate--sm" role="img" aria-label="被阻塞"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span><span class="dk-id is-blocked">#77</span><span class="dk-card__state caption">阻塞</span></div>
+        <span class="dk-card__title heading">钩子未生效的提示</span>
+        <span class="dk-card__meta caption">被 #74 阻塞</span>
+        <div class="dk-card__foot caption"><span>更新 11-22</span></div>
+      </article>
+      <article class="dk-card is-closed" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-closed dk-plate--sm" role="img" aria-label="已解锁"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg></span><span class="dk-id is-closed">#67</span><span class="dk-card__state caption">已解锁</span></div>
+        <span class="dk-card__title heading">标签页布局设计</span>
+        <span class="dk-card__meta caption">没有验收证据</span>
+        <div class="dk-card__foot caption"><span>11-22 03:30</span></div>
+      </article>
+      <article class="dk-card is-closed" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-closed dk-plate--sm" role="img" aria-label="已解锁"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg></span><span class="dk-id is-closed">#68</span><span class="dk-card__state caption">已解锁</span></div>
+        <span class="dk-card__title heading">核对骨架：在真实桌面应用里安装并打开</span>
+        <span class="dk-card__meta caption">没有验收证据</span>
+        <div class="dk-card__foot caption"><span>11-22 02:15</span></div>
+      </article>
+      <article class="dk-card is-closed" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-closed dk-plate--sm" role="img" aria-label="已解锁"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg></span><span class="dk-id is-closed">#66</span><span class="dk-card__state caption">已解锁</span></div>
+        <span class="dk-card__title heading">骨架：在 Codex 里打开 Pane</span>
+        <span class="dk-card__meta caption"><span class="is-pass"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8.6 6.4 12.2 13.2 4.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>验收证据</span></span>
+        <div class="dk-card__foot caption"><span>11-22 01:40</span></div>
+      </article>
+      <article class="dk-card is-closed" tabindex="0">
+        <div class="dk-card__head"><span class="dk-plate is-closed dk-plate--sm" role="img" aria-label="已解锁"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg></span><span class="dk-id is-closed">#65</span><span class="dk-card__state caption">已解锁</span></div>
+        <span class="dk-card__title heading">预先重构：宿主由启动参数写明，技能的调用写法归宿主</span>
+        <span class="dk-card__meta caption"><span class="is-pass"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8.6 6.4 12.2 13.2 4.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>验收证据</span></span>
+        <div class="dk-card__foot caption"><span>11-21 22:10</span></div>
+      </article>
+      </div>
+      <button class="dk-group__more caption" type="button">还有 4 个被阻塞</button>
+    </div></div>
+  </section>
+  <section class="shot" id="map-switch">
+    <h3>切换<code>#map-switch</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>项目里不止一个 Spec 或 Map 时才有“切换”。点一行选中并回到 Map View。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-bar">
+        <button class="dk-btn dk-btn--sm" type="button">返回</button>
+        <span class="dk-crumbs">地图 / <b>切换</b></span>
+      </div>
+      <ul class="dk-list">
+      <li class="dk-row is-orphaned dk-row--container is-selected" tabindex="0">
+        <span class="dk-plate is-orphaned" role="img" aria-label="Orphaned"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 14.6 13.5H1.4z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-kind label">Spec</span><span class="dk-id is-orphaned">#64</span><span class="dk-row__title heading">规格：里程碑二，Codex 桌面应用上的 Matt Deck</span><span class="dk-ring"><svg viewBox="0 0 16 16" aria-hidden="true"><circle class="dk-ring__track" cx="8" cy="8" r="6"/><circle class="dk-ring__arc" cx="8" cy="8" r="6" stroke-dasharray="8.87 37.70"/></svg>4/17</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>2 可执行 · 4 进行中 · 7 阻塞</span></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-ready dk-row--container" tabindex="0">
+        <span class="dk-plate is-ready" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-kind label">Map</span><span class="dk-id is-ready">#90</span><span class="dk-row__title heading">示例：另一张 Map</span><span class="dk-ring"><svg viewBox="0 0 16 16" aria-hidden="true"><circle class="dk-ring__track" cx="8" cy="8" r="6"/><circle class="dk-ring__arc" cx="8" cy="8" r="6" stroke-dasharray="7.54 37.70"/></svg>1/5</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>2 可执行 · 0 进行中 · 2 阻塞</span></span></div>
+        </div>
+      </li>
+      </ul>
+    </div></div>
+  </section>
+  <section class="shot" id="map-closeout">
+    <h3>Pending Closeout<code>#map-closeout</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>虚线金框，编号旁写“待收尾核对”。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <article class="dk-spec is-closeout">
+        <div class="dk-spec__head"><span class="dk-kind label">Spec</span><span class="dk-id is-closeout">#64</span><span class="is-unlock caption">待收尾核对</span><button class="dk-btn dk-btn--sm" type="button">切换</button></div>
+        <span class="dk-spec__title title">规格：里程碑二，Codex 桌面应用上的 Matt Deck</span>
+        <span class="dk-spec__goal">在 Codex 桌面应用的标签页里放一个 Pane。</span>
+        <div class="dk-spec__stats"><span class="dk-badge caption is-ready"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>可执行 0</span><span class="dk-badge caption is-running"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg>进行中 0</span><span class="dk-badge caption is-blocked"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>阻塞 0</span><span class="dk-badge caption is-closed"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg>已解锁 17</span></div>
+        <div class="dk-progress dk-progress--hero is-complete" role="progressbar" aria-label="解锁进度" aria-valuemin="0" aria-valuemax="17" aria-valuenow="17">
+          <div class="dk-progress__head"><span class="label">解锁进度</span><span class="dk-progress__nums"><span class="dk-progress__count display">17 / 17</span><span class="dk-progress__pct caption">100%</span></span></div>
+          <div class="dk-progress__track"><i class="dk-progress__closed" style="width:100%"></i><i class="dk-progress__active" style="width:0"></i></div>
+        </div>
+        <div class="dk-spec__foot caption"><span>Child Task 已全部解锁，Spec 还没关闭。</span><button class="dk-btn dk-btn--unlock" type="button">收尾核对</button></div>
+      </article>
+    </div></div>
+  </section>
+  <section class="shot" id="map-empty">
+    <h3>没有 Spec 也没有 Map<code>#map-empty</code><span class="shot__part">只画变化的部分</span></h3>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-empty">
+        <span class="dk-empty__title heading">还没有 Spec 或 Map。</span>
+        <span>带 Child Task 的 Task 会出现在这里。</span>
+      </div>
+    </div></div>
+  </section>
+  <h2>技能</h2>
+  <section class="shot" id="skills">
+    <h3>列表<code>#skills</code></h3>
+    <p>顶上是 Skill Source。不能预填的技能照常展示，原因写在说明下面。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-head__fresh caption">3 分钟前</span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">技能</button>
+      </div>
+      </div>
+      <div class="dk-source caption"><span>Skill Source</span><span class="mono">目录 ~/.claude/skills</span></div>
+      <div class="dk-notice is-warn" role="status">
+        <div class="dk-notice__body">
+          <div class="dk-notice__line"><span class="dk-notice__title heading">2 个技能在 Codex 里不能预填。</span><button class="dk-btn dk-btn--sm" type="button">重跑配置</button></div>
+          <span class="dk-notice__text">原因写在各自那一行，重跑配置之后恢复。</span>
+        </div>
+      </div>
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">通用入口</span></header>
+        <ul class="dk-list">
+      <li class="dk-skill" tabindex="0">
+        <div class="dk-skill__main">
+          <span class="dk-skill__name mono">$ask-matt</span>
+          <span class="dk-skill__desc caption">问下一步该做什么。</span>
+        </div>
+        <span class="dk-skill__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button">预填</button><button class="dk-btn dk-btn--sm" type="button">原文</button></span>
+      </li>
+        </ul>
+      </section>
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">技能</span><span class="dk-group__count mono">3</span></header>
+        <ul class="dk-list">
+      <li class="dk-skill is-selected" tabindex="0">
+        <div class="dk-skill__main">
+          <span class="dk-skill__name mono">$implement</span>
+          <span class="dk-skill__desc caption">开始做一个 Task。</span>
+        </div>
+        <span class="dk-skill__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button">预填</button><button class="dk-btn dk-btn--sm" type="button">原文</button></span>
+      </li>
+      <li class="dk-skill" tabindex="0">
+        <div class="dk-skill__main">
+          <span class="dk-skill__name mono">$tdd</span>
+          <span class="dk-skill__desc caption">先写测试，再写实现。</span>
+          <span class="dk-why caption">Codex 里的不是同一份，不能预填。</span>
+        </div>
+        <span class="dk-skill__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button" disabled>预填</button><button class="dk-btn dk-btn--sm" type="button">原文</button></span>
+      </li>
+      <li class="dk-skill" tabindex="0">
+        <div class="dk-skill__main">
+          <span class="dk-skill__name mono">$wayfinder</span>
+          <span class="dk-skill__desc caption">为不清晰的大工作建立 Map。</span>
+          <span class="dk-why caption">Codex 里找不到，不能预填。</span>
+        </div>
+        <span class="dk-skill__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button" disabled>预填</button><button class="dk-btn dk-btn--sm" type="button">原文</button></span>
+      </li>
+        </ul>
+      </section>
+    </div></div>
+  </section>
+  <section class="shot" id="skill-text">
+    <h3>技能原文<code>#skill-text</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>和 Task 详情用同一条返回栏。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-bar">
+        <button class="dk-btn dk-btn--sm" type="button">返回</button>
+        <span class="dk-crumbs">技能 / <b>$implement</b></span>
+        <button class="dk-btn dk-btn--sm dk-btn--go" type="button">预填</button>
+      </div>
+      <div class="dk-detail">
+        <div class="dk-detail__title title"><span class="dk-skill__name mono">$implement</span></div>
+        <span class="dk-why mono">~/.claude/skills/implement/SKILL.md</span>
+        <div class="dk-prose"><p>（技能文件 frontmatter 以下的正文，不改写）</p></div>
+      </div>
+    </div></div>
+  </section>
+  <h2>顶部提示</h2>
+  <section class="shot" id="unconfigured">
+    <h3>此项目未配置<code>#unconfigured</code></h3>
+    <p>只画抬头和这一块，不画标签页和内容。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span></span>
+        <span class="dk-head__fresh"></span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      </div>
+      <div class="dk-empty">
+        <span class="dk-empty__title heading">此项目未配置。</span>
+        <span>配置之后，这里显示这个项目的 Task。</span>
+        <button class="dk-btn dk-btn--primary" type="button">配置这个项目</button>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="hook">
+    <h3>钩子未生效<code>#hook</code></h3>
+    <p>常驻在抬头和标签页之间，四个标签页里都在，不能关，钩子生效之后自己消失。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-head__fresh caption">3 分钟前</span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-notice is-warn" role="status">
+        <div class="dk-notice__body">
+          <div class="dk-notice__line"><span class="dk-notice__title heading">钩子未生效，开始执行不会登记占用。</span><button class="dk-btn dk-btn--sm" type="button">怎么做</button></div>
+        </div>
+      </div>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">技能</button>
+      </div>
+      </div>
+      <div class="dk-filter" role="group" aria-label="筛选">
+        <button class="dk-filter__chip" type="button" aria-pressed="true">全部<span class="mono">17</span></button>
+        <button class="dk-filter__chip is-ready" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>可执行<span class="mono">2</span></button>
+        <button class="dk-filter__chip is-running" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg>进行中<span class="mono">4</span></button>
+        <button class="dk-filter__chip is-blocked" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>阻塞<span class="mono">7</span></button>
+        <button class="dk-filter__chip is-closed" type="button" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg>已完成<span class="mono">4</span></button>
+      </div>
+      <ul class="dk-list">
+      <li class="dk-row is-orphaned dk-row--container" tabindex="0">
+        <span class="dk-plate is-orphaned" role="img" aria-label="Orphaned"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 14.6 13.5H1.4z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-kind label">Spec</span><span class="dk-id is-orphaned">#64</span><span class="dk-row__title heading">规格：里程碑二，Codex 桌面应用上的 Matt Deck</span><span class="dk-ring"><svg viewBox="0 0 16 16" aria-hidden="true"><circle class="dk-ring__track" cx="8" cy="8" r="6"/><circle class="dk-ring__arc" cx="8" cy="8" r="6" stroke-dasharray="8.87 37.70"/></svg>4/17</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>2 可执行 · 4 进行中 · 7 阻塞</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">地图</button></span></div>
+        </div>
+      </li>
+      </ul>
+    </div></div>
+  </section>
+  <section class="shot" id="hook-open">
+    <h3>钩子未生效：点开“怎么做”<code>#hook-open</code><span class="shot__part">只画变化的部分</span></h3>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-notice is-warn" role="status">
+        <div class="dk-notice__body">
+          <div class="dk-notice__line"><span class="dk-notice__title heading">钩子未生效，开始执行不会登记占用。</span><button class="dk-btn dk-btn--sm" type="button">收起</button></div>
+          <ol class="dk-steps">
+            <li>在终端里运行一次 <code>codex</code>。</li>
+            <li>在钩子审查里信任 Deck 的钩子。</li>
+            <li>重启桌面应用。</li>
+          </ol>
+        </div>
+      </div>
+    </div></div>
+  </section>
+</div>
+<script>
+(function () {
+  var root = document.documentElement
+  var buttons = document.querySelectorAll('[data-set-theme]')
+  function set(theme) {
+    root.setAttribute('data-theme', theme)
+    buttons.forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-set-theme') === theme)) })
+  }
+  buttons.forEach(function (b) { b.addEventListener('click', function () { set(b.getAttribute('data-set-theme')) }) })
+  set(new URLSearchParams(location.search).get('theme') === 'light' ? 'deck-light' : 'deck')
+})()
+</script>
+</body>
+</html>
