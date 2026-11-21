@@ -1508,9 +1508,10 @@ test("above the prompt the action bar dims a blocked Map's words as a Spec's, an
   await ui.unmount()
 
   // Pending Closeout though blocked, occupied itself, or ready: the Spec's
-  // words are not dimmed. Pending Closeout, they end in 待收尾核对.
+  // words are not dimmed. Pending Closeout, they end after the title, with no
+  // progress.
   for (const [own, glyph, tail] of [
-    [{ group: 'blocked', isPendingCloseout: true }, '◈', / {3}待收尾核对$/],
+    [{ group: 'blocked', isPendingCloseout: true }, '◈', /规格：里程碑一 {3}$/],
     [{ group: 'inProgress', occupant: 'a1b2c3d4-session' }, '▶', / +0\/4 +$/],
     [{}, '◇', / +0\/4 +$/],
   ] as const) {
@@ -1524,6 +1525,44 @@ test("above the prompt the action bar dims a blocked Map's words as a Spec's, an
     expect(Boolean(specWords?.props.dimColor)).toBe(false)
     await ui.unmount()
   }
+})
+
+test("a Pending Closeout Spec's action bar writes 待收尾核对 in warning in both placements; above the prompt after the title, without progress or counts, its ◈ undimmed though blocked", async ($, on) => {
+  // Pending Closeout and blocked: open, not occupied, a blocker of its own.
+  const answer = occupiedUnder([], { spec: { group: 'blocked', isPendingCloseout: true } })
+  const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, tasks: () => answer })
+  await start($)
+  await seen.clock.settle()
+
+  for (const target of [PANE_TARGET, INLINE]) {
+    const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+    await focus($, 'task:1')
+    const closeout = await ui.findAll({ type: 'Text', text: /待收尾核对/ })
+    expect(closeout.map(text => [text.text, text.props.color, Boolean(text.props.dimColor)])).toEqual([
+      ['待收尾核对', 'warning', false],
+    ])
+    await ui.unmount()
+  }
+
+  const ui = await $.ui.mount({ ...INLINE, surface: 'terminal' })
+  await focus($, 'task:1')
+  // The glyph, the word Spec, its number and title, then 待收尾核对: no
+  // progress, no counts.
+  const bar = await ui.find({ type: 'Box', text: /^◈ Spec #1 .*详情$/ })
+  expect(bar?.text).toMatch(/^◈ Spec #1 规格：里程碑一 {3}待收尾核对/)
+  expect(bar?.text).not.toMatch(/\d+\/\d+|[◇▶□◆] \d/)
+  const words = await ui.find({ type: 'Text', text: /^ Spec #1 规格：/ })
+  expect(words?.text).toBe(' Spec #1 规格：里程碑一   ')
+  expect(words?.props.color).toBe(undefined)
+  // The ◈ of the top's done count, of the action bar, and of the Spec's row
+  // in the list below.
+  const glyphs = await ui.findAll({ type: 'Text', text: /^◈$/ })
+  expect(glyphs.map(glyph => [glyph.props.color, Boolean(glyph.props.dimColor)])).toEqual([
+    ['warning', false],
+    ['warning', false],
+    ['warning', false],
+  ])
+  await ui.unmount()
 })
 
 test('a Task Source with no Task says so, apart from a failed read', async ($, on) => {

@@ -644,9 +644,9 @@ export const drawPane = (
               {' '}
               {head}
               {cut(container.title, columns - 2 - width(head) - width(tail) - countsWidth - actionsWidth(row))}
-              {tail}
+              {container.isPendingCloseout ? '   ' : tail}
             </Text>
-            {!container.isPendingCloseout && childCountItems(container)}
+            {container.isPendingCloseout ? <Text color="warning">{CLOSEOUT}</Text> : childCountItems(container)}
           </Box>
           {rowActions(row)}
         </Box>
