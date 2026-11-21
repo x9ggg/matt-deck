@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matt Deck · ADR 0006</title>
+<style>
+  :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+  body { margin: 1rem; }
+  h1 { font-size: 1.2rem; }
+  input, button { font: inherit; padding: .35rem; }
+  button { display: block; margin: .5rem 0; }
+  #events { display: block; margin-top: 1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+<h1>Matt Deck · ADR 0006</h1>
+<p>实例 <code id="instance"></code></p>
+<label>切换前的记号 <input id="marker" autocomplete="off"></label>
+<button id="send" disabled>向本会话发送测试消息</button>
+<button id="skill" disabled>向本会话发送技能调用</button>
+<button id="draft" disabled>预填输入框，不发送</button>
+<button id="draftSkill" disabled>预填技能调用，不发送</button>
+<button id="read" disabled>调用服务的工具</button>
+<output id="events" aria-live="polite"></output>
+<script type="module">
+  const instance = crypto.randomUUID().slice(0, 8);
+  document.querySelector("#instance").textContent = instance;
+  const events = document.querySelector("#events");
+  const pending = new Map();
+  let rpcId = 0;
+  let sequence = 0;
+
+  // 每行日志也经 probe_log 工具写进服务旁边的 page-log.txt。握手完成之前的行先攒着。
+  const unshipped = [];
+  let connected = false;
+  function ship(line) {
+    post({ id: ++rpcId, method: "tools/call", params: { name: "probe_log", arguments: { line } } });
+  }
+  function log(text) {
+    const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    events.append(document.createTextNode(time + " " + text + "\n"));
+    const line = instance + " " + text;
+    if (connected) ship(line);
+    else unshipped.push(line);
+  }
+  function brief(value) {
+    const text = JSON.stringify(value) ?? "";
+    return text.length > 1500 ? text.slice(0, 1500) + "…" : text;
+  }
+  function post(message) {
+    window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
+  }
+  // 宿主排队的消息可能在回合结束后才得到响应，所以超时只记一行，不放弃等待。
+  function request(label, method, params) {
+    return new Promise((resolve, reject) => {
+      const id = ++rpcId;
+      const waiting = setTimeout(() => log(label + " 30 秒内未收到宿主响应，继续等待"), 30000);
+      pending.set(id, { resolve, reject, waiting });
+      post({ id, method, params });
+    });
+  }
+  window.addEventListener("message", ({ source, data }) => {
+    if (source !== window.parent || data?.jsonrpc !== "2.0") return;
+    if (data.method) {
+      log("宿主 → " + data.method + " " + brief(data.params));
+      if (data.id !== undefined) post({ id: data.id, result: {} });
+      return;
+    }
+    const call = pending.get(data.id);
+    if (!call) return;
+    clearTimeout(call.waiting);
+    pending.delete(data.id);
+    if (data.error) call.reject(new Error(data.error.code + " " + data.error.message));
+    else call.resolve(data.result);
+  });
+
+  async function call(label, method, params) {
+    log(label + " 已请求");
+    try {
+      log(label + " 宿主响应 " + brief(await request(label, method, params)));
+    } catch (error) {
+      log(label + " " + error.message);
+    }
+  }
+  function token() {
+    return "ADR6-" + instance + "-" + ++sequence;
+  }
+  function say(text, options) {
+    const message = { role: "user", content: [{ type: "text", text }] };
+    if (options) message._meta = { "openai/message": options };
+    return message;
+  }
+  const actions = {
+    send() {
+      const id = token();
+      return call(id, "ui/message", say("请只回复 " + id));
+    },
+    skill() {
+      const id = token();
+      return call(id + " 技能", "ui/message", say("$adr6-probe-skill " + id));
+    },
+    draft() {
+      const id = token();
+      return call(id + " 预填", "ui/message", say("预填 " + id, { target: "active", send: false }));
+    },
+    draftSkill() {
+      const id = token();
+      return call(id + " 预填技能", "ui/message", say("$adr6-probe-skill " + id, { target: "active", send: false }));
+    },
+    read() {
+      return call("probe_read", "tools/call", { name: "probe_read", arguments: {} });
+    },
+  };
+  for (const [id, run] of Object.entries(actions)) {
+    document.querySelector("#" + id).addEventListener("click", run);
+  }
+
+  try {
+    const host = await request("握手", "ui/initialize", {
+      appInfo: { name: "matt-deck-adr6", version: "1.1.0" },
+      appCapabilities: {},
+      protocolVersion: "2026-01-26",
+    });
+    post({ method: "ui/notifications/initialized", params: {} });
+    connected = true;
+    unshipped.splice(0).forEach(ship);
+    log("已连接 " + (host.hostInfo?.name ?? "宿主"));
+    log("宿主能力 " + brief(host.hostCapabilities));
+    log("宿主上下文 " + brief(host.hostContext));
+    for (const button of document.querySelectorAll("button")) button.disabled = false;
+  } catch (error) {
+    log("握手失败 " + error.message);
+  }
+</script>
+</html>

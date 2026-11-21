@@ -19,8 +19,8 @@ _Avoid_: agent、客户端、平台
 _Avoid_: 聊天、线程、thread
 
 **Pane（面板）**:
-Deck 在宿主窗口内的可见界面，属于且只属于一个 Session。它有两种位置：停靠在侧边，英文写 docked；在输入框上方，英文写 above the prompt。引擎把后一种叫 `inline`，这个词只用在代码的标识符里。
-_Avoid_: 侧边栏、侧栏、sidebar、panel、side Pane
+Deck 在宿主窗口内的可见界面，属于且只属于一个 Session。它有三种位置：停靠在侧边，英文写 docked；在输入框上方，英文写 above the prompt；在宿主的标签页里，中文叫标签页，英文写 in a tab。引擎把 above the prompt 叫 `inline`，这个词只用在代码的标识符里。
+_Avoid_: 侧边栏、侧栏、sidebar、panel、side Pane、线程标签页、会话标签页
 
 **Standalone Window（独立窗口）**:
 宿主没有内嵌位置时 Deck 的界面形态。它不属于任何 Session，由用户显式选择 Target Session。
@@ -31,7 +31,7 @@ _Avoid_: 浮窗、外置面板
 _Avoid_: 绑定会话、当前会话
 
 **Configured Project（已配置项目）**:
-完成了 Deck 首次配置、选定了 Task Source 和 Skill Source 的项目。Pane 只在这类项目里出现。
+完成了 Deck 首次配置、选定了 Task Source 和 Skill Source 的项目。Pane 的内容只在这类项目里出现。宿主自己画的入口可能出现在别的项目里，在那里打开的 Pane 只提示项目未配置。
 
 **Skill Source（技能来源）**:
 一个项目使用的那一份 Matt skills 所在的位置，Deck 展示和 agent 执行都用这一份。首次配置时选定，之后只有重跑配置才会改。
@@ -97,7 +97,7 @@ _Avoid_: 已完成、done、验收通过
 ### 推荐与执行
 
 **Recommendation Request（推荐请求）**:
-用户按下“我现在该做什么”产生的一次请求，在 Target Session 里以 `/ask-matt` 的形式运行。
+用户按下“我现在该做什么”产生的一次请求，在 Target Session 里以用户显式调用 `ask-matt` 技能的方式运行。
 
 **Task Snapshot（任务快照）**:
 随 Recommendation Request 一起送出的当前 Task 概况。
