@@ -30,10 +30,15 @@ export const openState = (home: string) => {
     'CREATE TABLE IF NOT EXISTS occupancies (source TEXT NOT NULL, task INTEGER NOT NULL, session TEXT NOT NULL, occupied_at INTEGER NOT NULL, PRIMARY KEY (source, task))',
   )
   // Each Session's last heartbeat, and whether it has ended since: what
-  // tells an Occupancy held from one that is Orphaned.
+  // tells an Occupancy held from one that is Orphaned. A Deck service from
+  // before hosts were writes its three columns by position, so it stays as
+  // it is.
   db.exec(
     'CREATE TABLE IF NOT EXISTS sessions (session TEXT PRIMARY KEY, beat_at INTEGER NOT NULL, is_ended INTEGER NOT NULL)',
   )
+  // The host each Session runs in, as its heartbeat recorded it. A Session
+  // with no row here was recorded before hosts were, or never beat.
+  db.exec('CREATE TABLE IF NOT EXISTS session_hosts (session TEXT PRIMARY KEY, host TEXT NOT NULL)')
   // Every report of a Task, one row each, its Acceptance Evidence as JSON.
   db.exec(
     'CREATE TABLE IF NOT EXISTS reports (source TEXT NOT NULL, task INTEGER NOT NULL, session TEXT NOT NULL, reported_at INTEGER NOT NULL, result TEXT NOT NULL, evidence TEXT NOT NULL)',

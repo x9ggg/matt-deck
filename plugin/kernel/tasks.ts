@@ -3,6 +3,8 @@
 // about who asks.
 import { execFile } from 'node:child_process'
 
+import type { NameSession, Occupant } from './occupancy.ts'
+
 // A Task as the Task Source holds it, before it is grouped: whether it is a
 // Map, its `parent` and `blockedBy` already read from whichever way the
 // source writes them.
@@ -59,9 +61,10 @@ export type Group = 'ready' | 'inProgress' | 'blocked' | 'done'
 // A Task as the kernel lists it. `parent` is its Spec or Map, `blockers` the
 // open Tasks blocking an open one, `blockedBy` every Task it declares a
 // Blocking Edge to, closed ones too, by number. `occupant` is the Session
-// whose Occupancy holds it, or null; `isOrphaned` says that Session has
-// ended while the Task is open. `hasEvidence` says a report gave Acceptance
-// Evidence for it, open or closed.
+// whose Occupancy holds it, or null, `occupantHost` and `occupantShort` its
+// host and its id cut short, as the Deck service names them; `isOrphaned`
+// says that Session has ended while the Task is open. `hasEvidence` says a
+// report gave Acceptance Evidence for it, open or closed.
 export type Task = {
   number: number
   title: string
@@ -72,6 +75,8 @@ export type Task = {
   blockedBy: number[]
   closedAt: string | null
   occupant: string | null
+  occupantHost: string | null
+  occupantShort: string | null
   isOrphaned: boolean
   hasEvidence: boolean
 }
@@ -120,32 +125,41 @@ const groupOf = (task: Task): Group => {
 }
 
 // The Tasks of a read of the Task Source, read at `fetchedAt`, grouped with
-// the Occupancies of its open Tasks, `occupants`, by Task number, and the
-// Tasks a report gave Acceptance Evidence for, `evidenced`.
+// the Occupancies of its open Tasks, `occupants`, by Task number, their
+// Sessions named by `nameSession`, and the Tasks a report gave Acceptance
+// Evidence for, `evidenced`.
 export const listTasks = (
   source: SourceRead,
   fetchedAt: number,
-  occupants: ReadonlyMap<number, { session: string; isOrphaned: boolean }>,
+  occupants: ReadonlyMap<number, Occupant>,
   evidenced: ReadonlySet<number>,
+  nameSession: NameSession,
 ): TaskList => {
   const read = [...source.tasks].sort((a, b) => a.number - b.number)
   const isOpen = new Map(read.map(task => [task.number, task.isOpen]))
-  const tasks = read.map(({ blockedBy, isMap, ...task }) => ({
-    isMap,
-    task: {
-      ...task,
-      // A parent the source does not hold makes no Spec.
-      parent: task.parent !== null && isOpen.has(task.parent) ? task.parent : null,
-      // A closed Task is blocked by nothing. A blocker the source does not
-      // hold (a pull request, another repository's issue) cannot be checked,
-      // so it does not block.
-      blockers: task.isOpen ? blockedBy.filter(number => isOpen.get(number) === true).sort((a, b) => a - b) : [],
-      blockedBy: blockedBy.filter(number => isOpen.has(number)).sort((a, b) => a - b),
-      occupant: task.isOpen ? (occupants.get(task.number)?.session ?? null) : null,
-      isOrphaned: task.isOpen && occupants.get(task.number)?.isOrphaned === true,
-      hasEvidence: evidenced.has(task.number),
-    } as Task,
-  }))
+  const tasks = read.map(({ blockedBy, isMap, ...task }) => {
+    const occupancy = task.isOpen ? occupants.get(task.number) : undefined
+    const named = occupancy === undefined ? undefined : nameSession(occupancy.session, occupancy.host)
+
+    return {
+      isMap,
+      task: {
+        ...task,
+        // A parent the source does not hold makes no Spec.
+        parent: task.parent !== null && isOpen.has(task.parent) ? task.parent : null,
+        // A closed Task is blocked by nothing. A blocker the source does not
+        // hold (a pull request, another repository's issue) cannot be checked,
+        // so it does not block.
+        blockers: task.isOpen ? blockedBy.filter(number => isOpen.get(number) === true).sort((a, b) => a - b) : [],
+        blockedBy: blockedBy.filter(number => isOpen.has(number)).sort((a, b) => a - b),
+        occupant: occupancy?.session ?? null,
+        occupantHost: named?.host ?? null,
+        occupantShort: named?.short ?? null,
+        isOrphaned: occupancy?.isOrphaned === true,
+        hasEvidence: evidenced.has(task.number),
+      } as Task,
+    }
+  })
 
   const containers: Container[] = []
   const groups: Record<Group, Task[]> = { ready: [], inProgress: [], blocked: [], done: [] }

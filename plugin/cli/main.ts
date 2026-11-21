@@ -3,6 +3,7 @@
 import { homedir } from 'node:os'
 import { inspectProject } from '../kernel/inspect.ts'
 import { workspaceAt } from '../kernel/workspace.ts'
+import { nameSession } from '../server/hosts.ts'
 
 const USAGE = `Usage: node <matt-deck>/cli/main.ts [--help]
 
@@ -18,7 +19,7 @@ if (args.length === 1 && args[0] === '--help') {
   process.exitCode = 2
 } else {
   try {
-    const inspection = await inspectProject(workspaceAt(process.cwd()), homedir())
+    const inspection = await inspectProject(workspaceAt(process.cwd()), homedir(), nameSession)
     process.stdout.write(`${JSON.stringify(inspection, null, 2)}\n`)
     process.exitCode = inspection.ok ? 0 : 1
   } catch (error) {

@@ -6,21 +6,32 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { hasStateTable, openState, readState } from './state.ts'
 
+// How the Deck service names a Session in its answers: its host and its id
+// cut short, from the host its heartbeat recorded, null where none did.
+export type NameSession = (session: string, host: string | null) => { host: string; short: string }
+
+// An Occupancy as the local state holds it: the Session holding it, the host
+// that Session's heartbeat recorded, if any, and whether it is Orphaned.
+export type Occupant = { session: string; host: string | null; isOrphaned: boolean }
+
 // How old a Session's last heartbeat may be before its Occupancies are
 // Orphaned: a Session that vanished without ending shows within minutes.
 // The Sessions beat a few times as often.
 const ORPHANED_AFTER_MS = 180_000
 
 const occupantsIn = (db: DatabaseSync, source: string, now: number) => {
-  // Older state may predate heartbeats. A missing Session has never beat.
+  // Older state may predate heartbeats, or hosts. A missing Session has
+  // never beat.
   const sessions = hasStateTable(db, 'sessions')
     ? 'sessions'
     : '(SELECT NULL AS session, NULL AS beat_at, NULL AS is_ended)'
+  const hosts = hasStateTable(db, 'session_hosts') ? 'session_hosts' : '(SELECT NULL AS session, NULL AS host)'
   const rows = db.prepare(
-    `SELECT task, occupancies.session AS session, beat_at, is_ended FROM occupancies LEFT JOIN ${sessions} USING (session) WHERE source = ? ORDER BY task`,
+    `SELECT task, occupancies.session AS session, beat_at, is_ended, host FROM occupancies LEFT JOIN ${sessions} USING (session) LEFT JOIN ${hosts} USING (session) WHERE source = ? ORDER BY task`,
   ).all(source)
-  return new Map(rows.map(row => [row.task as number, {
+  return new Map<number, Occupant>(rows.map(row => [row.task as number, {
     session: row.session as string,
+    host: row.host as string | null,
     isOrphaned: row.beat_at === null || row.is_ended === 1 || now - (row.beat_at as number) > ORPHANED_AFTER_MS,
   }]))
 }
@@ -28,21 +39,22 @@ const occupantsIn = (db: DatabaseSync, source: string, now: number) => {
 // Read without releasing closed Tasks or creating a state file.
 export const readOccupancies = (home: string, source: string, now: number) => {
   const db = readState(home)
-  if (db === undefined) return new Map<number, { session: string; isOrphaned: boolean }>()
+  if (db === undefined) return new Map<number, Occupant>()
   try {
-    if (!hasStateTable(db, 'occupancies')) return new Map<number, { session: string; isOrphaned: boolean }>()
+    if (!hasStateTable(db, 'occupancies')) return new Map<number, Occupant>()
     return occupantsIn(db, source, now)
   } finally {
     db.close()
   }
 }
 
-// Records a heartbeat of `session` at `now`: the Session runs, and its
-// Occupancies are held, an ended one's again too.
-export const beat = (home: string, session: string, now: number) => {
+// Records a heartbeat of `session` at `now`, in the host `host`: the Session
+// runs, and its Occupancies are held, an ended one's again too.
+export const beat = (home: string, session: string, now: number, host: string) => {
   const db = openState(home)
   try {
     db.prepare('INSERT OR REPLACE INTO sessions VALUES (?, ?, 0)').run(session, now)
+    db.prepare('INSERT OR REPLACE INTO session_hosts VALUES (?, ?)').run(session, host)
   } finally {
     db.close()
   }

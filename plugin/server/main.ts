@@ -1,7 +1,7 @@
 // The Deck service: an MCP server over stdio that exposes the task kernel as
 // `deck_*` tools. The host starts it on demand; its Workspace comes from the
 // working directory it was started in (ADR-0005), never from a path passed by
-// a caller.
+// a caller. Its host is named by its launch arguments, never guessed.
 // Runs on plain Node with no installed packages, so MCP is spoken by hand.
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -20,6 +20,19 @@ import { githubIssues, listTasks, readTask, TaskSourceError } from '../kernel/ta
 import { workspaceAt } from '../kernel/workspace.ts'
 import type { ProjectConfig } from '../kernel/config.ts'
 import type { SourceRead, TaskListFailure } from '../kernel/tasks.ts'
+import { callOf, hostNamed, nameSession } from './hosts.ts'
+
+const USAGE = `Usage: node <matt-deck>/server/main.ts --host <claude-code|codex>
+
+Deck 服务，由宿主按注册时的启动命令运行，经 stdin 和 stdout 说 MCP。--host 写明宿主。
+退出码：2 参数错误。
+`
+const launch = process.argv.slice(2)
+const host = launch.length === 2 && launch[0] === '--host' ? hostNamed(launch[1]) : undefined
+if (host === undefined) {
+  process.stderr.write(USAGE)
+  process.exit(2)
+}
 
 // The Workspace is the checkout the service was started in: the nearest
 // directory at or above the working directory that holds `.git`. Outside a
@@ -67,6 +80,7 @@ const tasksOf = ({ source, fetchedAt }: { source: SourceRead; fetchedAt: number 
       Date.now(),
     ),
     evidencedTasks(homedir(), source.identity),
+    nameSession,
   )
 
 type ToolResult = {
@@ -133,7 +147,7 @@ const tools = {
     description: 'Inspect project config, local state location, grouped Tasks and Occupancy without changing local state.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: async (): Promise<ToolResult> => {
-      const result = await inspectProject(workspace, homedir())
+      const result = await inspectProject(workspace, homedir(), nameSession)
       return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
     },
   },
@@ -235,10 +249,12 @@ const tools = {
           answer = { ok: false, failure: { kind: 'not-open', message } }
         } else {
           const held = occupy(homedir(), source.identity, task, session, Date.now(), takeOver)
+          const named = nameSession(held.session, held.host)
+          const occupant = { occupant: held.session, occupantHost: named.host, occupantShort: named.short }
           answer =
             held.session === session
-              ? { ok: true, occupied: true, occupant: session }
-              : { ok: true, occupied: false, occupant: held.session, isOrphaned: held.isOrphaned }
+              ? { ok: true, occupied: true, ...occupant }
+              : { ok: true, occupied: false, ...occupant, isOrphaned: held.isOrphaned }
         }
       } catch (error: any) {
         if (!(error instanceof TaskSourceError)) {
@@ -299,7 +315,7 @@ const tools = {
       if (typeof session !== 'string' || session === '') {
         return { content: [{ type: 'text', text: 'deck_heartbeat takes the id of a Session' }], isError: true }
       }
-      beat(homedir(), session, Date.now())
+      beat(homedir(), session, Date.now(), host)
 
       return { content: [{ type: 'text', text: 'Recorded.' }], isError: false }
     },
@@ -338,7 +354,7 @@ const tools = {
       let answer
       try {
         const { identity, task } = await readTask(githubIssues(workspace), number)
-        answer = { ok: true, task, reports: readReports(homedir(), identity, number) }
+        answer = { ok: true, task, reports: readReports(homedir(), identity, number, nameSession) }
       } catch (error: any) {
         if (!(error instanceof TaskSourceError)) {
           throw error
@@ -434,7 +450,7 @@ const tools = {
       'List the skills of this project\'s Skill Source: each one\'s name, how this Session calls it, its description and its file. Reads only; no skill file is changed.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: async (): Promise<ToolResult> => {
-      return skillAnswer(async source => ({ source, skills: await listSkills(source, workspace, homedir()) }))
+      return skillAnswer(async source => ({ source, skills: await listSkills(source, workspace, homedir(), callOf(host)) }))
     },
   },
   deck_skill: {
@@ -449,12 +465,12 @@ const tools = {
       if (typeof name !== 'string' || name === '') {
         return { content: [{ type: 'text', text: 'deck_skill takes the name of a skill' }], isError: true }
       }
-      return skillAnswer(async source => ({ skill: await readSkill(source, workspace, homedir(), name) }))
+      return skillAnswer(async source => ({ skill: await readSkill(source, workspace, homedir(), callOf(host), name) }))
     },
   },
   deck_ask: {
     description:
-      'For the Pane: make a Recommendation Request as it is sent. Answers the request\'s id, the command that runs this project\'s /ask-matt, and its arguments: the Task Snapshot read from the Task Source now, and the ask to report through deck_recommend.',
+      'For the Pane: make a Recommendation Request as it is sent. Answers the request\'s id, the call of this project\'s ask-matt as this host writes it, the call without its first character as the command that runs it, and its arguments: the Task Snapshot read from the Task Source now, and the ask to report through deck_recommend.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: async (): Promise<ToolResult> => {
       const project = await readProjectConfig(workspace)
@@ -463,10 +479,10 @@ const tools = {
       }
       let answer: object
       try {
-        const { call } = await readSkill(project.config.skillSource, workspace, homedir(), 'ask-matt')
+        const { call } = await readSkill(project.config.skillSource, workspace, homedir(), callOf(host), 'ask-matt')
         const list = tasksOf(await readSource(true))
         const requestId = randomUUID()
-        answer = { ok: true, requestId, command: call.slice(1), args: askArgs(requestId, snapshotOf(list)) }
+        answer = { ok: true, requestId, call, command: call.slice(1), args: askArgs(requestId, snapshotOf(list)) }
       } catch (error: any) {
         if (!(error instanceof SkillSourceError) && !(error instanceof TaskSourceError)) {
           throw error

@@ -33,8 +33,13 @@ test('the Deck service answers from a bare copy of the published plugin', async 
   const installed = join(await realpath(await mkdtemp(join(tmpdir(), 'deck-install-'))), 'matt-deck')
   await cp(join(REPO, 'plugin'), installed, { recursive: true })
   const workspace = await realpath(await mkdtemp(join(tmpdir(), 'deck-')))
+  // Started as Claude Code starts it from the plugin's manifest, which names
+  // the host.
+  const { command, args } = JSON.parse(await readFile(join(installed, '.claude-plugin', 'plugin.json'), 'utf8')).mcpServers.deck
+  assert.equal(command, 'node')
+  assert.deepEqual(args, ['${CLAUDE_PLUGIN_ROOT}/server/main.ts', '--host', 'claude-code'])
 
-  const child = spawn(process.execPath, [join(installed, 'server', 'main.ts')], {
+  const child = spawn(process.execPath, args.map((arg: string) => arg.replace('${CLAUDE_PLUGIN_ROOT}', installed)), {
     cwd: workspace,
     stdio: ['pipe', 'pipe', 'inherit'],
   })

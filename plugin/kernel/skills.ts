@@ -1,5 +1,6 @@
 // Task kernel: the skills of a project's Skill Source, read and never
-// written. Host-agnostic: it knows a workspace and a home directory.
+// written. Host-agnostic: it knows a workspace, a home directory and how the
+// host calls a skill, a rule it is handed.
 import { readdir, readFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 
@@ -7,8 +8,12 @@ import type { ProjectConfig } from './config.ts'
 
 type SkillSource = ProjectConfig['skillSource']
 
-// A skill as the Pane lists it: `call` is how this Session invokes it, a
-// plugin's with the plugin's prefix; `path` is its file, `~` for the home.
+// How the host calls a skill: by its name, and by the plugin's name when the
+// Skill Source is a plugin.
+export type CallOf = (name: string, plugin: string | undefined) => string
+
+// A skill as the Pane lists it: `call` is how this Session invokes it, as
+// its host writes it; `path` is its file, `~` for the home.
 export type Skill = { name: string; call: string; description: string; path: string }
 
 // Why the Skill Source cannot be read: it is not there, or holds no skill of
@@ -44,7 +49,8 @@ const parse = (text: string) => {
 }
 
 // Where the skill files are: the root they lie under, how a path under it is
-// written, the prefix of a call, and the files relative to the root.
+// written, the plugin holding them, if one does, and the files relative to
+// the root.
 const locate = async (source: SkillSource, workspace: string, home: string) => {
   const tilde = (path: string) => (path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path)
   if (source.type === 'directory') {
@@ -66,7 +72,7 @@ const locate = async (source: SkillSource, workspace: string, home: string) => {
     return {
       root,
       shown: (file: string) => `${source.path}/${file}`,
-      prefix: '/',
+      plugin: undefined,
       files: entries.map(entry => `${entry}/SKILL.md`),
     }
   }
@@ -102,15 +108,15 @@ const locate = async (source: SkillSource, workspace: string, home: string) => {
   return {
     root,
     shown: (file: string) => tilde(join(root, file)),
-    prefix: `/${source.name}:`,
+    plugin: source.name,
     files: files.filter(file => file === 'SKILL.md' || file.endsWith('/SKILL.md')),
   }
 }
 
 // Every skill of the Skill Source with its text, by name: a Skill Source has
 // no order of its own, and a plugin's folders are not shown.
-const readAll = async (source: SkillSource, workspace: string, home: string) => {
-  const { root, shown, prefix, files } = await locate(source, workspace, home)
+const readAll = async (source: SkillSource, workspace: string, home: string, callOf: CallOf) => {
+  const { root, shown, plugin, files } = await locate(source, workspace, home)
   const skills: (Skill & { text: string })[] = []
   for (const file of files) {
     let text: string
@@ -124,18 +130,18 @@ const readAll = async (source: SkillSource, workspace: string, home: string) => 
     }
     const { fields, body } = parse(text)
     const name = fields.name || file.split('/').at(-2)!
-    skills.push({ name, call: `${prefix}${name}`, description: fields.description ?? '', path: shown(file), text: body })
+    skills.push({ name, call: callOf(name, plugin), description: fields.description ?? '', path: shown(file), text: body })
   }
 
   return skills.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }
 
-export const listSkills = async (source: SkillSource, workspace: string, home: string): Promise<Skill[]> =>
-  (await readAll(source, workspace, home)).map(({ text, ...skill }) => skill)
+export const listSkills = async (source: SkillSource, workspace: string, home: string, callOf: CallOf): Promise<Skill[]> =>
+  (await readAll(source, workspace, home, callOf)).map(({ text, ...skill }) => skill)
 
 // One skill with its text: the skill file under its frontmatter, as written.
-export const readSkill = async (source: SkillSource, workspace: string, home: string, name: string) => {
-  const skill = (await readAll(source, workspace, home)).find(skill => skill.name === name)
+export const readSkill = async (source: SkillSource, workspace: string, home: string, callOf: CallOf, name: string) => {
+  const skill = (await readAll(source, workspace, home, callOf)).find(skill => skill.name === name)
   if (skill === undefined) {
     throw new SkillSourceError('unknown-skill', `the Skill Source has no skill named ${name}`)
   }

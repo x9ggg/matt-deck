@@ -18,9 +18,10 @@ const END_SESSION = join(import.meta.dirname, '..', 'plugin', 'cli', 'end-sessio
 const exec = promisify(execFile)
 
 // Unless a test gives it a HOME of its own, each Deck service keeps its local
-// state in a temporary home, never the user's.
-const startDeck = (cwd: string, env: Record<string, string> = {}) => {
-  const child = spawn(process.execPath, ['--import', FAKE_CLOCK, SERVER], {
+// state in a temporary home, never the user's. Unless a test names another,
+// its host is Claude Code, as the plugin starts it.
+const startDeck = (cwd: string, env: Record<string, string> = {}, host = 'claude-code') => {
+  const child = spawn(process.execPath, ['--import', FAKE_CLOCK, SERVER, '--host', host], {
     cwd,
     env: { ...process.env, HOME: mkdtempSync(join(tmpdir(), 'deck-home-')), ...env },
     stdio: ['pipe', 'pipe', 'inherit'],
@@ -581,7 +582,7 @@ test('deck_inspect reads older local state without adding missing tables', async
   const beforeHeartbeat = await readFile(stateFile)
   const occupied = await deck.callTool('deck_inspect')
   assert.equal(occupied.isError, false)
-  assert.deepEqual(occupied.structuredContent.occupancies, [{ task: 3, session: 'old-session', isOrphaned: true }])
+  assert.deepEqual(occupied.structuredContent.occupancies, [{ task: 3, session: 'old-session', sessionHost: 'claude-code', sessionShort: 'old-sess', isOrphaned: true }])
   assert.equal(occupied.structuredContent.tasks.groups.inProgress[0].hasEvidence, false)
   assert.deepEqual(await readFile(stateFile), beforeHeartbeat)
 })
@@ -673,14 +674,14 @@ test('the one-shot run a Session exits with records its end: its Occupancies sho
   await deck.callTool('deck_occupy', { task: 3, session: 'exiting' })
   await deck.callTool('deck_heartbeat', { session: 'exiting' })
   assert.deepEqual((await deck.callTool('deck_inspect')).structuredContent.occupancies, [
-    { task: 3, session: 'exiting', isOrphaned: false },
+    { task: 3, session: 'exiting', sessionHost: 'claude-code', sessionShort: 'exiting', isOrphaned: false },
   ])
 
   const ran = await exec(process.execPath, [END_SESSION, 'exiting'], { env })
 
   assert.deepEqual([ran.stdout, ran.stderr], ['', ''])
   assert.deepEqual((await deck.callTool('deck_inspect')).structuredContent.occupancies, [
-    { task: 3, session: 'exiting', isOrphaned: true },
+    { task: 3, session: 'exiting', sessionHost: 'claude-code', sessionShort: 'exiting', isOrphaned: true },
   ])
 })
 
@@ -778,6 +779,8 @@ test('deck_tasks groups the Tasks of the Task Source', async t => {
     blockedBy: [3],
     closedAt: null,
     occupant: null,
+    occupantHost: null,
+    occupantShort: null,
     isOrphaned: false,
     hasEvidence: false,
   })
@@ -1987,6 +1990,43 @@ test('deck_skills calls the skills of a plugin Skill Source with the plugin pref
   })
 })
 
+test('a Deck service started for Codex calls every skill as $name, a plugin\'s too, and so the Recommendation Request', async t => {
+  const fromDirectory = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  await skillFile(join(fromDirectory.user, '.claude', 'skills'), 'ask-matt', '问下一步该做什么。')
+  const fromPlugin = await withSkillSource({ type: 'plugin', name: 'mattpocock-skills' })
+  const matt = join(fromPlugin.user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
+  await skillFile(join(matt, 'skills', 'engineering'), 'tdd', '先写测试，再写实现。')
+  await installedPlugins(fromPlugin.user, { 'mattpocock-skills@official': [{ scope: 'user', installPath: matt }] })
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const directoryDeck = startDeck(fromDirectory.dir, { ...gh.env, HOME: fromDirectory.user }, 'codex')
+  t.after(directoryDeck.stop)
+  const pluginDeck = startDeck(fromPlugin.dir, { HOME: fromPlugin.user }, 'codex')
+  t.after(pluginDeck.stop)
+
+  const listed = await directoryDeck.callTool('deck_skills')
+  const read = await pluginDeck.callTool('deck_skill', { name: 'tdd' })
+  const asked = await directoryDeck.callTool('deck_ask')
+
+  assert.deepEqual(
+    listed.structuredContent.skills.map(({ name, call }: any) => ({ name, call })),
+    [{ name: 'ask-matt', call: '$ask-matt' }],
+  )
+  assert.equal(read.structuredContent.skill.call, '$tdd')
+  assert.equal(asked.structuredContent.ok, true)
+  assert.equal(asked.structuredContent.call, '$ask-matt')
+})
+
+test('the Deck service will not start without the host it runs for', async () => {
+  for (const args of [[], ['--host'], ['--host', 'cursor'], ['--host', 'codex', 'extra']]) {
+    await assert.rejects(exec(process.execPath, [SERVER, ...args], { env: { ...process.env, HOME: await home() } }), (error: any) => {
+      assert.equal(error.code, 2)
+      assert.match(error.stderr, /Usage:/)
+      return true
+    })
+  }
+})
+
 test('deck_skills says why when the Skill Source is not there, and lists none when it is empty', async t => {
   const missingDir = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
   const missingPlugin = await withSkillSource({ type: 'plugin', name: 'mattpocock-skills' })
@@ -2082,6 +2122,7 @@ test('deck_ask makes a Recommendation Request for /ask-matt with the Task Snapsh
   const second = (await deck.callTool('deck_ask')).structuredContent
 
   assert.equal(first.ok, true)
+  assert.equal(first.call, '/ask-matt')
   assert.equal(first.command, 'ask-matt')
   assert.match(first.requestId, /^[0-9a-f-]{36}$/)
   assert.equal(
@@ -2143,6 +2184,7 @@ test('deck_ask runs a plugin\'s /ask-matt with the plugin prefix, and says why w
     ok: false,
     failure: { kind: 'unknown-skill', message: 'the Skill Source has no skill named ask-matt' },
   })
+  assert.equal(asked.structuredContent.call, '/mattpocock-skills:ask-matt')
   assert.equal(asked.structuredContent.command, 'mattpocock-skills:ask-matt')
   assert.equal(offline.isError, false)
   assert.equal(offline.structuredContent.ok, false)
@@ -2237,8 +2279,8 @@ test('deck_occupy records a Session\'s Occupancy of a Task, which every Deck ser
   const other = await elsewhere.callTool('deck_occupy', { session: 'session-b', task: 5 })
 
   assert.equal(occupied.isError, false)
-  assert.deepEqual(occupied.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
-  assert.deepEqual(other.structuredContent, { ok: true, occupied: true, occupant: 'session-b' })
+  assert.deepEqual(occupied.structuredContent, { ok: true, occupied: true, occupant: 'session-a', occupantHost: 'claude-code', occupantShort: 'session-' })
+  assert.deepEqual(other.structuredContent, { ok: true, occupied: true, occupant: 'session-b', occupantHost: 'claude-code', occupantShort: 'session-' })
   for (const deck of [here, beside, elsewhere]) {
     const { groups, containers } = (await deck.callTool('deck_tasks')).structuredContent
     assert.deepEqual(occupants(groups.inProgress), { 3: 'session-a', 5: 'session-b' })
@@ -2266,9 +2308,9 @@ test('deck_occupy keeps a Task to one Occupancy, and says which Session holds it
   const second = await deck.callTool('deck_occupy', { session: 'session-b', task: 3 })
   const { groups } = (await deck.callTool('deck_tasks')).structuredContent
 
-  assert.deepEqual(first.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
-  assert.deepEqual(again.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
-  assert.deepEqual(second.structuredContent, { ok: true, occupied: false, occupant: 'session-a', isOrphaned: false })
+  assert.deepEqual(first.structuredContent, { ok: true, occupied: true, occupant: 'session-a', occupantHost: 'claude-code', occupantShort: 'session-' })
+  assert.deepEqual(again.structuredContent, { ok: true, occupied: true, occupant: 'session-a', occupantHost: 'claude-code', occupantShort: 'session-' })
+  assert.deepEqual(second.structuredContent, { ok: true, occupied: false, occupant: 'session-a', occupantHost: 'claude-code', occupantShort: 'session-', isOrphaned: false })
   assert.deepEqual(occupants(groups.inProgress), { 3: 'session-a' })
 })
 
@@ -2296,9 +2338,9 @@ test('deck_occupy says when the Session holding the Task is Orphaned, and leaves
   const { groups } = (await deck.callTool('deck_tasks')).structuredContent
 
   assert.deepEqual(answers, [
-    { ok: true, occupied: false, occupant: 'ended', isOrphaned: true },
-    { ok: true, occupied: false, occupant: 'stale', isOrphaned: true },
-    { ok: true, occupied: false, occupant: 'never-beat', isOrphaned: true },
+    { ok: true, occupied: false, occupant: 'ended', occupantHost: 'claude-code', occupantShort: 'ended', isOrphaned: true },
+    { ok: true, occupied: false, occupant: 'stale', occupantHost: 'claude-code', occupantShort: 'stale', isOrphaned: true },
+    { ok: true, occupied: false, occupant: 'never-beat', occupantHost: 'claude-code', occupantShort: 'never-be', isOrphaned: true },
   ])
   assert.deepEqual(occupants(groups.inProgress), { 3: 'ended', 5: 'stale', 7: 'never-beat' })
 })
@@ -2321,7 +2363,7 @@ test('a closed Task\'s Occupancy is released', async t => {
   assert.deepEqual(numbers(closed.groups.done), [3])
   assert.equal(closed.groups.done[0].occupant, null)
   assert.deepEqual(numbers(reopened.groups.ready), [3])
-  assert.deepEqual(taken.structuredContent, { ok: true, occupied: true, occupant: 'session-b' })
+  assert.deepEqual(taken.structuredContent, { ok: true, occupied: true, occupant: 'session-b', occupantHost: 'claude-code', occupantShort: 'session-' })
 })
 
 test('a read older than an Occupancy does not release it', async t => {
@@ -2361,7 +2403,7 @@ test('deck_occupy occupies a Task a link refers to only in the Task Source\'s re
     ok: false,
     failure: { kind: 'not-open', message: '#5 of acme/other is not a Task of the Task Source, acme/shop' },
   })
-  assert.deepEqual(same.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
+  assert.deepEqual(same.structuredContent, { ok: true, occupied: true, occupant: 'session-a', occupantHost: 'claude-code', occupantShort: 'session-' })
   assert.equal(malformed.isError, true)
   assert.deepEqual(occupants(groups.inProgress), { 3: 'session-a' })
 })
@@ -2433,9 +2475,9 @@ test('deck_occupy with takeOver moves the Occupancy of the Session it names to t
     [true, ''].map(takeOver => here.callTool('deck_occupy', { session: 'session-a', task: 3, takeOver })),
   )
 
-  assert.deepEqual(taken.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
-  assert.deepEqual(free.structuredContent, { ok: true, occupied: true, occupant: 'session-a' })
-  assert.deepEqual(passed.structuredContent, { ok: true, occupied: false, occupant: 'session-c', isOrphaned: false })
+  assert.deepEqual(taken.structuredContent, { ok: true, occupied: true, occupant: 'session-a', occupantHost: 'claude-code', occupantShort: 'session-' })
+  assert.deepEqual(free.structuredContent, { ok: true, occupied: true, occupant: 'session-a', occupantHost: 'claude-code', occupantShort: 'session-' })
+  assert.deepEqual(passed.structuredContent, { ok: true, occupied: false, occupant: 'session-c', occupantHost: 'claude-code', occupantShort: 'session-', isOrphaned: false })
   assert.deepEqual(
     malformed.map(result => result.isError),
     [true, true],
@@ -2486,7 +2528,7 @@ test('deck_release releases any Session\'s Occupancy, and the Task goes back to 
   }
   // Released, the Task can be occupied by any Session.
   const again = await elsewhere.callTool('deck_occupy', { session: 'session-b', task: 3 })
-  assert.deepEqual(again.structuredContent, { ok: true, occupied: true, occupant: 'session-b' })
+  assert.deepEqual(again.structuredContent, { ok: true, occupied: true, occupant: 'session-b', occupantHost: 'claude-code', occupantShort: 'session-' })
 })
 
 // A clock every Deck service given its `env` reads, which `set` moves.
@@ -2497,6 +2539,141 @@ const fakeClock = async (start: number) => {
 
   return { env: { FAKE_CLOCK_FILE: file }, set }
 }
+
+// A Claude Code Session's id, and two of Codex's, begun a moment apart.
+const CLAUDE_SESSION = '3f9c21d0-5b7e-4a1c-9d2f-6e8b0c4a7f13'
+const CODEX_SESSION = '019a8c3e-1f2b-7c4d-9e0f-0a1b045b96fc'
+const CODEX_NEIGHBOUR = '019a8c3e-1f2b-7c4d-9e0f-1c2d77e0aa15'
+
+test('the Sessions of Occupancies and reports carry the host their heartbeat recorded and a short id, a Codex one\'s from its end', async t => {
+  const dir = await configured()
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 }), issue({ number: 7 }), issue({ number: 9 })])
+  const claude = startDeck(dir, { ...gh.env, HOME: user })
+  t.after(claude.stop)
+  const codex = startDeck(dir, { ...gh.env, HOME: user }, 'codex')
+  t.after(codex.stop)
+  await claude.callTool('deck_heartbeat', { session: CLAUDE_SESSION })
+  await codex.callTool('deck_heartbeat', { session: CODEX_SESSION })
+  await codex.callTool('deck_heartbeat', { session: CODEX_NEIGHBOUR })
+  await claude.callTool('deck_occupy', { session: CLAUDE_SESSION, task: 3 })
+  await codex.callTool('deck_occupy', { session: CODEX_SESSION, task: 5 })
+  await codex.callTool('deck_occupy', { session: CODEX_NEIGHBOUR, task: 7 })
+  // A Session that never beat has no host recorded: it is Claude Code's.
+  await codex.callTool('deck_occupy', { session: 'never-beat-session', task: 9 })
+  await codex.callTool('deck_report', { task: 5, session: CODEX_SESSION, result: 'Done', evidence: [] })
+  await claude.callTool('deck_report', { task: 5, session: CLAUDE_SESSION, result: 'Checked', evidence: [] })
+
+  const { groups } = (await claude.callTool('deck_tasks')).structuredContent
+  const refused = (await claude.callTool('deck_occupy', { session: CLAUDE_SESSION, task: 5 })).structuredContent
+  const taken = (await codex.callTool('deck_occupy', { session: CODEX_SESSION, task: 9, takeOver: 'never-beat-session' }))
+    .structuredContent
+  const { occupancies } = (await codex.callTool('deck_inspect')).structuredContent
+  await gh.answer({ stdout: viewed({ number: 5 }) })
+  const { reports } = (await codex.callTool('deck_task', { number: 5 })).structuredContent
+
+  assert.deepEqual(
+    groups.inProgress.map(({ number, occupant, occupantHost, occupantShort }: any) => [number, occupant, occupantHost, occupantShort]),
+    [
+      [3, CLAUDE_SESSION, 'claude-code', '3f9c21d0'],
+      [5, CODEX_SESSION, 'codex', '045b96fc'],
+      [7, CODEX_NEIGHBOUR, 'codex', '77e0aa15'],
+      [9, 'never-beat-session', 'claude-code', 'never-be'],
+    ],
+  )
+  assert.deepEqual(refused, {
+    ok: true,
+    occupied: false,
+    occupant: CODEX_SESSION,
+    occupantHost: 'codex',
+    occupantShort: '045b96fc',
+    isOrphaned: false,
+  })
+  assert.deepEqual(taken, { ok: true, occupied: true, occupant: CODEX_SESSION, occupantHost: 'codex', occupantShort: '045b96fc' })
+  assert.deepEqual(
+    occupancies.map(({ task, session, sessionHost, sessionShort }: any) => [task, session, sessionHost, sessionShort]),
+    [
+      [3, CLAUDE_SESSION, 'claude-code', '3f9c21d0'],
+      [5, CODEX_SESSION, 'codex', '045b96fc'],
+      [7, CODEX_NEIGHBOUR, 'codex', '77e0aa15'],
+      [9, CODEX_SESSION, 'codex', '045b96fc'],
+    ],
+  )
+  assert.deepEqual(
+    reports.map(({ session, sessionHost, sessionShort }: any) => [session, sessionHost, sessionShort]),
+    [
+      [CODEX_SESSION, 'codex', '045b96fc'],
+      [CLAUDE_SESSION, 'claude-code', '3f9c21d0'],
+    ],
+  )
+})
+
+test('a Session local state recorded before hosts were is Claude Code\'s, and beats on with its host recorded', async t => {
+  const user = await home()
+  await mkdir(join(user, '.matt-deck'))
+  const stateFile = join(user, '.matt-deck', 'deck.sqlite')
+  const db = new DatabaseSync(stateFile)
+  t.after(() => db.close())
+  // Before hosts, a Session's row held its heartbeat and whether it ended.
+  db.exec('CREATE TABLE occupancies (source TEXT NOT NULL, task INTEGER NOT NULL, session TEXT NOT NULL, occupied_at INTEGER NOT NULL, PRIMARY KEY (source, task))')
+  db.exec('CREATE TABLE sessions (session TEXT PRIMARY KEY, beat_at INTEGER NOT NULL, is_ended INTEGER NOT NULL)')
+  db.prepare('INSERT INTO occupancies VALUES (?, ?, ?, ?)').run('acme/shop', 3, CLAUDE_SESSION, 1)
+  db.prepare('INSERT INTO sessions VALUES (?, ?, 0)').run(CLAUDE_SESSION, Date.now())
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 })])
+  const dir = await configured()
+  const claude = startDeck(dir, { ...gh.env, HOME: user })
+  t.after(claude.stop)
+  const codex = startDeck(dir, { ...gh.env, HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  // A read that changes nothing reads it as it is.
+  const before = await readFile(stateFile)
+  const inspected = (await claude.callTool('deck_inspect')).structuredContent.occupancies
+  assert.deepEqual(await readFile(stateFile), before)
+  await codex.callTool('deck_heartbeat', { session: CODEX_SESSION })
+  await codex.callTool('deck_occupy', { session: CODEX_SESSION, task: 5 })
+  await claude.callTool('deck_heartbeat', { session: CLAUDE_SESSION })
+  const { groups } = (await claude.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(inspected, [
+    { task: 3, session: CLAUDE_SESSION, sessionHost: 'claude-code', sessionShort: '3f9c21d0', isOrphaned: false },
+  ])
+  assert.deepEqual(
+    groups.inProgress.map(({ number, occupantHost, occupantShort, isOrphaned }: any) => [number, occupantHost, occupantShort, isOrphaned]),
+    [
+      [3, 'claude-code', '3f9c21d0', false],
+      [5, 'codex', '045b96fc', false],
+    ],
+  )
+})
+
+test('local state a Deck service wrote still takes a heartbeat and an end as a Deck service from before hosts writes them', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const codex = startDeck(await configured(), { ...gh.env, HOME: user }, 'codex')
+  t.after(codex.stop)
+  await codex.callTool('deck_heartbeat', { session: CODEX_SESSION })
+  await codex.callTool('deck_occupy', { session: CODEX_SESSION, task: 3 })
+  await codex.callTool('deck_tasks')
+  const db = new DatabaseSync(join(user, '.matt-deck', 'deck.sqlite'))
+  t.after(() => db.close())
+
+  // As a Deck service started before the upgrade, and its one-shot end of a
+  // Session, write a Session's row: by position, three values.
+  db.prepare('INSERT OR REPLACE INTO sessions VALUES (?, ?, 0)').run(CLAUDE_SESSION, Date.now())
+  db.prepare('INSERT INTO sessions VALUES (?, ?, 1) ON CONFLICT (session) DO UPDATE SET is_ended = 1').run('ended-session', Date.now())
+  db.prepare('INSERT OR REPLACE INTO sessions VALUES (?, ?, 0)').run(CODEX_SESSION, Date.now())
+
+  const { groups } = (await codex.callTool('deck_tasks')).structuredContent
+  // The host its heartbeat recorded stays.
+  assert.deepEqual(
+    groups.inProgress.map(({ number, occupantHost, occupantShort, isOrphaned }: any) => [number, occupantHost, occupantShort, isOrphaned]),
+    [[3, 'codex', '045b96fc', false]],
+  )
+})
 
 // Which Tasks deck_tasks lists in progress as Orphaned, by number.
 const orphaned = (tasks: { number: number; isOrphaned: boolean }[]) =>
@@ -2536,13 +2713,13 @@ test('deck_inspect shows shared Occupancy and Orphaned status without settling o
   const afterThree = (await reader.callTool('deck_inspect')).structuredContent
 
   assert.deepEqual(atThree.occupancies, [
-    { task: 1, session: 'container', isOrphaned: true },
-    { task: 3, session: 'ended', isOrphaned: true },
-    { task: 5, session: 'live', isOrphaned: false },
-    { task: 7, session: 'never-beat', isOrphaned: true },
+    { task: 1, session: 'container', sessionHost: 'claude-code', sessionShort: 'containe', isOrphaned: true },
+    { task: 3, session: 'ended', sessionHost: 'claude-code', sessionShort: 'ended', isOrphaned: true },
+    { task: 5, session: 'live', sessionHost: 'claude-code', sessionShort: 'live', isOrphaned: false },
+    { task: 7, session: 'never-beat', sessionHost: 'claude-code', sessionShort: 'never-be', isOrphaned: true },
   ])
   assert.deepEqual(afterThree.occupancies.filter((entry: any) => entry.task === 5), [
-    { task: 5, session: 'live', isOrphaned: true },
+    { task: 5, session: 'live', sessionHost: 'claude-code', sessionShort: 'live', isOrphaned: true },
   ])
   assert.deepEqual(occupants(atThree.tasks.groups.inProgress), { 3: 'ended', 5: 'live', 7: 'never-beat' })
   assert.equal(atThree.tasks.containers[0].occupant, 'container')
@@ -2554,7 +2731,7 @@ test('deck_inspect shows shared Occupancy and Orphaned status without settling o
   // Reopening it proves the inspection left the closed Task's stored Occupancy intact.
   await gh.issues([issue({ number: 9 })])
   const reopened = (await reader.callTool('deck_inspect')).structuredContent
-  assert.deepEqual(reopened.occupancies, [{ task: 9, session: 'closed', isOrphaned: true }])
+  assert.deepEqual(reopened.occupancies, [{ task: 9, session: 'closed', sessionHost: 'claude-code', sessionShort: 'closed', isOrphaned: true }])
   assert.deepEqual(await readFile(stateFile), before)
 })
 
@@ -2655,7 +2832,7 @@ test('an Orphaned Occupancy is taken over or released as any other, and released
   await gh.issues([issue({ number: 3 }), issue({ number: 5 }), issue({ number: 7, state: 'CLOSED', closedAt: '2026-11-13T09:00:00Z' })])
   const { groups } = (await deck.callTool('deck_tasks', { refresh: true })).structuredContent
 
-  assert.deepEqual(taken.structuredContent, { ok: true, occupied: true, occupant: 'session-b' })
+  assert.deepEqual(taken.structuredContent, { ok: true, occupied: true, occupant: 'session-b', occupantHost: 'claude-code', occupantShort: 'session-' })
   assert.deepEqual(released.structuredContent, { ok: true, released: true })
   // Taken over, it is the beating Session's and no longer Orphaned.
   assert.deepEqual(occupants(groups.inProgress), { 3: 'session-b' })
@@ -2735,8 +2912,8 @@ test('deck_report keeps each report of a Task with its Session and time, which e
     const { reports } = (await deck.callTool('deck_task', { number: 3 })).structuredContent
     // Every report stays, the first first.
     assert.deepEqual(reports, [
-      { session: 'session-a', reportedAt: Date.UTC(2026, 10, 11, 14, 2), result: '先做了一半，测试还没过。', evidence: [] },
-      { session: 'session-b', reportedAt: Date.UTC(2026, 10, 11, 15, 30), result: '已实现并在本仓库运行通过。', evidence: EVIDENCE },
+      { session: 'session-a', sessionHost: 'claude-code', sessionShort: 'session-', reportedAt: Date.UTC(2026, 10, 11, 14, 2), result: '先做了一半，测试还没过。', evidence: [] },
+      { session: 'session-b', sessionHost: 'claude-code', sessionShort: 'session-', reportedAt: Date.UTC(2026, 10, 11, 15, 30), result: '已实现并在本仓库运行通过。', evidence: EVIDENCE },
     ])
   }
   await gh.answer({ stdout: viewed({ number: 7 }) })
@@ -2770,7 +2947,7 @@ test('deck_report keeps a report while the Task Source cannot be read, once a re
   assert.deepEqual(reported.structuredContent, { ok: true })
   await gh.answer({ stdout: viewed({ number: 3 }) })
   assert.deepEqual((await deck.callTool('deck_task', { number: 3 })).structuredContent.reports, [
-    { session: 'session-a', reportedAt: Date.UTC(2026, 10, 11, 14, 3), result: '做完了。', evidence: EVIDENCE },
+    { session: 'session-a', sessionHost: 'claude-code', sessionShort: 'session-', reportedAt: Date.UTC(2026, 10, 11, 14, 3), result: '做完了。', evidence: EVIDENCE },
   ])
 })
 

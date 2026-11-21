@@ -6,7 +6,7 @@
   "mcpServers": {
     "deck": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/server/main.ts"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/main.ts", "--host", "claude-code"]
     }
   }
 }

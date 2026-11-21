@@ -4,6 +4,7 @@
 // no Acceptance Evidence, closes no Task and leaves the Occupancy as it is.
 // Host-agnostic: it knows a home directory, a Task Source's identity and
 // Sessions by their ids.
+import type { NameSession } from './occupancy.ts'
 import { hasStateTable, openState, readState } from './state.ts'
 
 // One Acceptance Evidence: what shows an acceptance criterion is met, and
@@ -31,19 +32,27 @@ export const saveReport = (home: string, source: string, task: number, report: R
   }
 }
 
-// Every report of the Task `task`, the first first.
-export const readReports = (home: string, source: string, task: number): Report[] => {
+// Every report of the Task `task`, the first first, its Session named by
+// `nameSession` from the host its heartbeat recorded.
+export const readReports = (home: string, source: string, task: number, nameSession: NameSession) => {
   const db = openState(home)
   try {
     return db
-      .prepare('SELECT session, reported_at, result, evidence FROM reports WHERE source = ? AND task = ? ORDER BY rowid')
+      .prepare(
+        'SELECT session, host, reported_at, result, evidence FROM reports LEFT JOIN session_hosts USING (session) WHERE source = ? AND task = ? ORDER BY reports.rowid',
+      )
       .all(source, task)
-      .map(row => ({
-        session: row.session as string,
-        reportedAt: row.reported_at as number,
-        result: row.result as string,
-        evidence: JSON.parse(row.evidence as string),
-      }))
+      .map(row => {
+        const named = nameSession(row.session as string, row.host as string | null)
+        return {
+          session: row.session as string,
+          sessionHost: named.host,
+          sessionShort: named.short,
+          reportedAt: row.reported_at as number,
+          result: row.result as string,
+          evidence: JSON.parse(row.evidence as string),
+        }
+      })
   } finally {
     db.close()
   }
