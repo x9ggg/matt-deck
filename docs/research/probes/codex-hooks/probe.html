@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matt Deck · 钩子探针</title>
+<style>
+  :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+  body { margin: 1rem; }
+  h1 { font-size: 1.2rem; }
+  button { font: inherit; padding: .35rem; display: block; margin: .5rem 0; }
+  #events { display: block; margin-top: 1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+<h1>Matt Deck · 钩子探针</h1>
+<p>实例 <code id="instance"></code></p>
+<button id="call" disabled>调用服务的工具</button>
+<button id="draft" disabled>预填一段文字，不发送</button>
+<output id="events" aria-live="polite"></output>
+<script type="module">
+  const instance = crypto.randomUUID().slice(0, 8);
+  document.querySelector("#instance").textContent = instance;
+  const events = document.querySelector("#events");
+  const pending = new Map();
+  let rpcId = 0;
+  let sequence = 0;
+
+  function show(text) {
+    const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    events.append(document.createTextNode(time + " " + text + "\n"));
+  }
+  function post(message) {
+    window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
+  }
+  function request(method, params) {
+    return new Promise((resolve, reject) => {
+      const id = ++rpcId;
+      pending.set(id, { resolve, reject });
+      post({ id, method, params });
+    });
+  }
+  window.addEventListener("message", ({ source, data }) => {
+    if (source !== window.parent || data?.jsonrpc !== "2.0") return;
+    if (data.method) {
+      if (data.id !== undefined) post({ id: data.id, result: {} });
+      return;
+    }
+    const call = pending.get(data.id);
+    if (!call) return;
+    pending.delete(data.id);
+    if (data.error) call.reject(new Error(data.error.code + " " + data.error.message));
+    else call.resolve(data.result);
+  });
+
+  // 页面的每次动作都经 probe_page 记进服务旁边的 probe-log.txt，连同宿主附上的 _meta。
+  async function record(line) {
+    show(line);
+    try {
+      await request("tools/call", { name: "probe_page", arguments: { line: instance + " " + line } });
+    } catch (error) {
+      show("probe_page " + error.message);
+    }
+  }
+  document.querySelector("#call").addEventListener("click", () => record("点击调用 " + ++sequence));
+  document.querySelector("#draft").addEventListener("click", async () => {
+    const text = "预填 HOOK-" + instance + "-" + ++sequence;
+    await record("请求预填 " + text);
+    try {
+      const result = await request("ui/message", {
+        role: "user",
+        content: [{ type: "text", text }],
+        _meta: { "openai/message": { target: "active", send: false } },
+      });
+      await record("预填的宿主响应 " + JSON.stringify(result));
+    } catch (error) {
+      await record("预填失败 " + error.message);
+    }
+  });
+
+  try {
+    await request("ui/initialize", {
+      appInfo: { name: "matt-deck-hook-probe", version: "1.0.0" },
+      appCapabilities: {},
+      protocolVersion: "2026-01-26",
+    });
+    post({ method: "ui/notifications/initialized", params: {} });
+    await record("页面已连接");
+    for (const button of document.querySelectorAll("button")) button.disabled = false;
+  } catch (error) {
+    show("握手失败 " + error.message);
+  }
+</script>
+</html>
