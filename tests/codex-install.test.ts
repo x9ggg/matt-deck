@@ -1,7 +1,7 @@
 // The command line that installs Deck into Codex and uninstalls it, run in a
 // temporary home: the machine's own Codex config is never touched.
 import { execFile, spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readdir, readFile, realpath, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -147,6 +147,71 @@ test('uninstall without a Codex config writes none', async () => {
   await run(user, 'uninstall')
 
   assert.deepEqual(await readdir(user), [])
+})
+
+// The skill install generates where Codex finds the user's skills.
+const configureSkill = (user: string) => join(user, '.agents', 'skills', 'matt-deck-configure', 'SKILL.md')
+const PLUGIN_CONFIGURE = join(import.meta.dirname, '..', 'plugin', 'skills', 'configure', 'SKILL.md')
+
+test('install generates the skill matt-deck-configure, which points at the configure skill of the plugin, and says so; uninstall removes it', async () => {
+  const user = await home()
+  await mkdir(join(user, '.agents', 'skills', 'tdd'), { recursive: true })
+  await writeFile(join(user, '.agents', 'skills', 'tdd', 'SKILL.md'), '---\nname: tdd\n---\n')
+
+  const { stdout: installed } = await run(user, 'install')
+  const generated = await readFile(configureSkill(user), 'utf8')
+  await run(user, 'install')
+
+  assert.match(generated, /^---\nname: matt-deck-configure\ndescription: .+\n---\n/)
+  assert.ok(generated.includes(PLUGIN_CONFIGURE), generated)
+  assert.equal(await readFile(configureSkill(user), 'utf8'), generated)
+  assert.ok(installed.includes(configureSkill(user)), installed)
+
+  const { stdout: removed } = await run(user, 'uninstall')
+
+  assert.deepEqual(await readdir(join(user, '.agents', 'skills')), ['tdd'])
+  assert.ok(removed.includes(join(user, '.agents', 'skills', 'matt-deck-configure')), removed)
+})
+
+test('install stops when a skill named matt-deck-configure is there that Deck did not generate, and leaves it and the Codex config as they are', async () => {
+  const { user, config } = await withConfig(BEFORE)
+  const theirs = '---\nname: matt-deck-configure\ndescription: mine\n---\n\nMy own.\n'
+  await mkdir(join(user, '.agents', 'skills', 'matt-deck-configure'), { recursive: true })
+  await writeFile(configureSkill(user), theirs)
+
+  await assert.rejects(run(user, 'install'), (error: any) => {
+    assert.equal(error.code, 1)
+    assert.ok(error.stderr.includes(join(user, '.agents', 'skills', 'matt-deck-configure')), error.stderr)
+    return true
+  })
+  assert.equal(await readFile(configureSkill(user), 'utf8'), theirs)
+  assert.equal(await readFile(config, 'utf8'), BEFORE)
+
+  await run(user, 'uninstall')
+
+  assert.equal(await readFile(configureSkill(user), 'utf8'), theirs)
+})
+
+test('uninstall removes only the file install generated: what else the directory holds stays, and so does a directory it reached through a link', async () => {
+  const user = await home()
+  const dir = join(user, '.agents', 'skills', 'matt-deck-configure')
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, 'notes.md'), 'mine\n')
+  // The skill's directory a link to one elsewhere.
+  const linked = await home()
+  const target = join(linked, 'elsewhere')
+  await mkdir(target)
+  await mkdir(join(linked, '.agents', 'skills'), { recursive: true })
+  await symlink(target, join(linked, '.agents', 'skills', 'matt-deck-configure'))
+
+  for (const each of [user, linked]) {
+    await run(each, 'install')
+    await run(each, 'uninstall')
+  }
+
+  assert.deepEqual(await readdir(dir), ['notes.md'])
+  assert.equal(await readFile(join(dir, 'notes.md'), 'utf8'), 'mine\n')
+  assert.deepEqual(await readdir(target), [])
 })
 
 test('the Codex command line takes install or uninstall', async () => {

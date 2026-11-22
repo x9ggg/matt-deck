@@ -20,7 +20,7 @@ import { githubIssues, listTasks, readTask, TaskSourceError } from '../kernel/ta
 import { workspaceAt } from '../kernel/workspace.ts'
 import type { ProjectConfig } from '../kernel/config.ts'
 import type { SourceRead, TaskListFailure } from '../kernel/tasks.ts'
-import { callOf, hostNamed, nameSession } from './hosts.ts'
+import { callOf, CODEX_CONFIGURE_SKILL, hostNamed, nameSession, skillDirectories } from './hosts.ts'
 
 const USAGE = `Usage: node <matt-deck>/server/main.ts --host <claude-code|codex>
 
@@ -556,15 +556,16 @@ const tools = {
   },
   deck_setup_survey: {
     description:
-      'For the configure skill: the existing project config, the Task Source prefilled from the Matt issue tracker doc, the Matt skills found on this machine, and whether the local settings allow the Deck service\'s tools.',
+      'For the configure skill: the host this service runs for, the existing project config, the Task Source prefilled from the Matt issue tracker doc, the Matt skills found on this machine and in the host\'s own skill directories, and, for Claude Code only, whether the local settings allow the Deck service\'s tools.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: async (): Promise<ToolResult> => {
-      // Local settings that cannot be read allow nothing; deck_allow_service
-      // says why when it is asked to write them.
-      const allowed: unknown = (await readLocalSettings().catch(() => ({}) as Record<string, any>)).permissions?.allow
-      const result = {
-        ...(await surveySetup(workspace, homedir())),
-        isServiceAllowed: Array.isArray(allowed) && allowed.includes(ALLOW_RULE),
+      let result: object = { host, ...(await surveySetup(workspace, homedir(), skillDirectories(host))) }
+      // Codex reads no Claude Code permission rule. Local settings that
+      // cannot be read allow nothing; deck_allow_service says why when it is
+      // asked to write them.
+      if (host === 'claude-code') {
+        const allowed: unknown = (await readLocalSettings().catch(() => ({}) as Record<string, any>)).permissions?.allow
+        result = { ...result, isServiceAllowed: Array.isArray(allowed) && allowed.includes(ALLOW_RULE) }
       }
 
       return {
@@ -600,6 +601,10 @@ const tools = {
       }
     },
   },
+}
+
+// Only Claude Code reads its permission rules.
+const claudeCodeTools = {
   deck_allow_service: {
     description:
       'For the configure skill: add the permission rule allowing every tool of the Deck service to this project\'s local settings (.claude/settings.local.json), keeping what they hold. Only after the user agreed.',
@@ -663,6 +668,16 @@ const tabTools = {
       return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
     },
   },
+  deck_configure: {
+    description: 'For the Pane in a tab: the call of the configure skill, which the Pane prefills.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    _meta: { ui: { visibility: ['app'] } },
+    run: async (): Promise<ToolResult> => {
+      const result = { call: callOf(host)(CODEX_CONFIGURE_SKILL, undefined) }
+
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
+    },
+  },
 }
 
 type Tool = {
@@ -673,9 +688,12 @@ type Tool = {
   run: (args: any, meta: unknown) => Promise<ToolResult>
 }
 
-// Only Codex opens the Pane in a tab; Claude Code's Pane is the Mod.
+// Only Codex opens the Pane in a tab; Claude Code's Pane is the Mod, and
+// only Claude Code has permission rules to write.
 const served: { tools: Record<string, Tool>; resources: (typeof PANE)[] } =
-  host === 'codex' ? { tools: { ...tools, ...tabTools }, resources: [PANE] } : { tools, resources: [] }
+  host === 'codex'
+    ? { tools: { ...tools, ...tabTools }, resources: [PANE] }
+    : { tools: { ...tools, ...claudeCodeTools }, resources: [] }
 
 const handle = async (method: string, params: any): Promise<object> => {
   switch (method) {

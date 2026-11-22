@@ -386,10 +386,15 @@ body{margin:0;background:var(--ground)}
   }
   setInterval(showFreshness, 30_000)
 
+  // The call of the configure skill, as the Deck service gives it, read with
+  // the config of a project that is not configured.
+  let configureCall
+
   const read = async () => {
     $('refresh').disabled = true
     try {
       const [config, session] = await Promise.all([callTool('deck_config'), callTool('deck_session')])
+      if (!config.configured) configureCall = (await callTool('deck_configure')).call
       $('project').firstElementChild.textContent = config.workspace.slice(config.workspace.lastIndexOf('/') + 1)
       $('session').querySelector('b').textContent = session.sessionShort
       $('project').hidden = $('session').hidden = false
@@ -419,6 +424,25 @@ body{margin:0;background:var(--ground)}
     })
   }
   $('refresh').addEventListener('click', read)
+
+  // Puts the call in the Session's prompt for the person to send (ADR-0006),
+  // then stays off for 5 seconds, so a second click fills in no second copy.
+  const configure = $('unconfigured').querySelector('button')
+  configure.addEventListener('click', async () => {
+    configure.disabled = true
+    try {
+      await request('ui/message', {
+        role: 'user',
+        content: [{ type: 'text', text: configureCall }],
+        _meta: { 'openai/message': { target: 'active', send: false } },
+      })
+      configure.textContent = '已填入'
+      await new Promise(resolve => setTimeout(resolve, 5_000))
+    } finally {
+      configure.textContent = '配置这个项目'
+      configure.disabled = false
+    }
+  })
 
   follow(
     (

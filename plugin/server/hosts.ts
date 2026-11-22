@@ -8,17 +8,22 @@ const HOST_NAMES = ['claude-code', 'codex'] as const
 
 export type Host = (typeof HOST_NAMES)[number]
 
-const HOSTS: Record<Host, { callOf: CallOf; short: (session: string) => string }> = {
+// `skillDirectories` are where the host finds skills itself, written as a
+// Skill Source's path is: `~/...` under the home, or relative to the
+// Workspace. First configuration offers the copies of Matt skills there.
+const HOSTS: Record<Host, { callOf: CallOf; short: (session: string) => string; skillDirectories: string[] }> = {
   'claude-code': {
     callOf: (name, plugin) => (plugin === undefined ? `/${name}` : `/${plugin}:${name}`),
     // A Claude Code Session's id is random from its first character.
     short: session => session.slice(0, 8),
+    skillDirectories: [],
   },
   codex: {
     callOf: name => `$${name}`,
     // A Codex Session's id begins with the time it was started: two started
     // a moment apart share their first characters.
     short: session => session.slice(-8),
+    skillDirectories: ['~/.agents/skills', '.agents/skills', '.codex/skills'],
   },
 }
 
@@ -27,6 +32,14 @@ const HOSTS: Record<Host, { callOf: CallOf; short: (session: string) => string }
 export const hostNamed = (value: string | null | undefined) => HOST_NAMES.find(host => host === value)
 
 export const callOf = (host: Host) => HOSTS[host].callOf
+
+export const skillDirectories = (host: Host) => HOSTS[host].skillDirectories
+
+// The configure skill as Codex names it: install generates a skill of this
+// name in the user's own Codex skills, pointing at the plugin's. The plugin's
+// is named `configure`, which in a user-wide directory meets other skills of
+// that name, and renaming it would rename `/matt-deck:configure`.
+export const CODEX_CONFIGURE_SKILL = 'matt-deck-configure'
 
 // A Session as an answer names it, from the host its heartbeat recorded: a
 // Session recorded before hosts were, or never recorded, is Claude Code's.

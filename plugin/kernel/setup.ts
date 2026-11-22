@@ -61,19 +61,23 @@ const readExistingConfig = async (workspace: string): Promise<ExistingConfig> =>
 const MARKER = 'ask-matt'
 
 // The user-level skill directories, in the order they are offered.
-const SKILL_DIRECTORIES = ['.claude/skills', '.agents/skills']
+const SKILL_DIRECTORIES = ['~/.claude/skills', '~/.agents/skills']
 
 type SkillSource = ProjectConfig['skillSource']
 
 // Every copy of Matt skills found on this machine, each once: a directory
-// linking its skills from another one is the same copy.
-const findSkillSources = async (workspace: string, home: string): Promise<SkillSource[]> => {
+// linking its skills from another one is the same copy. `hostDirectories`
+// are where the host finds skills itself, offered after the user-level ones,
+// written as a Skill Source's path is: `~/...` under the home, or relative
+// to the Workspace.
+const findSkillSources = async (workspace: string, home: string, hostDirectories: string[]): Promise<SkillSource[]> => {
   const found: { source: SkillSource; marker: string }[] = []
 
-  for (const dir of SKILL_DIRECTORIES) {
-    const marker = await ifExists(() => realpath(join(home, dir, MARKER, 'SKILL.md')))
+  for (const dir of [...SKILL_DIRECTORIES, ...hostDirectories]) {
+    const root = dir.startsWith('~/') ? join(home, dir.slice(2)) : join(workspace, dir)
+    const marker = await ifExists(() => realpath(join(root, MARKER, 'SKILL.md')))
     if (marker !== undefined) {
-      found.push({ source: { type: 'directory', path: `~/${dir}` }, marker })
+      found.push({ source: { type: 'directory', path: dir }, marker })
     }
   }
 
@@ -100,8 +104,8 @@ const findSkillSources = async (workspace: string, home: string): Promise<SkillS
     .map(({ source }) => source)
 }
 
-export const surveySetup = async (workspace: string, home: string) => ({
+export const surveySetup = async (workspace: string, home: string, hostDirectories: string[]) => ({
   existing: await readExistingConfig(workspace),
   taskSource: await readTaskSourcePrefill(workspace),
-  skillSources: await findSkillSources(workspace, home),
+  skillSources: await findSkillSources(workspace, home, hostDirectories),
 })

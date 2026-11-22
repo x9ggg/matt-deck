@@ -83,6 +83,10 @@ export const openPage = async ({
       })
     } else if (data.method === 'tools/call') {
       toPage({ id: data.id, result: await answer(data.params.name, data.params.arguments) })
+    } else if (data.method === 'ui/message') {
+      // A message the page puts in the Session's prompt, or sends; the test
+      // reads it from `sent`.
+      toPage({ id: data.id, result: {} })
     } else {
       toPage({ id: data.id, error: { code: -32601, message: `Method not found: ${data.method}` } })
     }

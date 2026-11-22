@@ -308,6 +308,70 @@ test('deck_setup_survey finds no Matt skills on a machine without them', async t
   assert.deepEqual(result.structuredContent.skillSources, [])
 })
 
+test('started for Codex, deck_setup_survey also finds the copies of Matt skills in the Workspace\'s Codex skill directories', async t => {
+  const dir = await workspace()
+  const user = await home()
+  await skill(join(user, '.agents', 'skills'), 'ask-matt')
+  await skill(join(dir, '.agents', 'skills'), 'ask-matt')
+  await skill(join(dir, '.codex', 'skills'), 'ask-matt')
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  const claudeCode = startDeck(dir, { HOME: user })
+  t.after(codex.stop)
+  t.after(claudeCode.stop)
+
+  const [forCodex, forClaudeCode] = await Promise.all([codex, claudeCode].map(deck => deck.callTool('deck_setup_survey')))
+
+  assert.equal(forCodex.isError, false)
+  assert.deepEqual(forCodex.structuredContent.skillSources, [
+    { type: 'directory', path: '~/.agents/skills' },
+    { type: 'directory', path: '.agents/skills' },
+    { type: 'directory', path: '.codex/skills' },
+  ])
+  assert.deepEqual(forClaudeCode.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills' }])
+})
+
+test('started for Codex, the configure skill has no permission rule to write: the survey names the host and asks no settings, and deck_allow_service is not offered', async t => {
+  const dir = await workspace()
+  const codex = startDeck(dir, { HOME: await home() }, 'codex')
+  const claudeCode = startDeck(dir, { HOME: await home() })
+  t.after(codex.stop)
+  t.after(claudeCode.stop)
+
+  const surveyed = await codex.callTool('deck_setup_survey')
+  const { result: listed } = await codex.request('tools/list')
+  const refused = await codex.request('tools/call', { name: 'deck_allow_service', arguments: {} })
+  const forClaudeCode = await claudeCode.callTool('deck_setup_survey')
+
+  assert.equal(surveyed.structuredContent.host, 'codex')
+  assert.equal('isServiceAllowed' in surveyed.structuredContent, false)
+  assert.equal(listed.tools.some((tool: any) => tool.name === 'deck_allow_service'), false)
+  assert.equal(refused.error.code, -32602)
+  assert.deepEqual(await readdir(dir), [])
+  assert.equal(forClaudeCode.structuredContent.host, 'claude-code')
+  assert.equal(forClaudeCode.structuredContent.isServiceAllowed, false)
+})
+
+test('a project configured from Claude Code is a Configured Project for Codex, its skills called as Codex writes them', async t => {
+  const dir = await workspace()
+  const user = await home()
+  await skill(join(user, '.agents', 'skills'), 'ask-matt')
+  const claudeCode = startDeck(dir, { HOME: user })
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(claudeCode.stop)
+  t.after(codex.stop)
+  const config = { taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path: '~/.agents/skills' } }
+
+  await claudeCode.callTool('deck_write_config', { config })
+  const read = await codex.callTool('deck_config')
+  const skills = await codex.callTool('deck_skills')
+
+  assert.deepEqual(read.structuredContent, { configured: true, workspace: dir, config })
+  assert.deepEqual(
+    skills.structuredContent.skills.map(({ call }: any) => call),
+    ['$ask-matt'],
+  )
+})
+
 const CONFIG = {
   taskSource: { type: 'github-issues' },
   skillSource: { type: 'directory', path: '~/.claude/skills' },
@@ -3022,6 +3086,18 @@ test('started for Claude Code, the Deck service offers no Pane in a tab', async 
     [],
   )
   assert.equal(listed.tools.some((tool: any) => tool.name === 'deck_pane' || tool.name === 'deck_session'), false)
+})
+
+test('started for Codex, deck_configure answers the call of the configure skill that install generates, for the page only', async t => {
+  const deck = startDeck(await workspace(), {}, 'codex')
+  t.after(deck.stop)
+
+  const { result: listed } = await deck.request('tools/list')
+  const result = await deck.callTool('deck_configure')
+
+  assert.deepEqual(listed.tools.find((tool: any) => tool.name === 'deck_configure')._meta, { ui: { visibility: ['app'] } })
+  assert.equal(result.isError, false)
+  assert.deepEqual(result.structuredContent, { call: '$matt-deck-configure' })
 })
 
 test('started for Codex, deck_session names the Session a call comes from by its _meta.threadId, for the page only', async t => {

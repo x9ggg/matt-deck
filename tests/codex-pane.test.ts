@@ -6,6 +6,11 @@ import { answered, openPage } from './fake-host.ts'
 
 const SESSION = { session: '019a8c3e-1f2b-7c4d-9e0f-0a1b045b96fc', sessionHost: 'codex', sessionShort: '045b96fc' }
 
+// The call of the configure skill as this fake Deck service gives it: no
+// call the page could write itself, so a page that prefills it took it from
+// the answer.
+const CONFIGURE_CALL = '$configure-as-the-deck-service-says-9f3c'
+
 // The Deck service of a Session started in the Workspace at `workspace`.
 const deckAt =
   (workspace: string, configured = true) =>
@@ -23,6 +28,9 @@ const deckAt =
     }
     if (name === 'deck_session') {
       return answered(SESSION)
+    }
+    if (name === 'deck_configure') {
+      return answered({ call: CONFIGURE_CALL })
     }
     throw new Error(`unexpected call of ${name}`)
   }
@@ -142,6 +150,33 @@ test('in a project that is not configured the Pane says so and how to configure 
   )
   assert.equal(shown(page, document.querySelector('.dk-empty')), true)
   assert.equal(shown(page, document.querySelector('[role="tablist"]')), false)
+})
+
+test('"配置这个项目" puts the call of the configure skill the Deck service gives in the prompt, unsent, then is off for 5 seconds', async t => {
+  const page = await openPage({ answer: deckAt('/work/elsewhere', false) })
+  t.after(page.close)
+  const button = page.document.querySelector<HTMLButtonElement>('.dk-empty button')!
+  const prefills = () => page.sent.filter(message => message.method === 'ui/message').map(({ params }) => params)
+
+  await page.click(button)
+
+  assert.deepEqual(prefills(), [
+    {
+      role: 'user',
+      content: [{ type: 'text', text: CONFIGURE_CALL }],
+      _meta: { 'openai/message': { target: 'active', send: false } },
+    },
+  ])
+  assert.deepEqual([text(button), button.disabled], ['已填入', true])
+
+  // A second click while it is off fills in nothing more.
+  await page.click(button)
+  assert.equal(prefills().length, 1)
+
+  await page.advance(4_999)
+  assert.deepEqual([text(button), button.disabled], ['已填入', true])
+  await page.advance(1)
+  assert.deepEqual([text(button), button.disabled], ['配置这个项目', false])
 })
 
 test('the Pane says the read failed, and why, when the Deck service cannot read the project config', async t => {

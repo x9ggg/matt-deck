@@ -6,18 +6,19 @@ disable-model-invocation: true
 
 # 配置 Matt Deck
 
-为当前项目写出 Deck 的项目配置。之后新开的 Session 里 Pane 会自动出现。
+为当前项目写出 Deck 的项目配置。Claude Code 和 Codex 读的是同一份，在哪个宿主里配置都一样。本技能在 Claude Code 里是 `/matt-deck:configure`，在 Codex 里是 `$matt-deck-configure`。
 
-所有读写都经 Deck 服务（MCP 服务 `deck`）的三个工具完成：`deck_setup_survey` 摸底，`deck_write_config` 写出配置文件，`deck_allow_service` 写入允许 Deck 服务的权限规则。一次只问一个问题，把推荐答案放在最前面。
+所有读写都经 Deck 服务（Claude Code 里是 MCP 服务 `deck`，Codex 里是 `matt_deck`）的工具完成：`deck_setup_survey` 摸底，`deck_write_config` 写出配置文件；以 Claude Code 为宿主时还有 `deck_allow_service`，写入允许 Deck 服务的权限规则。一次只问一个问题，把推荐答案放在最前面。
 
 ## 1. 摸底
 
 调用 `deck_setup_survey`。它返回：
 
+- `host`：Deck 服务所在的宿主，`claude-code` 或 `codex`。
 - `existing`：现有配置。`{ configured: false }`；`{ configured: true, config }`；或配置文件存在但格式不对时的 `{ configured: true, problem }`。
 - `taskSource`：从仓库的 Matt issue tracker 文档预填的 Task Source，没有文档时为 `null`。`tracker` 是文档标题里写的任务来源，标题里读不出时为 `null`。`type` 是它对应的 Task Source 类型，没有可预填的类型时为 `null`。
-- `skillSources`：本机找到的 Matt skills，每份一项，可直接放进配置。
-- `isServiceAllowed`：本项目的 `.claude/settings.local.json` 里是否已有允许 Deck 服务工具的权限规则。
+- `skillSources`：本机找到的 Matt skills，每份一项，可直接放进配置。`host` 为 `codex` 时还包括项目里 Codex 的技能目录（`.agents/skills`、`.codex/skills`），这两项的路径相对项目根目录写，随仓库走。
+- `isServiceAllowed`：只在 `host` 为 `claude-code` 时有。本项目的 `.claude/settings.local.json` 里是否已有允许 Deck 服务工具的权限规则。
 
 Deck 服务连不上时，告诉用户原因并停止。
 
@@ -55,6 +56,8 @@ Skill Source 选定后，Deck 展示和 agent 执行都用这一份；要改就�
 
 ## 6. 权限规则
 
+`host` 为 `codex` 时跳过这一步，直接到最后一句：权限规则只对 Claude Code 有意义，Codex 下也没有 `deck_allow_service`。
+
 Pane 的每次读取都是对 Deck 服务工具的一次调用。项目里没有允许这些工具的权限规则时，每次调用都要先经过 Session 的权限钩子；钩子等人批准的环境里（例如 cmux），Pane 会迟迟不出现，每次刷新都要等。
 
 `isServiceAllowed` 为 `true`：规则已经在，不用问。
@@ -67,4 +70,4 @@ Pane 的每次读取都是对 Deck 服务工具的一次调用。项目里没有
 
 用户同意就调用 `deck_allow_service`；工具报错时把原文告诉用户。用户不同意就不写，并说明：Pane 读取迟迟不返回时，可以再运行一次本技能补上。
 
-最后告诉用户：新开一个 Session，Pane 会自动出现。
+最后告诉用户怎么看到 Pane：`host` 为 `claude-code` 时，新开一个 Session，Pane 会自动出现；`host` 为 `codex` 时，在 Pane 上点“刷新”，或从 Session 的标签页菜单打开 Matt Deck。
