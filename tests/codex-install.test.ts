@@ -3,7 +3,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
@@ -68,6 +68,43 @@ test('install registers the Deck service in the Codex config of the user, keepin
   const listed = await reply
   child.kill()
   assert.ok(listed.result.tools.some((tool: any) => tool.name === 'deck_pane'))
+})
+
+// A directory holding a `node` that is not the node running install.
+const otherNode = async () => {
+  const dir = await home()
+  await writeFile(join(dir, 'node'), '#!/bin/sh\n', { mode: 0o755 })
+
+  return dir
+}
+
+test('install registers the node found on its PATH through a link to the node running it, as the path of that link', async () => {
+  const user = await home()
+  // As a package manager links its node into a bin directory that survives
+  // an upgrade.
+  const linked = await home()
+  await symlink(process.execPath, join(linked, 'node'))
+
+  await exec(process.execPath, [CODEX, 'install'], { env: { ...process.env, HOME: user, PATH: [await otherNode(), linked, process.env.PATH].join(delimiter) } })
+
+  assert.equal(registration(await readFile(join(user, '.codex', 'config.toml'), 'utf8')).command, join(linked, 'node'))
+})
+
+test('install registers the path of the node running it when no node on its PATH is that node, but through a relative entry', async () => {
+  const user = await home()
+  const linked = await home()
+  await symlink(process.execPath, join(linked, 'node'))
+
+  await exec(process.execPath, [CODEX, 'install'], { cwd: linked, env: { ...process.env, HOME: user, PATH: [await otherNode(), await home(), '.'].join(delimiter) } })
+
+  assert.equal(registration(await readFile(join(user, '.codex', 'config.toml'), 'utf8')).command, process.execPath)
+})
+
+test('install says which copy of the plugin the registration and the configure skill point at, and to run it again once that copy moves or is updated', async () => {
+  const { stdout } = await run(await home(), 'install')
+
+  assert.ok(stdout.includes(join(import.meta.dirname, '..', 'plugin')), stdout)
+  assert.match(stdout, /挪了位置或更新之后.*重新运行一次 install/)
 })
 
 test('install writes the Codex config when there is none, and registers the Deck service once however often it runs', async () => {
@@ -221,6 +258,7 @@ test('the Codex command line takes install or uninstall', async () => {
     await assert.rejects(run(user, ...args), (error: any) => {
       assert.equal(error.code, 2)
       assert.match(error.stderr, /Usage:/)
+      assert.match(error.stderr, /挪了位置或更新之后.*重新运行一次 install/)
       return true
     })
   }

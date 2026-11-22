@@ -3,19 +3,22 @@
 // config, never a project's (ADR-0006), so the Deck service is registered
 // there, started for Codex. Install also generates the configure skill as
 // Codex names it, in the user's own Codex skills.
-import { lstat, mkdir, readdir, readFile, rm, rmdir, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, realpath, rm, rmdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 
 import { CODEX_CONFIGURE_SKILL } from '../server/hosts.ts'
 
 const USAGE = `Usage: node <matt-deck>/cli/codex.ts <install|uninstall>
 
-install：把 Deck 服务注册进 Codex 的用户全局配置 ~/.codex/config.toml，原有内容保留；在 ~/.agents/skills 里生成配置技能 ${CODEX_CONFIGURE_SKILL}。装完要重启 Codex 桌面应用。
+install：把 Deck 服务注册进 Codex 的用户全局配置 ~/.codex/config.toml，原有内容保留；在 ~/.agents/skills 里生成配置技能 ${CODEX_CONFIGURE_SKILL}。装完要重启 Codex 桌面应用。注册和配置技能指向运行 install 的这一份插件，它挪了位置或更新之后要重新运行一次 install。
 uninstall：从 ~/.codex/config.toml 移除 Deck 服务的注册，别的内容不动；移除 Deck 生成的 ${CODEX_CONFIGURE_SKILL}。
 退出码：0 成功，1 读写失败或那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}，2 参数错误。
 `
 const TABLE = 'mcp_servers.matt_deck'
+// The copy of the plugin running install, which the registration and the
+// generated skill point at.
+const PLUGIN = join(import.meta.dirname, '..')
 
 // The skill install generates: one sentence sending the agent to the
 // plugin's configure skill. The comment line marks it as Deck's, so a skill
@@ -28,7 +31,7 @@ description: 在 Codex 里首次配置 Matt Deck：为当前项目选定 Task So
 
 ${GENERATED}
 
-读 \`${join(import.meta.dirname, '..', 'skills', 'configure', 'SKILL.md')}\`，照它的步骤配置当前项目。
+读 \`${join(PLUGIN, 'skills', 'configure', 'SKILL.md')}\`，照它的步骤配置当前项目。
 `
 
 // What a file holds, or undefined when it is not there.
@@ -96,16 +99,28 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
           `${skillDir} 里已有一份不是 Deck 生成的技能 ${CODEX_CONFIGURE_SKILL}，没有安装，什么都没改。移走它之后再运行一次 install。`,
         )
       }
+      // The node registered is the first on install's PATH that is the node
+      // running it, by the path found there: a package manager's link to it
+      // outlives an upgrade, the versioned path the link reaches does not.
+      // Node gives its own path with the links resolved. Only an absolute
+      // entry: Codex starts the service from elsewhere.
+      let node = process.execPath
+      for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+        if (isAbsolute(dir) && (await realpath(join(dir, 'node')).catch(() => undefined)) === process.execPath) {
+          node = join(dir, 'node')
+          break
+        }
+      }
       // A JSON string is a TOML basic string.
-      const launch = [join(import.meta.dirname, '..', 'server', 'main.ts'), '--host', 'codex']
-      const table = `[${TABLE}]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${launch.map(arg => JSON.stringify(arg)).join(', ')}]\n`
+      const launch = [join(PLUGIN, 'server', 'main.ts'), '--host', 'codex']
+      const table = `[${TABLE}]\ncommand = ${JSON.stringify(node)}\nargs = [${launch.map(arg => JSON.stringify(arg)).join(', ')}]\n`
       const gap = kept === '' ? '' : kept.endsWith('\n') ? '\n' : '\n\n'
       await mkdir(dirname(config), { recursive: true })
       await writeFile(config, `${kept}${gap}${table}`)
       await mkdir(skillDir, { recursive: true })
       await writeFile(join(skillDir, 'SKILL.md'), configureSkill)
       process.stdout.write(
-        `已把 Deck 服务注册进 ${config}。\n已生成配置技能 ${join(skillDir, 'SKILL.md')}，在 Codex 里用 $${CODEX_CONFIGURE_SKILL} 调用。\n重启 Codex 桌面应用之后，每个 Session 的标签页菜单里出现 Matt Deck。\n`,
+        `已把 Deck 服务注册进 ${config}。\n已生成配置技能 ${join(skillDir, 'SKILL.md')}，在 Codex 里用 $${CODEX_CONFIGURE_SKILL} 调用。\n重启 Codex 桌面应用之后，每个 Session 的标签页菜单里出现 Matt Deck。\n注册和配置技能指向的是 ${PLUGIN} 这一份插件，它挪了位置或更新之后要重新运行一次 install。\n`,
       )
     } else {
       if (before === undefined || kept === before) {
