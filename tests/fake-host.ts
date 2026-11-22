@@ -15,13 +15,16 @@ export const answered = (structuredContent: object) => ({
   isError: false,
 })
 
+// The Host's context as it gives it to the page; `theme` is its appearance.
+type HostContext = { theme?: 'light' | 'dark'; [key: string]: unknown }
+
 export const openPage = async ({
   answer,
   hostContext = {},
 }: {
   // What the Deck service answers a tool call the Host passes on.
   answer: (name: string, args: object) => object | Promise<object>
-  hostContext?: object
+  hostContext?: HostContext
 }) => {
   const html = await readFile(PANE_PAGE, 'utf8')
   const host = new JSDOM('').window
@@ -67,11 +70,22 @@ export const openPage = async ({
     page.window.dispatchEvent(
       new page.window.MessageEvent('message', { data: { jsonrpc: '2.0', ...message }, source: host as any }),
     )
+  // The Host writes its appearance on the page's root element, as Codex does,
+  // over whatever the page wrote there.
+  const showTheme = ({ theme }: HostContext) => {
+    if (theme !== undefined) {
+      page.window.document.documentElement.dataset.theme = theme
+    }
+  }
 
   host.addEventListener('message', async (event: any) => {
     // A copy, as a frame's message reaches its parent cloned.
     const data = JSON.parse(JSON.stringify(event.data))
     sent.push(data)
+    if (data.method === 'ui/notifications/initialized') {
+      // Once the handshake is done, so after the page has followed the theme.
+      showTheme(hostContext)
+    }
     if (data.id === undefined) {
       return
     }
@@ -113,8 +127,12 @@ export const openPage = async ({
     fetched,
     html,
     settled,
-    // A notification from the Host, such as a change of its context.
-    notify: async (method: string, params: object) => {
+    // A notification from the Host, such as a change of its context. A change
+    // of its appearance it writes on the root element before it tells the page.
+    notify: async (method: string, params: HostContext) => {
+      if (method === 'ui/notifications/host-context-changed') {
+        showTheme(params)
+      }
       toPage({ method, params })
       await settled()
     },

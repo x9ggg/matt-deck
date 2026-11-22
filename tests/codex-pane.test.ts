@@ -199,19 +199,27 @@ test('the Pane is dark or light as the Host is, and follows the Host as it chang
   t.after(light.close)
   const dark = await openPage({ answer: deckAt('/work/matt-deck'), hostContext: { theme: 'dark' } })
   t.after(dark.close)
-  const theme = (page: typeof light) => page.document.documentElement.dataset.theme
+  // The Pane's theme, the ground the Pane is drawn on, and what the Host wrote
+  // on the root element, which the page leaves to it.
+  const theme = (page: typeof light) => [
+    page.document.body.dataset.theme,
+    page.window.getComputedStyle(page.document.querySelector('.dk-pane')!).backgroundColor,
+    page.document.documentElement.dataset.theme,
+  ]
+  const LIGHT_GROUND = 'rgb(244, 246, 248)'
+  const DARK_GROUND = 'rgb(19, 26, 34)'
 
-  assert.equal(theme(light), 'deck-light')
-  assert.equal(theme(dark), 'deck')
+  assert.deepEqual(theme(light), ['deck-light', LIGHT_GROUND, 'light'])
+  assert.deepEqual(theme(dark), ['deck', DARK_GROUND, 'dark'])
 
   await light.notify('ui/notifications/host-context-changed', { theme: 'dark' })
   await dark.notify('ui/notifications/host-context-changed', { theme: 'light' })
-  assert.equal(theme(light), 'deck')
-  assert.equal(theme(dark), 'deck-light')
+  assert.deepEqual(theme(light), ['deck', DARK_GROUND, 'dark'])
+  assert.deepEqual(theme(dark), ['deck-light', LIGHT_GROUND, 'light'])
 
   // A change of something else leaves the theme as it is.
   await dark.notify('ui/notifications/host-context-changed', { containerDimensions: { width: 638 } })
-  assert.equal(theme(dark), 'deck-light')
+  assert.deepEqual(theme(dark), ['deck-light', LIGHT_GROUND, 'light'])
 })
 
 test('the Pane asks for no resource outside itself', async t => {

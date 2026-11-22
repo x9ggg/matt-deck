@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="deck">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -298,7 +298,7 @@ body{margin:0;background:var(--ground)}
 [hidden]{display:none !important}
 </style>
 </head>
-<body>
+<body data-theme="deck">
 <div class="dk-pane">
   <div class="dk-top">
     <header class="dk-head">
@@ -334,7 +334,6 @@ body{margin:0;background:var(--ground)}
 // in; the page never names it, the Deck service reads it from each call.
 ;(async () => {
   const $ = id => document.getElementById(id)
-  const root = document.documentElement
 
   let lastId = 0
   const waiting = new Map()
@@ -347,10 +346,12 @@ body{margin:0;background:var(--ground)}
     })
 
   // Dark or light as the Host is: its context names the theme in the
-  // handshake, and again in a change of it.
+  // handshake, and again in a change of it. The theme is written on the body:
+  // the root element's data-theme is the Host's, which writes its own light or
+  // dark there.
   const follow = context => {
-    if (context?.theme === 'light') root.dataset.theme = 'deck-light'
-    if (context?.theme === 'dark') root.dataset.theme = 'deck'
+    if (context?.theme === 'light') document.body.dataset.theme = 'deck-light'
+    if (context?.theme === 'dark') document.body.dataset.theme = 'deck'
   }
 
   window.addEventListener('message', ({ source, data }) => {
