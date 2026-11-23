@@ -296,11 +296,20 @@ body{margin:0;background:var(--ground)}
 
 /* What the page hides it hides, whatever display a component's class gives. */
 [hidden]{display:none !important}
-/* A tab's content, and the groups in it, are laid out as the Pane's own. */
-[data-panel],#groups{display:contents}
-/* So are the skill list and a skill's text; the text is as its file has it. */
-#skill-list,#skill-text{display:contents}
+/* A tab's content, and the groups in it, are laid out as the Pane's own; so
+   is what is drilled into, its way back and its content. */
+[data-panel],#groups,#into,#into-end,#into-body{display:contents}
+/* So is the skill list; a skill's text is as its file has it. */
+#skill-list{display:contents}
 .dk-raw{white-space:pre-wrap;overflow-wrap:anywhere}
+/* Text the Task Source gives keeps its lines as written. */
+.dk-prose p{white-space:pre-wrap}
+/* A checked acceptance criterion: its box filled. */
+.dk-prose li.is-checked::before{border-color:var(--pass);background:var(--pass)}
+/* A Task blocking the one shown goes on into it. */
+.dk-edge{cursor:pointer}
+/* A badge's words are in its colours, whatever their row gives them. */
+.dk-pane .dk-badge span{color:inherit}
 </style>
 </head>
 <body data-theme="deck">
@@ -358,7 +367,14 @@ body{margin:0;background:var(--ground)}
   </div>
   <div data-panel="skills" id="skills" hidden>
     <div id="skill-list"><p class="dk-why">正在读取技能…</p></div>
-    <div id="skill-text" hidden></div>
+  </div>
+  <div id="into" hidden>
+    <div class="dk-bar">
+      <button class="dk-btn dk-btn--sm" type="button" id="back">返回</button>
+      <span class="dk-crumbs" id="crumbs"></span>
+      <span id="into-end"></span>
+    </div>
+    <div id="into-body"></div>
   </div>
 </div>
 <script>
@@ -476,6 +492,12 @@ body{margin:0;background:var(--ground)}
     element.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${paths}</svg>`
     return element
   }
+  // The element, its glyph before what it says.
+  const glyphed = (element, paths) => {
+    element.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 16 16" aria-hidden="true">${paths}</svg>`)
+    return element
+  }
+  const CHECK = '<path d="M2.8 8.6 6.4 12.2 13.2 4.4" fill="none" stroke="currentColor" stroke-width="1.8"/>'
   const pad = n => String(n).padStart(2, '0')
   // A closing time in the local time zone: `11-22 01:40`.
   const shortTime = at => {
@@ -502,9 +524,9 @@ body{margin:0;background:var(--ground)}
       el('div', 'dk-row__line', ...before, el('span', `dk-id is-${state}`, `#${task.number}`), el('span', 'dk-row__title heading', task.title), ...after),
       el('div', 'dk-row__line', el('span', 'dk-row__meta caption', ...meta), ...aside)))
 
-  const taskRow = (task, group) => {
-    const state = stateOf(task, group)
-    const status = {
+  // What a Task's row says of its state, and the detail's badge.
+  const statusOf = (task, state) =>
+    ({
       ready: [el('span', '', '可执行')],
       running: [el('span', '', '进行中 · 本 Session')],
       // Another Session of this Host by its cut-short id alone, one of the
@@ -513,31 +535,39 @@ body{margin:0;background:var(--ground)}
       orphaned: [el('span', 'is-warn', 'Orphaned')],
       blocked: task.blockers.length > 0 ? [el('span', '', `被 ${task.blockers.map(number => `#${number}`).join(' ')} 阻塞`)] : [],
       closed: [el('span', 'is-unlock', '已解锁')],
-    }[state]
-    if (state === 'closed' && task.hasEvidence) {
-      const evidence = el('span', 'is-pass', '验收证据')
-      evidence.insertAdjacentHTML('afterbegin', '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8.6 6.4 12.2 13.2 4.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>')
-      status.push(evidence)
-    }
-    // Blocked by no Task, it waits on the label that puts it there; else its
-    // first triage label.
-    const label = state === 'blocked' && task.blockers.length === 0
+    })[state]
+  // Blocked by no Task, a Task waits on the label that puts it there; else it
+  // shows its first triage label.
+  const labelOf = (task, state) =>
+    state === 'blocked' && task.blockers.length === 0
       ? task.labels.find(each => WAITING_LABELS.includes(each))
       : task.labels.find(each => TRIAGE_LABELS.includes(each))
+
+  const taskRow = (task, group) => {
+    const state = stateOf(task, group)
+    const status = statusOf(task, state)
+    if (state === 'closed' && task.hasEvidence) status.push(glyphed(el('span', 'is-pass', '验收证据'), CHECK))
+    const label = labelOf(task, state)
     const meta = [...status, ...(label === undefined ? [] : [el('span', 'dk-tag', label)])]
     const aside = state === 'closed' && task.closedAt !== null ? [el('span', 'dk-row__aside caption', shortTime(task.closedAt))] : []
-    return row(task, state, '', [], [], meta, aside)
+    const element = row(task, state, '', [], [], meta, aside)
+    element.addEventListener('click', () => openTask(task.number))
+    return element
   }
+
+  // Every Task of the list with the group it stands in; a Spec or Map where
+  // it stands as a Task.
+  const entries = () => [
+    ...list.containers.map(each => [each, each.group]),
+    ...GROUPS.flatMap(group => list.groups[group].map(each => [each, group])),
+  ]
 
   // A Spec or Map: its glyph by its direct Child Tasks in progress, else as a
   // Task's (docs/pane-layout.md); its progress, and its Child Tasks by group.
   const containerRow = container => {
     // Its direct Child Tasks, each with the group it stands in; a Spec or Map
     // among them where it stands as a Task.
-    const children = [
-      ...list.containers.map(child => [child, child.group]),
-      ...GROUPS.flatMap(group => list.groups[group].map(child => [child, group])),
-    ].filter(([child]) => child.parent === container.number)
+    const children = entries().filter(([child]) => child.parent === container.number)
     const inGroup = group => children.filter(([, each]) => each === group).map(([child]) => child)
     const inProgress = inGroup('inProgress')
     const state = container.isPendingCloseout
@@ -553,7 +583,9 @@ body{margin:0;background:var(--ground)}
     const meta = container.isPendingCloseout
       ? [el('span', 'is-unlock', '待收尾核对')]
       : [el('span', '', ['ready', 'inProgress', 'blocked'].map(group => `${inGroup(group).length} ${GROUP_TITLE[group]}`).join(' · '))]
-    return row(container, state, ' dk-row--container', [el('span', 'dk-kind label', container.kind === 'spec' ? 'Spec' : 'Map')], [ring], meta, [])
+    const element = row(container, state, ' dk-row--container', [el('span', 'dk-kind label', container.kind === 'spec' ? 'Spec' : 'Map')], [ring], meta, [])
+    element.addEventListener('click', () => openTask(container.number))
+    return element
   }
 
   // The list as the filter shows it: under "all", the open Specs and Maps,
@@ -608,6 +640,128 @@ body{margin:0;background:var(--ground)}
     })
   }
 
+  // Entering and going back (docs/codex-tab-layout.md, "进入和返回"), for every
+  // view that drills in. What is entered replaces the content of the tab it is
+  // entered from, under the way back; the head and the tabs stay. The way is
+  // kept here, outside the DOM each read draws again: `tab`, the tab it starts
+  // from, and `steps`, the last one shown. Leaving the tab leaves the way.
+  //
+  // A view enters a step with enter({ crumb, draw, drawn }) from its tab's
+  // content or from the step shown: `crumb` names it in the way ('#70',
+  // '$implement'); `draw` reads what it shows and answers { end, body }, the
+  // elements at the end of the bar and its content; `drawn` is what it shows
+  // until the first drawing answers; `withTasks`, whether it is drawn from the
+  // Tasks. A step draws as it is entered, as the way goes back to it, and with
+  // "刷新"; drawn from the Tasks, with each read of them too. What it drew last
+  // stays until the next drawing answers. "返回" goes back one step, to where
+  // the page was scrolled when it was entered.
+  let into
+  const chosenTab = () => tabs.find(tab => tab.getAttribute('aria-selected') === 'true').dataset.tab
+  const enter = step => {
+    into ??= { tab: chosenTab(), steps: [] }
+    into.steps.push({ ...step, left: window.scrollY })
+    showPanel()
+    window.scrollTo(0, 0)
+    drawStep()
+  }
+  const back = () => {
+    const { left } = into.steps.pop()
+    if (into.steps.length === 0) into = undefined
+    showPanel()
+    // What the step drew last is shown before the page scrolls to where it
+    // was: a browser stops a scroll at the end of what is shown.
+    drawStep()
+    window.scrollTo(0, left)
+  }
+  // The step shown: the way to it, what it drew last, then what it draws now.
+  const drawStep = async () => {
+    if (into === undefined) return
+    const step = into.steps.at(-1)
+    const show = ({ end, body }) => {
+      $('into-end').replaceChildren(...end)
+      $('into-body').replaceChildren(...body)
+    }
+    const way = [tabs.find(tab => tab.dataset.tab === into.tab).textContent, ...into.steps.slice(0, -1).map(each => each.crumb)]
+    $('crumbs').replaceChildren(`${way.join(' / ')} / `, el('b', '', step.crumb))
+    show(step.drawn)
+    step.drawn = await step.draw()
+    if (into?.steps.at(-1) === step) show(step.drawn)
+  }
+
+  // The detail of the Task `number`, entered from its row or from the detail
+  // shown. What the list knows of it (its state, what blocks it) comes from
+  // the list, the rest from its own read.
+  const openTask = number =>
+    enter({ crumb: `#${number}`, withTasks: true, draw: () => drawTask(number), drawn: { end: [], body: [el('p', 'dk-why', `正在读取 #${number}…`)] } })
+
+  const drawTask = async number => {
+    let answer
+    let failure
+    try {
+      answer = await callTool('deck_task', { number })
+      if (!answer.ok) failure = FAILURE[answer.failure.kind](answer.failure.message)
+    } catch (error) {
+      failure = [`Deck 服务出错：${error.message}。点“刷新”重试。`]
+    }
+    if (failure !== undefined) {
+      const notice = failedNotice(`读取 #${number} 失败`, '')
+      notice.querySelector('.dk-notice__text').replaceChildren(...failure)
+      return { end: [], body: [notice] }
+    }
+    const { task, reports } = answer
+    const entryOf = wanted => entries().find(([each]) => each.number === wanted)
+    const [entry, group] = entryOf(number) ?? []
+    const state = entry && stateOf(entry, group)
+    const status = state === undefined ? [] : statusOf(entry, state)
+    const label = labelOf({ blockers: [], ...entry, labels: task.labels }, state)
+    const updated = new Date(task.updatedAt)
+    const meta = el('div', 'dk-detail__meta caption',
+      ...(status.length === 0 ? [] : [glyphed(el('span', `dk-badge caption is-${state}`, ...status), PLATE[state][1])]),
+      ...(reports.some(report => report.evidence.length > 0) ? [glyphed(el('span', 'dk-badge caption is-evidence', '验收证据'), CHECK)] : []),
+      ...(label === undefined ? [] : [el('span', 'dk-tag', label)]),
+      el('span', '', task.assignees.join(', ') || '未指派'),
+      el('span', '', task.isOpen ? `更新 ${pad(updated.getMonth() + 1)}-${pad(updated.getDate())}` : `关闭 ${shortTime(task.closedAt)}`))
+    const section = (head, ...content) => el('section', 'dk-section', el('header', 'dk-section__head label', ...head), ...content)
+    const why = said => el('span', 'dk-why caption', said)
+    // Each Task blocking it, drawn by its own state; clicked, the way goes on
+    // into it.
+    const blockers = (entry?.blockers ?? []).map(entryOf).map(([blocker, its]) => {
+      const itsState = stateOf(blocker, its)
+      const glyph = glyphed(el('span', ''), PLATE[itsState][1])
+      glyph.setAttribute('role', 'img')
+      glyph.setAttribute('aria-label', PLATE[itsState][0])
+      const edge = el('div', `dk-edge is-${itsState}`, glyph, el('span', `dk-id is-${itsState}`, `#${blocker.number}`), el('span', '', blocker.title))
+      edge.addEventListener('click', () => openTask(blocker.number))
+      return edge
+    })
+    // A report's Session: one of this Host by its cut-short id, this one
+    // too, one of the other Host after the Host's name.
+    const reporter = report => `${report.sessionHost === session.sessionHost ? 'Session' : HOST_NAME[report.sessionHost]} ${report.sessionShort}`
+    const open = el('button', 'dk-btn dk-btn--sm dk-btn--quiet', '在 GitHub 打开')
+    open.type = 'button'
+    // Through the Host, which opens it in the browser: the page holds no link.
+    open.addEventListener('click', () => request('ui/open-link', { url: task.url }))
+
+    return {
+      end: [open],
+      body: [el('div', 'dk-detail',
+        el('div', 'dk-detail__title title', el('span', `dk-id${state === undefined ? '' : ` is-${state}`}`, `#${task.number}`), el('span', '', task.title)),
+        meta,
+        section(['描述'], task.description === '' ? why('没有描述。') : el('div', 'dk-prose', el('p', '', task.description))),
+        section(['验收条件'], task.acceptance.length === 0
+          ? why('正文里没有验收条件。')
+          : el('div', 'dk-prose', el('ul', '', ...task.acceptance.map(item => el('li', item.isChecked ? 'is-checked' : '', item.text))))),
+        ...(blockers.length === 0 ? [] : [section(['被阻塞', el('span', 'mono', String(blockers.length))], ...blockers)]),
+        section(['执行记录'], reports.length === 0
+          ? why('还没有 Session 执行过这个 Task。')
+          : el('div', 'dk-log', ...reports.map(report => el('div', 'dk-log__item',
+              el('div', 'dk-log__who', el('span', '', reporter(report)), el('span', '', shortTime(report.reportedAt))),
+              el('span', 'dk-log__text', report.result),
+              ...report.evidence.map(each => glyphed(el('span', 'is-pass caption', `验收证据：${each.text}（来自 ${each.source}）`), CHECK)))))),
+      )],
+    }
+  }
+
   // Reads the Tasks, the Task Source again when `refresh` asks for it. A read
   // that fails says why above the list read before, if any.
   const readTasks = async refresh => {
@@ -639,6 +793,8 @@ body{margin:0;background:var(--ground)}
   // Whether the 技能 tab has read the skills since "刷新" was last clicked.
   // Only "刷新" reads them again; the reads while the tab is shown do not.
   let skillsRead = false
+  // The skills the last read of the Skill Source listed.
+  let skillsListed = []
 
   const read = async (refresh = false) => {
     $('refresh').disabled = true
@@ -658,13 +814,18 @@ body{margin:0;background:var(--ground)}
         readAt = undefined
         showFreshness()
       }
-      if (config.configured) await readTasks(refresh)
-      if (config.configured && refresh) {
-        // Read again, the page no longer says a request was not made.
-        asking = { ...asking, failure: undefined }
-        skillsRead = false
-        if (!$('skills').hidden) await showSkillsTab()
-        if (!$('next').hidden) await readSkills()
+      if (config.configured) {
+        await readTasks(refresh)
+        if (refresh) {
+          // Read again, the page no longer says a request was not made.
+          asking = { ...asking, failure: undefined }
+          skillsRead = false
+          if (chosenTab() === 'skills') await showSkillsTab()
+          if (!$('next').hidden) await readSkills()
+        }
+        // A step drawn from the Tasks draws again with each read of them;
+        // every step with "刷新", after what it is drawn from is read again.
+        if (refresh || into?.steps.at(-1).withTasks) await drawStep()
       }
     } catch (error) {
       $('failed').querySelector('.dk-notice__text').textContent = `Deck 服务出错：${error.message}。点“刷新”重试。`
@@ -736,27 +897,19 @@ body{margin:0;background:var(--ground)}
     return button
   }
 
-  // The list again, scrolled where it was when a skill's text was opened.
-  let listScrolledTo = 0
-  let openedText = 0
-  const showSkillList = scrollTop => {
-    openedText++
-    $('skill-text').hidden = true
-    $('skill-list').hidden = false
-    if (scrollTop !== undefined) document.documentElement.scrollTop = scrollTop
+  // A skill's text, entered from its row, with its "预填" at the end of the
+  // bar (see "Entering and going back"), on or off by what the last read of
+  // the skills says of it: a skill no longer listed is found by Codex no more.
+  const openSkillText = skill => {
+    enter({
+      crumb: skill.call,
+      draw: () => drawSkillText(skill),
+      drawn: { end: [prefillButton(skill)], body: [el('p', 'dk-why', '正在读取技能…')] },
+    })
   }
 
-  const openSkillText = async skill => {
-    const opened = ++openedText
-    listScrolledTo = document.documentElement.scrollTop
-    const back = smallButton('返回')
-    back.addEventListener('click', () => showSkillList(listScrolledTo))
-    const bar = el('div', 'dk-bar', back, el('span', 'dk-crumbs', '技能 /', el('b', '', skill.call)), prefillButton(skill))
-    $('skill-list').hidden = true
-    $('skill-text').hidden = false
-    $('skill-text').replaceChildren(bar, el('p', 'dk-why', '正在读取技能…'))
-    // The text is read from its top, the bar first.
-    document.documentElement.scrollTop = 0
+  const drawSkillText = async skill => {
+    const prefillIt = prefillButton(skillsListed.find(each => each.name === skill.name) ?? { ...skill, copy: 'missing' })
     let body
     try {
       const answer = await callTool('deck_skill', { name: skill.name })
@@ -772,7 +925,7 @@ body{margin:0;background:var(--ground)}
     } catch (error) {
       body = failedNotice('读取技能失败', skillFailure({ message: error.message }))
     }
-    if (opened === openedText) $('skill-text').replaceChildren(bar, body)
+    return { end: [prefillIt], body: [body] }
   }
 
   const skillRow = skill => {
@@ -806,10 +959,13 @@ body{margin:0;background:var(--ground)}
   // $ask-matt is the general entry.
   const showSkills = answer => {
     if (!answer.ok) {
+      // Unread, no skill is known to be the same file Codex finds.
+      skillsListed = []
       $('skill-list').replaceChildren(failedNotice('读取 Skill Source 失败', skillFailure(answer.failure)))
       return
     }
     const { source, skills } = answer
+    skillsListed = skills
     const shown = [
       el(
         'div',
@@ -850,6 +1006,7 @@ body{margin:0;background:var(--ground)}
       showSkills(answer)
       askMatt = answer.ok ? (answer.skills.find(skill => skill.name === 'ask-matt') ?? null) : null
     } catch (error) {
+      skillsListed = []
       $('skill-list').replaceChildren(failedNotice('读取 Skill Source 失败', skillFailure({ message: error.message })))
       askMatt = null
     }
@@ -858,7 +1015,6 @@ body{margin:0;background:var(--ground)}
 
   // The 技能 tab shows its list, read once since "刷新" was last clicked.
   const showSkillsTab = async () => {
-    showSkillList()
     if (!skillsRead) await readSkills()
   }
 
@@ -921,10 +1077,7 @@ body{margin:0;background:var(--ground)}
   // its glyph and title where the list read holds it; "无" for a field with
   // nothing in it.
   const recommendationCard = ({ task, nextStep, skill, reason, blockers }) => {
-    const found = list === undefined
-      ? undefined
-      : [...list.containers.map(each => [each, each.group]), ...GROUPS.flatMap(group => list.groups[group].map(each => [each, group]))]
-          .find(([each]) => each.number === task)
+    const found = list === undefined ? undefined : entries().find(([each]) => each.number === task)
     const glyph = found === undefined ? [] : [plate(stateOf(...found))]
     glyph.forEach(each => each.classList.add('dk-plate--lg'))
     const title = found !== undefined ? found[0].title : task === null ? '无' : '任务列表里没有这个 Task'
@@ -1010,19 +1163,23 @@ body{margin:0;background:var(--ground)}
   }
 
   const tabs = [...$('tabs').querySelectorAll('[role="tab"]')]
-  // The content of the tab chosen, in a Configured Project.
+  // The content of the tab chosen, in a Configured Project, or what is
+  // entered from it.
   const showPanel = () => {
-    const chosen = tabs.find(tab => tab.getAttribute('aria-selected') === 'true').dataset.tab
-    for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = $('tabs').hidden || panel.dataset.panel !== chosen
+    const chosen = chosenTab()
+    for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = $('tabs').hidden || into !== undefined || panel.dataset.panel !== chosen
+    $('into').hidden = $('tabs').hidden || into === undefined
   }
   for (const tab of tabs) {
     tab.addEventListener('click', () => {
       for (const each of tabs) each.setAttribute('aria-selected', String(each === tab))
+      into = undefined
       showPanel()
       if (tab.dataset.tab === 'skills') showSkillsTab()
       if (tab.dataset.tab === 'next') showNextTab()
     })
   }
+  $('back').addEventListener('click', back)
   $('refresh').addEventListener('click', () => read(true))
 
   // While the tab is shown the Pane reads every 60 seconds, and once as it

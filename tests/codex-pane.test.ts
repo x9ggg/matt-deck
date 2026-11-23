@@ -80,11 +80,90 @@ const TASKS = {
   },
 }
 
+// A Task as deck_tasks reads it, with every report of it: open, blocking
+// none, its link one the page could not make itself.
+const detail = (number: number, title: string, more: object = {}, reports: object[] = []) => ({
+  ok: true,
+  task: {
+    number,
+    title,
+    isOpen: true,
+    closedAt: null,
+    updatedAt: '2026-11-21T08:30:00Z',
+    labels: ['ready-for-agent'],
+    assignees: [],
+    url: `https://tasks.example/as-the-deck-service-says/${number}`,
+    description: `#${number} 的描述。`,
+    acceptance: [{ text: `#${number} 的验收条件`, isChecked: false }],
+    ...more,
+  },
+  reports,
+})
+
+// What deck_task reads of each Task of TASKS the tests open.
+const DETAILS: Record<number, object> = {
+  70: detail(70, 'Task 详情', {
+    description: '从任务列表点开一个 Task。\n\n再返回列表。',
+    acceptance: [
+      { text: '返回到原来的位置', isChecked: true },
+      { text: '来路变长', isChecked: false },
+    ],
+    // Read since the list was: its triage label is the one the detail shows.
+    labels: ['enhancement', 'ready-for-human'],
+    assignees: ['x9ggg', 'someone'],
+  }),
+  // Reported, with no Acceptance Evidence.
+  72: detail(72, 'Matt 技能', {}, [
+    { session: OTHER_CODEX, sessionHost: 'codex', sessionShort: '77e0aa15', reportedAt: Date.UTC(2026, 10, 22, 7, 0), result: '做了一半。', evidence: [] },
+  ]),
+  // Its first triage label is not the one it waits on.
+  19: detail(19, '等分诊', { labels: ['wontfix', 'needs-triage'] }),
+  74: detail(74, '执行与 Occupancy 登记'),
+  69: detail(69, '任务列表'),
+  75: detail(75, '心跳与 Orphaned'),
+  73: detail(73, '推荐：我现在该做什么'),
+  64: detail(64, '规格：里程碑二', { labels: [] }),
+  66: detail(
+    66,
+    '骨架',
+    { isOpen: false, closedAt: '2026-11-22T01:40:00Z', description: '', acceptance: [] },
+    [
+      {
+        session: SESSION.session,
+        sessionHost: 'codex',
+        sessionShort: '045b96fc',
+        reportedAt: Date.UTC(2026, 10, 22, 1, 38),
+        result: '页面在标签页里打开。',
+        evidence: [
+          { text: 'npm test 全部通过', source: 'npm test' },
+          { text: '标签页能切换', source: 'commit edaa839' },
+        ],
+      },
+      {
+        session: OTHER_CODEX,
+        sessionHost: 'codex',
+        sessionShort: '77e0aa15',
+        reportedAt: Date.UTC(2026, 10, 21, 23, 5),
+        result: '重新跑了一遍测试。',
+        evidence: [],
+      },
+      {
+        session: CLAUDE_CODE,
+        sessionHost: 'claude-code',
+        sessionShort: '3f9c21d0',
+        reportedAt: Date.UTC(2026, 10, 21, 22, 0),
+        result: '预先重构。',
+        evidence: [],
+      },
+    ],
+  ),
+}
+
 // The Deck service of a Session started in the Workspace at `workspace`, its
 // Task Source holding `tasks`.
 const deckAt =
   (workspace: string, configured = true, tasks: object = TASKS) =>
-  (name: string) => {
+  (name: string, args: any = {}) => {
     if (name === 'deck_config') {
       return answered(
         configured
@@ -104,6 +183,9 @@ const deckAt =
     }
     if (name === 'deck_tasks') {
       return answered(tasks)
+    }
+    if (name === 'deck_task' && DETAILS[args.number] !== undefined) {
+      return answered(DETAILS[args.number]!)
     }
     throw new Error(`unexpected call of ${name}`)
   }
@@ -1656,4 +1738,516 @@ test('a Recommendation shown follows the list as the timed reads find it, its bu
   assert.equal(again.isConnected, true)
   assert.deepEqual(nextTab(page), before)
   assert.equal(deck.reads.length, 1)
+})
+
+// A row of the "任务" tab by its Task's number.
+const rowOf = (document: Document, number: number) =>
+  [...document.querySelectorAll('.dk-row')].find(row => text(row.querySelector('.dk-id')) === `#${number}`)!
+
+// What the detail shows: the way back, then the Task, section by section.
+const detailShown = (page: { window: any; document: Document }) => {
+  const bar = page.document.querySelector('.dk-bar')!
+  if (!shown(page, bar)) return undefined
+  // While it is being read, or when its read fails, there is no Task to show.
+  const detailOf = page.document.querySelector('.dk-detail')
+  return {
+    crumbs: text(bar.querySelector('.dk-crumbs')),
+    bar: [...bar.querySelectorAll('button')].filter(each => shown(page, each)).map(text),
+    title: text(detailOf?.querySelector('.dk-detail__title') ?? null),
+    meta: [...(detailOf?.querySelector('.dk-detail__meta')?.children ?? [])].map(text),
+    sections: [...(detailOf?.querySelectorAll('.dk-section') ?? [])].map(section => [
+      text(section.querySelector('.dk-section__head')),
+      ...[...section.querySelector('.dk-section__head')!.parentElement!.children].slice(1).map(text),
+    ]),
+  }
+}
+
+test('a row opens its Task\'s detail in place of the list, and "返回" goes back to the list as it was, filter and scroll', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+  const listShown = () => shown(page, document.querySelector('.dk-filter'))
+
+  await page.click(document.querySelectorAll('.dk-filter__chip')[3]!)
+  page.scroll(480)
+  await page.click(rowOf(document, 73))
+
+  assert.equal(listShown(), false)
+  assert.equal(detailShown(page)?.crumbs, '任务 / #73')
+  assert.equal(detailShown(page)?.title, '#73 推荐：我现在该做什么')
+  assert.deepEqual(page.sent.filter(message => message.params?.name === 'deck_task').map(({ params }) => params.arguments), [{ number: 73 }])
+  // The detail starts at its top; the head and the tabs stay.
+  assert.equal(page.scrolled(), 0)
+  assert.equal(shown(page, document.querySelector('[role="tablist"]')), true)
+
+  await page.click([...document.querySelectorAll('.dk-bar button')].find(each => text(each) === '返回')!)
+  assert.equal(detailShown(page), undefined)
+  assert.equal(listShown(), true)
+  assert.deepEqual(filterShown(document)[1], ['阻塞 2'])
+  assert.equal(page.scrolled(), 480)
+})
+
+test('the detail shows the Task\'s state, triage label, assignees and time, its description and acceptance criteria, as the Task Source gives them', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowOf(document, 70))
+  assert.deepEqual(detailShown(page), {
+    crumbs: '任务 / #70',
+    bar: ['返回', '在 GitHub 打开'],
+    title: '#70 Task 详情',
+    meta: ['可执行', 'ready-for-human', 'x9ggg, someone', '更新 11-21'],
+    sections: [
+      ['描述', '从任务列表点开一个 Task。 再返回列表。'],
+      ['验收条件', '返回到原来的位置 来路变长'],
+      ['执行记录', '还没有 Session 执行过这个 Task。'],
+    ],
+  })
+  // The description keeps its lines; a checked criterion is drawn checked.
+  assert.equal(document.querySelector('.dk-detail .dk-prose p')!.textContent, '从任务列表点开一个 Task。\n\n再返回列表。')
+  assert.equal(page.window.getComputedStyle(document.querySelector('.dk-detail .dk-prose p')!).whiteSpace, 'pre-wrap')
+  assert.deepEqual([...document.querySelectorAll('.dk-detail li')].map(li => li.classList.contains('is-checked')), [true, false])
+  // The number in the state's colour, as in its row.
+  const colour = (element: Element | null) => page.window.getComputedStyle(element!).color
+  assert.equal(colour(document.querySelector('.dk-detail__title .dk-id')), 'rgb(87, 184, 242)')
+  assert.equal(colour(document.querySelector('.dk-detail__meta .dk-badge')), 'rgb(87, 184, 242)')
+  // The badge's glyph is the one its row shows; the way's last step stands out.
+  const glyph = (element: Element | null) => element!.querySelector('svg')!.innerHTML
+  assert.equal(glyph(document.querySelector('.dk-detail__meta .dk-badge')), glyph(rowOf(document, 70).querySelector('.dk-plate')))
+  assert.equal(text(document.querySelector('.dk-crumbs b')), '#70')
+})
+
+test('a Task waiting on a person shows the label it waits on and no state; a report with no Acceptance Evidence marks none', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const back = () => page.click([...page.document.querySelectorAll('.dk-bar button')].find(each => text(each) === '返回')!)
+
+  await page.click(rowOf(page.document, 19))
+  assert.deepEqual(detailShown(page)!.meta, ['needs-triage', '未指派', '更新 11-21'])
+  await back()
+  await page.click(rowOf(page.document, 72))
+  assert.deepEqual(detailShown(page)!.meta, ['进行中 · 77e0aa15', 'ready-for-agent', '未指派', '更新 11-21'])
+  assert.deepEqual(detailShown(page)!.sections.at(-1), ['执行记录', 'Session 77e0aa15 11-22 07:00 做了一半。'])
+})
+
+test('a Task with no assignee, no description and no acceptance criteria says so; a closed one says when it closed', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+
+  await page.click(rowOf(page.document, 66))
+  const shownDetail = detailShown(page)!
+  assert.deepEqual(shownDetail.meta, ['已解锁', '验收证据', 'ready-for-agent', '未指派', '关闭 11-22 01:40'])
+  assert.deepEqual(shownDetail.sections.slice(0, 2), [
+    ['描述', '没有描述。'],
+    ['验收条件', '正文里没有验收条件。'],
+  ])
+})
+
+test('the execution record shows each report: its Session as the Pane names it, when, the result, and its Acceptance Evidence with where it comes from', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+
+  await page.click(rowOf(page.document, 66))
+  const items = [...page.document.querySelectorAll('.dk-log__item')]
+  assert.deepEqual(
+    items.map(item => [...item.children].map(text)),
+    [
+      [
+        'Session 045b96fc 11-22 01:38',
+        '页面在标签页里打开。',
+        '验收证据：npm test 全部通过（来自 npm test）',
+        '验收证据：标签页能切换（来自 commit edaa839）',
+      ],
+      ['Session 77e0aa15 11-21 23:05', '重新跑了一遍测试。'],
+      ['Claude Code 3f9c21d0 11-21 22:00', '预先重构。'],
+    ],
+  )
+  // Each Acceptance Evidence, the detail's badge and the row's mark carry the check.
+  const check = (element: Element | null) => element!.querySelector('svg')!.innerHTML
+  const glyphs = [...items[0]!.querySelectorAll('.is-pass'), page.document.querySelector('.dk-detail__meta .is-evidence')]
+  assert.deepEqual(new Set(glyphs.map(check)).size, 1)
+  assert.equal(check(rowOf(page.document, 66).querySelector('.is-pass')), check(glyphs[0]!))
+})
+
+test('"被阻塞" lists each blocker by its own state; clicked, the way grows, and "返回" goes back one step at a time', async t => {
+  // Each scroll of the page and the title shown as it scrolls: a step's
+  // content must be there before the page scrolls to where it was.
+  const scrolls: [number, string | undefined][] = []
+  const page = await openPage({
+    answer: deckAt('/work/matt-deck'),
+    onScroll: (y, document) => scrolls.push([y, text(document.querySelector('#into:not([hidden]) .dk-detail__title'))]),
+  })
+  t.after(page.close)
+  const { document } = page
+  const back = () => page.click([...document.querySelectorAll('.dk-bar button')].find(each => text(each) === '返回')!)
+  const edges = () =>
+    [...document.querySelectorAll('.dk-detail .dk-edge')].map(edge => [edge.querySelector('[role="img"]')!.getAttribute('aria-label'), text(edge)])
+
+  page.scroll(300)
+  await page.click(rowOf(document, 73))
+  assert.deepEqual(detailShown(page)!.sections[2], ['被阻塞 2', '#72 Matt 技能', '#70 Task 详情'])
+  assert.deepEqual(edges(), [
+    ['进行中 · 其他 Session', '#72 Matt 技能'],
+    ['可执行', '#70 Task 详情'],
+  ])
+  assert.equal(page.window.getComputedStyle(document.querySelector('.dk-detail .dk-edge')!).cursor, 'pointer')
+  // Each blocker's glyph, and the colours of its glyph and number, are those
+  // of its row in the list.
+  const colour = (element: Element) => page.window.getComputedStyle(element).color
+  const drawn = (glyph: Element, id: Element) => [glyph.querySelector('svg')!.innerHTML, colour(glyph.querySelector('svg')!), colour(id)]
+  for (const edge of document.querySelectorAll('.dk-detail .dk-edge')) {
+    const row = rowOf(document, Number(text(edge.querySelector('.dk-id'))!.slice(1)))
+    assert.deepEqual(
+      drawn(edge.querySelector('[role="img"]')!, edge.querySelector('.dk-id')!),
+      drawn(row.querySelector('.dk-plate')!, row.querySelector('.dk-id')!),
+    )
+  }
+
+  page.scroll(120)
+  await page.click(document.querySelector('.dk-detail .dk-edge'))
+  assert.equal(detailShown(page)!.crumbs, '任务 / #73 / #72')
+  assert.equal(detailShown(page)!.title, '#72 Matt 技能')
+  assert.equal(page.scrolled(), 0)
+  // A Task blocked by none draws no "被阻塞".
+  assert.deepEqual(detailShown(page)!.sections.map(([head]) => head), ['描述', '验收条件', '执行记录'])
+
+  await back()
+  assert.equal(detailShown(page)!.crumbs, '任务 / #73')
+  assert.equal(detailShown(page)!.title, '#73 推荐：我现在该做什么')
+  assert.equal(page.scrolled(), 120)
+  assert.deepEqual(scrolls.at(-1), [120, '#73 推荐：我现在该做什么'])
+  await back()
+  assert.equal(detailShown(page), undefined)
+  assert.equal(page.scrolled(), 300)
+})
+
+test('"在 GitHub 打开" asks the Host to open the Task\'s page at the address the Deck service gives', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+
+  await page.click(rowOf(page.document, 70))
+  await page.click([...page.document.querySelectorAll('.dk-bar button')].find(each => text(each) === '在 GitHub 打开')!)
+  assert.deepEqual(
+    page.sent.filter(message => message.method === 'ui/open-link').map(({ params }) => params),
+    [{ url: 'https://tasks.example/as-the-deck-service-says/70' }],
+  )
+})
+
+test('a Spec\'s row opens its detail too', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+
+  await page.click(page.document.querySelector('.dk-row--container'))
+  assert.equal(detailShown(page)!.crumbs, '任务 / #64')
+  assert.equal(detailShown(page)!.title, '#64 规格：里程碑二')
+  // Its row is marked by its Orphaned Child Task; its detail says its own
+  // state as a Task.
+  assert.equal(rowOf(page.document, 64).querySelector('.dk-plate')!.getAttribute('aria-label'), 'Orphaned')
+  assert.deepEqual(detailShown(page)!.meta, ['可执行', '未指派', '更新 11-21'])
+})
+
+test('another tab leaves the detail: back on "任务" the list is shown', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const tab = (name: string) => [...page.document.querySelectorAll('[role="tab"]')].find(each => text(each) === name)!
+
+  await page.click(rowOf(page.document, 70))
+  await page.click(tab('地图'))
+  assert.equal(detailShown(page), undefined)
+  assert.equal(shown(page, page.document.querySelector('.dk-filter')), false)
+  await page.click(tab('任务'))
+  assert.equal(detailShown(page), undefined)
+  assert.equal(shown(page, page.document.querySelector('.dk-filter')), true)
+})
+
+test('until deck_task answers the detail says it is reading the Task; when it fails, why', async t => {
+  const answer = deckAt('/work/matt-deck')
+  let failure: object | undefined
+  let whileReading: unknown
+  const page = await openPage({
+    answer: (name, args: any, document) => {
+      if (name !== 'deck_task') return answer(name, args)
+      whileReading = [...document.querySelectorAll('.dk-why')].filter(each => !each.closest('[hidden]')).map(text)
+      return failure ?? answer(name, args)
+    },
+  })
+  t.after(page.close)
+  const notice = () => {
+    const shownNotice = [...page.document.querySelectorAll('.dk-notice.is-danger')].find(each => shown(page, each))
+    return shownNotice && [text(shownNotice.querySelector('.dk-notice__title')), text(shownNotice.querySelector('.dk-notice__text'))]
+  }
+
+  failure = answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp' } })
+  await page.click(rowOf(page.document, 70))
+  assert.deepEqual(whileReading, ['正在读取 #70…'])
+  assert.deepEqual(notice(), ['读取 #70 失败', '连不上 GitHub。检查网络后点“刷新”重试。'])
+  // Nothing read, nothing to open.
+  assert.deepEqual(detailShown(page)!.bar, ['返回'])
+
+  failure = { content: [{ type: 'text', text: 'database is locked' }], isError: true }
+  await page.click(page.document.querySelector('.dk-head button'))
+  assert.deepEqual(notice(), ['读取 #70 失败', 'Deck 服务出错：database is locked。点“刷新”重试。'])
+
+  failure = undefined
+  await page.click(page.document.querySelector('.dk-head button'))
+  assert.equal(notice(), undefined)
+  assert.equal(detailShown(page)!.title, '#70 Task 详情')
+})
+
+test('each read of the Pane reads the detail shown again, which stays shown, and shows what it read before until the new read answers', async t => {
+  const answer = deckAt('/work/matt-deck')
+  let title = 'Task 详情'
+  let whileReading: unknown
+  const page = await openPage({
+    answer: (name, args: any, document) => {
+      if (name !== 'deck_task') return answer(name, args)
+      whileReading = text(document.querySelector('.dk-detail__title'))
+      const read: any = answer(name, args)
+      return answered({ ...read.structuredContent, task: { ...read.structuredContent.task, title } })
+    },
+  })
+  t.after(page.close)
+  const reads = () => page.sent.filter(message => message.params?.name === 'deck_task').length
+
+  await page.click(rowOf(page.document, 70))
+  assert.equal(reads(), 1)
+  title = 'Task 详情，改过'
+  await page.advance(60_000)
+  assert.equal(reads(), 2)
+  assert.equal(whileReading, '#70 Task 详情')
+  assert.equal(detailShown(page)!.title, '#70 Task 详情，改过')
+  assert.equal(shown(page, page.document.querySelector('.dk-filter')), false)
+})
+
+test('a Task the list no longer holds still shows what deck_task reads, with no state', async t => {
+  let tasks: object = TASKS
+  const page = await openPage({ answer: (name, args) => deckAt('/work/matt-deck', true, tasks)(name, args) })
+  t.after(page.close)
+
+  await page.click(rowOf(page.document, 70))
+  tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [] } }
+  await page.click(page.document.querySelector('.dk-head button'))
+  assert.equal(detailShown(page)!.title, '#70 Task 详情')
+  assert.deepEqual(detailShown(page)!.meta, ['ready-for-human', 'x9ggg, someone', '更新 11-21'])
+  assert.equal(page.document.querySelector('.dk-detail__title .dk-id')!.className, 'dk-id')
+})
+
+test('what the Task Source and the reports say is shown as text, never read as the page\'s own markup', async t => {
+  const answer = deckAt('/work/matt-deck')
+  const markup = '<b>粗</b> <img src=x onerror="window.ran=1">'
+  const page = await openPage({
+    answer: (name, args: any) =>
+      name === 'deck_task'
+        ? answered({
+            ...(DETAILS[66] as any),
+            task: { ...(DETAILS[66] as any).task, title: markup, description: markup, acceptance: [{ text: markup, isChecked: false }] },
+            reports: [{ ...(DETAILS[66] as any).reports[0], result: markup, evidence: [{ text: markup, source: markup }] }],
+          })
+        : answer(name, args),
+  })
+  t.after(page.close)
+
+  await page.click(rowOf(page.document, 66))
+  const detailOf = page.document.querySelector('.dk-detail')!
+  assert.equal(detailOf.querySelector('b, img'), null)
+  assert.equal(text(detailOf.querySelector('.dk-detail__title')), `#66 ${markup}`)
+  assert.equal(text(detailOf.querySelector('.dk-log__text')), markup)
+})
+
+test('a detail read that answers after the way has gone back from it does not take the place of what is shown', async t => {
+  const answer = deckAt('/work/matt-deck')
+  let hold: Promise<void> | undefined
+  const page = await openPage({
+    answer: async (name, args: any) => {
+      if (name === 'deck_task' && args.number === 72) await hold
+      return answer(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowOf(document, 73))
+  let release!: () => void
+  hold = new Promise(resolve => (release = resolve))
+  ;(document.querySelector('.dk-detail .dk-edge') as HTMLElement).click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  // Clicked while #72's read is open, so not waiting for every answer.
+  ;([...document.querySelectorAll('.dk-bar button')].find(each => text(each) === '返回') as HTMLElement).click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(detailShown(page)!.title, '#73 推荐：我现在该做什么')
+  release()
+  await page.settled()
+  assert.equal(detailShown(page)!.crumbs, '任务 / #73')
+  assert.equal(detailShown(page)!.title, '#73 推荐：我现在该做什么')
+})
+
+test('a project no longer configured shows no detail', async t => {
+  let configured = true
+  const page = await openPage({ answer: (name, args) => deckAt('/work/matt-deck', configured)(name, args) })
+  t.after(page.close)
+
+  await page.click(rowOf(page.document, 70))
+  configured = false
+  await page.click(page.document.querySelector('.dk-head button'))
+  assert.equal(detailShown(page), undefined)
+  assert.equal(shown(page, page.document.querySelector('#unconfigured')), true)
+})
+
+test('a skill\'s text goes the way a Task\'s detail goes: "刷新" reads it and the list under it again, and "返回" goes back to where the list was scrolled', async t => {
+  const page = await openSkills()
+  t.after(page.close)
+  const { document } = page
+  const row = (call: string) => [...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === call)!
+  const called = (name: string) => page.sent.filter(message => message.params?.name === name).length
+
+  page.scroll(260)
+  await page.click(row(IMPLEMENT))
+  assert.equal(page.scrolled(), 0)
+  assert.equal(text(document.querySelector('.dk-crumbs b')), IMPLEMENT)
+  await page.click(document.querySelector('.dk-head button'))
+  assert.deepEqual([called('deck_skills'), called('deck_skill')], [2, 2])
+  assert.equal(text(document.querySelector('.dk-detail .dk-skill__name')), IMPLEMENT)
+
+  await page.click([...document.querySelectorAll('.dk-bar button')].find(each => text(each) === '返回')!)
+  assert.equal(shown(page, row(IMPLEMENT)), true)
+  assert.equal(page.scrolled(), 260)
+})
+
+test('"刷新" with a skill\'s text open draws its "预填" by what the new read of the skills says of it: off when Codex no longer finds the same file, or the skill is gone; on again when it does', async t => {
+  // What the Deck service lists as the test sets it; the text is read the same.
+  let listed: object[] = SKILLS
+  const page = await openSkills((name: string, args: any) =>
+    name === 'deck_skill' ? deckWithSkills()(name, args) : deckWithSkills(listed)(name, args),
+  )
+  t.after(page.close)
+  const { document } = page
+  const prefillShown = () => [...document.querySelectorAll<HTMLButtonElement>('.dk-bar button')].find(each => text(each) === '预填')!
+  const refresh = () => page.click(document.querySelector('.dk-head button'))
+  const implement = (more: object) => SKILLS.map((skill: any) => (skill.name === 'implement' ? { ...skill, ...more } : skill))
+
+  await page.click([...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === IMPLEMENT)!)
+  assert.equal(prefillShown().disabled, false)
+
+  listed = implement({ copy: 'different' })
+  await refresh()
+  assert.equal(prefillShown().disabled, true)
+  await page.click(prefillShown())
+  assert.deepEqual(prefills(page), [])
+
+  listed = SKILLS.filter((skill: any) => skill.name !== 'implement')
+  await refresh()
+  assert.equal(prefillShown().disabled, true)
+
+  listed = SKILLS
+  await refresh()
+  assert.equal(prefillShown().disabled, false)
+  await page.click(prefillShown())
+  assert.deepEqual(prefills(page), [prefilled(IMPLEMENT)])
+})
+
+test('the detail\'s state badge is drawn in its state\'s pair of colours, its words readable on it, dark and light', async t => {
+  // Each state's badge as the layout draws it: the colour of its words, and
+  // its ground ('transparent' where it has none).
+  const PAIRS = {
+    dark: {
+      70: ['rgb(87, 184, 242)', 'transparent'],
+      74: ['rgb(87, 184, 242)', 'transparent'],
+      72: ['rgb(163, 181, 199)', 'transparent'],
+      69: ['rgb(163, 181, 199)', 'transparent'],
+      75: ['rgb(245, 154, 74)', 'transparent'],
+      73: ['rgb(129, 149, 169)', 'transparent'],
+      66: ['rgb(28, 19, 0)', 'rgb(242, 193, 78)'],
+    },
+    light: {
+      70: ['rgb(20, 99, 159)', 'transparent'],
+      74: ['rgb(20, 99, 159)', 'transparent'],
+      72: ['rgb(70, 87, 104)', 'transparent'],
+      69: ['rgb(70, 87, 104)', 'transparent'],
+      75: ['rgb(168, 74, 6)', 'transparent'],
+      73: ['rgb(90, 107, 125)', 'transparent'],
+      66: ['rgb(255, 255, 255)', 'rgb(130, 91, 0)'],
+    },
+  }
+  for (const theme of ['dark', 'light'] as const) {
+    const page = await openPage({ answer: deckAt('/work/matt-deck'), hostContext: { theme } })
+    t.after(page.close)
+    const style = (element: Element) => page.window.getComputedStyle(element)
+    const seen: Record<string, string[]> = {}
+    for (const number of Object.keys(PAIRS[theme])) {
+      await page.click(rowOf(page.document, Number(number)))
+      const badge = page.document.querySelector('.dk-detail__meta .dk-badge')!
+      // Every element of the badge that holds words of its own.
+      const words = [badge, ...badge.querySelectorAll('*')].filter(each =>
+        [...each.childNodes].some(node => node.nodeType === 3 && node.textContent!.trim() !== ''),
+      )
+      const colours = [...new Set(words.map(each => style(each).color))]
+      const ground = style(badge).backgroundColor
+      seen[number] = [colours.join(' '), ground === 'rgba(0, 0, 0, 0)' ? 'transparent' : ground]
+      await page.click([...page.document.querySelectorAll('.dk-bar button')].find(each => text(each) === '返回')!)
+    }
+    assert.deepEqual(seen, PAIRS[theme], theme)
+  }
+})
+
+test('"刷新" with a skill\'s text open turns its "预填" off when the Skill Source cannot be read, and on again once it is read', async t => {
+  // How the Deck service answers deck_skills, as the test sets it; the text is read as usual.
+  let skillsAnswer: (() => object) | undefined
+  const page = await openSkills((name: string, args: any) =>
+    name === 'deck_skills' && skillsAnswer !== undefined ? skillsAnswer() : deckWithSkills()(name, args),
+  )
+  t.after(page.close)
+  const { document } = page
+  const prefillShown = () => [...document.querySelectorAll<HTMLButtonElement>('.dk-bar button')].find(each => text(each) === '预填')!
+  const refresh = () => page.click(document.querySelector('.dk-head button'))
+
+  await page.click([...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === IMPLEMENT)!)
+  assert.equal(prefillShown().disabled, false)
+
+  for (const failing of [
+    () => answered({ ok: false, failure: { kind: 'missing', message: 'the directory ~/.claude/skills does not exist' } }),
+    () => ({ content: [{ type: 'text', text: 'installed_plugins.json is not valid JSON' }], isError: true }),
+  ]) {
+    skillsAnswer = failing
+    await refresh()
+    assert.equal(prefillShown().disabled, true)
+    await page.click(prefillShown())
+    assert.deepEqual(prefills(page), [])
+
+    skillsAnswer = undefined
+    await refresh()
+    assert.equal(prefillShown().disabled, false)
+  }
+  await page.click(prefillShown())
+  assert.deepEqual(prefills(page), [prefilled(IMPLEMENT)])
+})
+
+test('the detail\'s parts are drawn as the layout draws them: section heads, the record\'s Session line, its Acceptance Evidence, the triage label and a quiet "在 GitHub 打开"', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+  const style = (selector: string) => page.window.getComputedStyle(document.querySelector(selector)!)
+
+  await page.click(rowOf(document, 66))
+  // The layout's display face for heads, its mono face for ids and labels.
+  assert.match(style('.dk-detail .dk-section__head').fontFamily, /^"?Barlow Condensed/)
+  assert.match(style('.dk-detail .dk-log__who').fontFamily, /^"?JetBrains Mono/)
+  assert.match(style('.dk-detail__meta .dk-tag').fontFamily, /^"?JetBrains Mono/)
+  // Acceptance Evidence in the colour that says it passed.
+  assert.equal(style('.dk-log__item .is-pass').color, 'rgb(111, 214, 192)')
+  const open = [...document.querySelectorAll('.dk-bar button')].find(each => text(each) === '在 GitHub 打开')!
+  assert.equal(page.window.getComputedStyle(open).backgroundColor, 'rgba(0, 0, 0, 0)')
+  // The title in the title size; the state line and its badge in the caption size.
+  assert.equal(style('.dk-detail__title').fontSize, '18px')
+  assert.equal(style('.dk-detail__meta').fontSize, '12px')
+  assert.equal(style('.dk-detail__meta .dk-badge').fontSize, '12px')
+  // What it says of a part with nothing in it is muted; the reports stack.
+  const said = [...document.querySelectorAll('.dk-detail .dk-section > span')].find(each => text(each) === '没有描述。')!
+  assert.equal(page.window.getComputedStyle(said).color, 'rgb(163, 181, 199)')
+  assert.equal(style('.dk-detail .dk-log').display, 'flex')
+
+  // Each acceptance criterion has its box before it.
+  await page.click([...document.querySelectorAll('.dk-bar button')].find(each => text(each) === '返回')!)
+  await page.click(rowOf(document, 70))
+  assert.equal(style('.dk-detail li').paddingLeft, '24px')
 })

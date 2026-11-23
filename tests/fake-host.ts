@@ -21,11 +21,15 @@ type HostContext = { theme?: 'light' | 'dark'; [key: string]: unknown }
 export const openPage = async ({
   answer,
   hostContext = {},
+  onScroll = () => {},
 }: {
   // What the Deck service answers a tool call the Host passes on; the page's
   // document is there to read what the page shows while the call is open.
   answer: (name: string, args: object, document: Document) => object | Promise<object>
   hostContext?: HostContext
+  // Told each time the page scrolls itself, with what the page shows as it
+  // does: a browser stops a scroll at the end of what is shown then.
+  onScroll?: (y: number, document: Document) => void
 }) => {
   const html = await readFile(PANE_PAGE, 'utf8')
   const host = new JSDOM('').window
@@ -38,6 +42,9 @@ export const openPage = async ({
   let now = Date.UTC(2026, 10, 22, 9, 0)
   let lastTimer = 0
   const timers = new Map<number, { at: number; every?: number; run: () => void }>()
+  // How far down the page is scrolled. The page scrolls itself in the tab,
+  // as Codex shows it, and jsdom lays nothing out, so the test sets it.
+  let scrolled = 0
   const timer = (every: boolean) => (run: () => void, ms = 0) => {
     timers.set(++lastTimer, { at: now + ms, ...(every ? { every: Math.max(1, ms) } : {}), run })
     return lastTimer
@@ -65,6 +72,11 @@ export const openPage = async ({
         clearInterval: (id: number) => timers.delete(id),
       })
       window.Date.now = () => now
+      Object.defineProperty(window, 'scrollY', { get: () => scrolled })
+      window.scrollTo = ((x: number | ScrollToOptions, y?: number) => {
+        scrolled = typeof x === 'number' ? y! : x.top!
+        onScroll(scrolled, window.document)
+      }) as typeof window.scrollTo
     },
   })
   const toPage = (message: object) =>
@@ -98,6 +110,9 @@ export const openPage = async ({
       })
     } else if (data.method === 'tools/call') {
       toPage({ id: data.id, result: await answer(data.params.name, data.params.arguments, page.window.document) })
+    } else if (data.method === 'ui/open-link') {
+      // Codex opens the link in the default browser and answers {} (#68).
+      toPage({ id: data.id, result: {} })
     } else if (data.method === 'ui/message') {
       // A message the page puts in the Session's prompt, or sends; the test
       // reads it from `sent`.
@@ -157,6 +172,11 @@ export const openPage = async ({
       now = until
       await settled()
     },
+    // The person scrolls the page to `y`, or the test reads where it is.
+    scroll: (y: number) => {
+      scrolled = y
+    },
+    scrolled: () => scrolled,
     click: async (element: Element | null) => {
       ;(element as HTMLElement).click()
       await settled()
