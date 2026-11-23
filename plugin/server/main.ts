@@ -447,10 +447,16 @@ const tools = {
   },
   deck_skills: {
     description:
-      'List the skills of this project\'s Skill Source: each one\'s name, how this Session calls it, its description and its file. Reads only; no skill file is changed.',
+      'List the skills of this project\'s Skill Source: each one\'s name, how this Session calls it, its description and its file. Started for Codex, each also has copy: whether Codex, looking for the skill by its name in its own skill directories, finds this same file with links resolved (same), another file (different), or none (missing). Reads only; no skill file is changed.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: async (): Promise<ToolResult> => {
-      return skillAnswer(async source => ({ source, skills: await listSkills(source, workspace, homedir(), callOf(host)) }))
+      // Codex finds skills in its own directories, not in the Skill Source:
+      // a call the Pane prefills runs the skill only when they are the same.
+      const directories = host === 'codex' ? skillDirectories(host) : undefined
+      return skillAnswer(async source => ({
+        source,
+        skills: await listSkills(source, workspace, homedir(), callOf(host), directories),
+      }))
     },
   },
   deck_skill: {

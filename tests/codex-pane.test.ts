@@ -110,14 +110,18 @@ const deckAt =
 
 const text = (element: Element | null) => element?.textContent?.replace(/\s+/g, ' ').trim()
 
-// Whether the person sees an element: neither it nor what holds it is hidden.
+// Whether the person sees an element: it is in the page, and neither it nor
+// what holds it is hidden.
 const shown = (page: { window: any }, element: Element | null) => {
-  for (let each = element; each !== null; each = each.parentElement) {
+  if (element === null || !element.isConnected) {
+    return false
+  }
+  for (let each: Element | null = element; each !== null; each = each.parentElement) {
     if (page.window.getComputedStyle(each).display === 'none') {
       return false
     }
   }
-  return element !== null
+  return true
 }
 
 test('in a Configured Project the Pane heads its four tabs with the project and the Session, which it asks only the Host for', async t => {
@@ -754,4 +758,357 @@ test('a reason the Task Source or the Deck service gives is shown as it is, back
   assert.deepEqual(notice(), ['Deck 服务出错：the `tasks` table is `locked`。点“刷新”重试。', []])
   await fail(answered({ ok: false, failure: { kind: 'unauthenticated', message: 'not `logged` in' } }))
   assert.deepEqual(notice(), ['gh 未登录。运行 gh auth login 后点“刷新”重试。', ['gh', 'gh auth login']])
+})
+
+// implement's call as this fake Deck service writes it: no call the page
+// could write itself from the name, so a page that shows or prefills it took
+// it from the answer.
+const IMPLEMENT = '$implement-as-the-deck-service-says-4b2e'
+
+// The skills of a Skill Source as the Deck service started for Codex lists
+// them: `copy` says whether Codex finds this same file by the skill's name.
+const SKILLS = [
+  { name: 'ask-matt', call: '$ask-matt', description: '问下一步该做什么。', path: '~/.claude/skills/ask-matt/SKILL.md', copy: 'same' },
+  { name: 'implement', call: IMPLEMENT, description: '开始做一个 Task。', path: '~/.claude/skills/implement/SKILL.md', copy: 'same' },
+  { name: 'tdd', call: '$tdd', description: '先写测试，再写实现。', path: '~/.claude/skills/tdd/SKILL.md', copy: 'different' },
+  { name: 'wayfinder', call: '$wayfinder', description: '为不清晰的大工作建立 Map。', path: '~/.claude/skills/wayfinder/SKILL.md', copy: 'missing' },
+]
+const TEXT = '# 开始做\n\n读 Task，先写测试。\n\n```sh\nnpm test\n```\n'
+
+// The Deck service of a Configured Project whose Skill Source holds `skills`.
+const deckWithSkills =
+  (skills: object[] = SKILLS, source: object = { type: 'directory', path: '~/.claude/skills' }) =>
+  (name: string, args: any) => {
+    if (name === 'deck_skills') {
+      return answered({ ok: true, source, skills })
+    }
+    if (name === 'deck_skill') {
+      const skill: any = skills.find((each: any) => each.name === args.name)
+      const { copy, ...read } = skill
+      return answered({ ok: true, skill: { ...read, text: TEXT } })
+    }
+    return deckAt('/work/matt-deck')(name)
+  }
+
+// The texts of an element's parts: its children, or what `parts` selects.
+const parts = (element: Element | null, selector?: string) =>
+  [...(selector === undefined ? element!.children : element!.querySelectorAll(`:scope ${selector}`))]
+    .filter(part => part.children.length === 0)
+    .map(text)
+
+const prefills = (page: { sent: any[] }) => page.sent.filter(message => message.method === 'ui/message').map(({ params }) => params)
+const prefilled = (text: string) => ({
+  role: 'user',
+  content: [{ type: 'text', text }],
+  _meta: { 'openai/message': { target: 'active', send: false } },
+})
+
+const openSkills = async (answer: (name: string, args: any) => object = deckWithSkills()) => {
+  const page = await openPage({ answer })
+  await page.click([...page.document.querySelectorAll('[role="tab"]')].find(tab => text(tab) === '技能')!)
+  return page
+}
+
+// Each skill row as the person reads it: the call, the description, the
+// reason it cannot be prefilled if it cannot, and whether "预填" is on.
+const rows = (page: { document: Document }, group: Element) =>
+  [...group.querySelectorAll('.dk-skill')].map(row => [
+    ...[...row.querySelector('.dk-skill__main')!.children].map(text),
+    row.querySelector<HTMLButtonElement>('button')!.disabled ? '预填停用' : '预填',
+  ])
+
+test('the 技能 tab names the Skill Source, lists $ask-matt as the general entry and the other skills by name, and says which Codex cannot prefill and why', async t => {
+  const page = await openSkills()
+  t.after(page.close)
+  const { document } = page
+  const groups = [...document.querySelectorAll('.dk-group')].filter(group => shown(page, group))
+
+  assert.deepEqual(parts(document.querySelector('.dk-source')), ['Skill Source', '目录 ~/.claude/skills'])
+  assert.deepEqual(
+    [...document.querySelectorAll('.dk-notice.is-warn[role="status"]')].filter(notice => shown(page, notice)).map(notice => parts(notice, 'span, button')),
+    [['2 个技能在 Codex 里不能预填。', '重跑配置', '原因写在各自那一行，重跑配置之后恢复。']],
+  )
+  assert.deepEqual(groups.map(group => parts(group.querySelector('.dk-group__head'))), [['通用入口'], ['技能', '3']])
+  assert.deepEqual(rows(page, groups[0]!), [['$ask-matt', '问下一步该做什么。', '预填']])
+  assert.deepEqual(rows(page, groups[1]!), [
+    [IMPLEMENT, '开始做一个 Task。', '预填'],
+    ['$tdd', '先写测试，再写实现。', 'Codex 里的不是同一份，不能预填。', '预填停用'],
+    ['$wayfinder', '为不清晰的大工作建立 Map。', 'Codex 里找不到，不能预填。', '预填停用'],
+  ])
+  // "原文" stays on for every skill.
+  assert.deepEqual(
+    [...document.querySelectorAll('.dk-skill')].map(row => row.querySelectorAll('button')[1]!.disabled),
+    [false, false, false, false],
+  )
+})
+
+test('with every skill prefillable the 技能 tab has no notice, and a plugin Skill Source is named as one', async t => {
+  const same = SKILLS.map(skill => ({ ...skill, copy: 'same' }))
+  const page = await openSkills(deckWithSkills(same, { type: 'plugin', name: 'mattpocock-skills' }))
+  t.after(page.close)
+
+  assert.deepEqual(parts(page.document.querySelector('.dk-source')), ['Skill Source', '插件 mattpocock-skills'])
+  assert.equal([...page.document.querySelectorAll('.dk-notice.is-warn')].some(notice => shown(page, notice)), false)
+  assert.equal([...page.document.querySelectorAll('.dk-skill button')].some(button => (button as HTMLButtonElement).disabled), false)
+})
+
+test('"预填" puts the skill\'s call in the prompt, unsent, then is off for 5 seconds and says 已填入; a skill Codex cannot prefill fills in nothing', async t => {
+  const page = await openSkills()
+  t.after(page.close)
+  const row = (call: string) => [...page.document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === call)!
+  const button = row(IMPLEMENT).querySelector('button')!
+
+  await page.click(button)
+  assert.deepEqual(prefills(page), [prefilled(IMPLEMENT)])
+  assert.deepEqual([text(button), button.disabled], ['已填入', true])
+  // Clicking the button opens no skill text.
+  assert.equal(shown(page, page.document.querySelector('.dk-bar')), false)
+
+  await page.click(button)
+  await page.click(row('$tdd').querySelector('button'))
+  await page.click(row('$wayfinder').querySelector('button'))
+  assert.equal(prefills(page).length, 1)
+
+  await page.advance(4_999)
+  assert.deepEqual([text(button), button.disabled], ['已填入', true])
+  await page.advance(1)
+  assert.deepEqual([text(button), button.disabled], ['预填', false])
+})
+
+test('"重跑配置" puts the call of the configure skill the Deck service gives in the prompt, unsent', async t => {
+  const page = await openSkills()
+  t.after(page.close)
+  const button = page.document.querySelector<HTMLButtonElement>('.dk-notice.is-warn button')!
+
+  await page.click(button)
+
+  assert.deepEqual(prefills(page), [prefilled(CONFIGURE_CALL)])
+  assert.deepEqual([text(button), button.disabled], ['已填入', true])
+  await page.advance(5_000)
+  assert.deepEqual([text(button), button.disabled], ['重跑配置', false])
+})
+
+test('"原文" shows the skill\'s call, its file and its text as written, with "预填" in the bar, and 返回 goes back to the list', async t => {
+  const page = await openSkills()
+  t.after(page.close)
+  const { document } = page
+  const row = (call: string) => [...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === call)!
+  const bar = () => document.querySelector('.dk-bar')!
+  const barButtons = () => [...bar().querySelectorAll('button')] as HTMLButtonElement[]
+
+  await page.click(row(IMPLEMENT).querySelectorAll('button')[1]!)
+
+  assert.equal(shown(page, row(IMPLEMENT)), false)
+  assert.equal(text(bar().querySelector('.dk-crumbs')), `技能 / ${IMPLEMENT}`)
+  assert.deepEqual(barButtons().map(text), ['返回', '预填'])
+  assert.equal(text(document.querySelector('.dk-detail .dk-skill__name')), IMPLEMENT)
+  assert.equal(text(document.querySelector('.dk-detail .dk-why')), '~/.claude/skills/implement/SKILL.md')
+  assert.equal(document.querySelector('.dk-detail .dk-prose')!.textContent, TEXT)
+  assert.deepEqual(
+    page.sent.filter(message => message.params?.name === 'deck_skill').map(({ params }) => params.arguments),
+    [{ name: 'implement' }],
+  )
+
+  await page.click(barButtons()[1]!)
+  assert.deepEqual(prefills(page), [prefilled(IMPLEMENT)])
+  assert.deepEqual([text(barButtons()[1]!), barButtons()[1]!.disabled], ['已填入', true])
+
+  await page.click(barButtons()[0]!)
+  assert.equal(shown(page, bar()), false)
+  assert.equal(shown(page, row(IMPLEMENT)), true)
+
+  // A click on the row itself opens the text too; the text of a skill Codex
+  // cannot prefill has "预填" off.
+  await page.click(row('$tdd'))
+  assert.equal(text(bar().querySelector('.dk-crumbs')), '技能 / $tdd')
+  assert.equal(barButtons()[1]!.disabled, true)
+
+  // Another tab leaves the text: back on 技能 the list is shown.
+  const tabs = [...document.querySelectorAll('[role="tab"]')]
+  await page.click(tabs[1]!)
+  assert.equal(shown(page, row('$tdd')), false)
+  await page.click(tabs[3]!)
+  assert.equal(shown(page, bar()), false)
+  assert.equal(shown(page, row('$tdd')), true)
+})
+
+// The danger notices the person sees: each one's title and text.
+const failures = (page: { window: any; document: Document }) =>
+  [...page.document.querySelectorAll('.dk-notice.is-danger[role="status"]')]
+    .filter(notice => shown(page, notice))
+    .map(notice => parts(notice, '.dk-notice__body > *'))
+
+test('the 技能 tab says in its own words that the Skill Source cannot be read, and the reason only when it has no words of its own', async t => {
+  const missing = await openSkills((name: string, args: any) =>
+    name === 'deck_skills'
+      ? answered({ ok: false, failure: { kind: 'missing', message: 'the directory ~/.claude/skills does not exist' } })
+      : deckWithSkills()(name, args),
+  )
+  t.after(missing.close)
+  const broken = await openSkills((name: string, args: any) =>
+    name === 'deck_skills'
+      ? { content: [{ type: 'text', text: 'installed_plugins.json is not valid JSON' }], isError: true }
+      : deckWithSkills()(name, args),
+  )
+  t.after(broken.close)
+
+  assert.deepEqual(failures(missing), [['读取 Skill Source 失败', '找不到 Skill Source。重跑配置之后恢复。']])
+  assert.equal(missing.document.querySelectorAll('.dk-skill').length, 0)
+  assert.deepEqual(failures(broken), [
+    ['读取 Skill Source 失败', 'Deck 服务出错：installed_plugins.json is not valid JSON。点“刷新”重试。'],
+  ])
+  assert.equal(broken.document.querySelectorAll('.dk-skill').length, 0)
+})
+
+test('a skill\'s text that cannot be read says so under the bar, in the Pane\'s own words when it has them', async t => {
+  const answerWith = (skill: object) => (name: string, args: any) => (name === 'deck_skill' ? skill : deckWithSkills()(name, args))
+  const gone = await openSkills(
+    answerWith(answered({ ok: false, failure: { kind: 'unknown-skill', message: 'the Skill Source has no skill named implement' } })),
+  )
+  t.after(gone.close)
+  const broken = await openSkills(answerWith({ content: [{ type: 'text', text: 'EACCES: permission denied' }], isError: true }))
+  t.after(broken.close)
+  const open = async (page: typeof gone) => {
+    await page.click([...page.document.querySelectorAll('.dk-skill')].find(row => text(row.querySelector('.dk-skill__name')) === IMPLEMENT)!)
+  }
+  await open(gone)
+  await open(broken)
+
+  for (const page of [gone, broken]) {
+    assert.equal(text(page.document.querySelector('.dk-bar .dk-crumbs')), `技能 / ${IMPLEMENT}`)
+    assert.equal(page.document.querySelector('.dk-detail'), null)
+  }
+  assert.deepEqual(failures(gone), [['读取技能失败', 'Skill Source 里已经没有这个技能。点“刷新”重新读取。']])
+  assert.deepEqual(failures(broken), [['读取技能失败', 'Deck 服务出错：EACCES: permission denied。点“刷新”重试。']])
+})
+
+test('a skill\'s text answered late shows only while it is the text opened', async t => {
+  // The Deck service answers implement's text only once released.
+  let release!: () => void
+  const held = new Promise<void>(resolve => (release = resolve))
+  const answer = deckWithSkills()
+  const page = await openSkills(async (name: string, args: any) => {
+    if (name === 'deck_skill' && args.name === 'implement') await held
+    return answer(name, args)
+  })
+  t.after(page.close)
+  const { document } = page
+  const row = (call: string) => [...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === call)!
+
+  // While implement's text is held, the page is never settled: wait a moment.
+  const moment = () => new Promise(resolve => setTimeout(resolve, 20))
+  ;(row(IMPLEMENT) as HTMLElement).click()
+  await moment()
+  assert.equal(text(document.querySelector('.dk-bar .dk-crumbs')), `技能 / ${IMPLEMENT}`)
+  document.querySelector<HTMLButtonElement>('.dk-bar button')!.click()
+  ;(row('$ask-matt') as HTMLElement).click()
+  await moment()
+  assert.equal(text(document.querySelector('.dk-detail .dk-skill__name')), '$ask-matt')
+
+  release()
+  await page.settled()
+  assert.equal(text(document.querySelector('.dk-bar .dk-crumbs')), '技能 / $ask-matt')
+  assert.equal(text(document.querySelector('.dk-detail .dk-skill__name')), '$ask-matt')
+})
+
+test('the reads every 60 seconds and as the tab is shown again leave a skill\'s text open and read no skills', async t => {
+  const page = await openSkills()
+  t.after(page.close)
+  const { document } = page
+  const row = (call: string) => [...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === call)!
+  const called = (name: string) => page.sent.filter(message => message.params?.name === name).length
+  await page.click(row(IMPLEMENT))
+  const textShown = () => [
+    shown(page, document.querySelector('.dk-bar')),
+    text(document.querySelector('.dk-detail .dk-skill__name')),
+    shown(page, row(IMPLEMENT)),
+  ]
+  const tasksRead = called('deck_tasks')
+
+  await page.advance(60_000)
+  await page.show(false)
+  await page.show(true)
+
+  // The page did read again: the Tasks, twice.
+  assert.equal(called('deck_tasks'), tasksRead + 2)
+  assert.deepEqual(textShown(), [true, IMPLEMENT, false])
+  assert.deepEqual([called('deck_skills'), called('deck_skill')], [1, 1])
+})
+
+test('"刷新" reads the skills again, on the 技能 tab at once and on another tab once 技能 is opened again', async t => {
+  // The first read finds tdd and wayfinder not the same, the second only
+  // wayfinder, the third none.
+  let reads = 0
+  const page = await openSkills((name: string, args: any) => {
+    if (name === 'deck_skills') reads++
+    const fixed = reads === 1 ? [] : reads === 2 ? ['tdd'] : ['tdd', 'wayfinder']
+    return deckWithSkills(SKILLS.map(skill => (fixed.includes(skill.name) ? { ...skill, copy: 'same' } : skill)))(name, args)
+  })
+  t.after(page.close)
+  const { document } = page
+  const refresh = document.querySelector('.dk-head button')!
+  const tabs = [...document.querySelectorAll('[role="tab"]')]
+  const warned = () =>
+    [...document.querySelectorAll('.dk-notice.is-warn[role="status"]')].filter(notice => shown(page, notice)).map(notice => text(notice.querySelector('.dk-notice__title')))
+
+  assert.deepEqual(warned(), ['2 个技能在 Codex 里不能预填。'])
+  await page.click(refresh)
+  assert.equal(reads, 2)
+  assert.deepEqual(warned(), ['1 个技能在 Codex 里不能预填。'])
+
+  // Away from 技能, "刷新" leaves the skills for when the tab opens again.
+  await page.click(tabs[1]!)
+  await page.click(refresh)
+  assert.equal(reads, 2)
+  await page.click(tabs[3]!)
+  assert.equal(reads, 3)
+  assert.deepEqual(warned(), [])
+  // Opening it again without a read in between reads nothing more.
+  await page.click(tabs[1]!)
+  await page.click(tabs[3]!)
+  assert.equal(reads, 3)
+})
+
+test('whatever the person clicks, the Pane only puts text in the prompt and never sends a message itself', async t => {
+  const configured = await openSkills()
+  t.after(configured.close)
+  const unconfigured = await openPage({ answer: deckAt('/work/elsewhere', false) })
+  t.after(unconfigured.close)
+  // Every button the person sees on every view the 技能 tab has, and the
+  // unconfigured Pane's: each time the last one the page shows now and that
+  // was not clicked yet, so a text's "预填" comes before its "返回", and
+  // "刷新" at the end, as it draws the list again.
+  const clickAll = async (page: typeof configured) => {
+    const clicked = new Set<Element>()
+    const refresh = page.document.querySelector('.dk-head button')!
+    for (;;) {
+      const button = [...page.document.querySelectorAll<HTMLButtonElement>('.dk-pane button:not([role="tab"])')].findLast(
+        each => each !== refresh && !clicked.has(each) && shown(page, each) && !each.disabled,
+      )
+      if (button === undefined) {
+        break
+      }
+      clicked.add(button)
+      assert.ok(button.isConnected)
+      await page.click(button)
+    }
+    await page.click(refresh)
+  }
+  await clickAll(configured)
+  for (const row of [...configured.document.querySelectorAll('.dk-skill')]) {
+    await configured.click(row)
+    await clickAll(configured)
+  }
+  await clickAll(unconfigured)
+
+  const messages = [...configured.sent, ...unconfigured.sent].filter(message => message.method === 'ui/message')
+  // The prefills of the skills, of their texts, "重跑配置" and "配置这个项目".
+  assert.deepEqual(
+    [...new Set(messages.map(({ params }) => params.content[0].text))].sort(),
+    [CONFIGURE_CALL, '$ask-matt', IMPLEMENT].sort(),
+  )
+  assert.deepEqual(
+    messages.map(({ params }) => params._meta?.['openai/message']?.send),
+    messages.map(() => false),
+  )
 })

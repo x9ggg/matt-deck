@@ -2081,6 +2081,70 @@ test('a Deck service started for Codex calls every skill as $name, a plugin\'s t
   assert.equal(asked.structuredContent.call, '$ask-matt')
 })
 
+test('deck_skills reads a directory Skill Source written as an absolute path', async t => {
+  const user = await home()
+  const skills = join(user, 'matt-skills')
+  await skillFile(skills, 'tdd', '先写测试，再写实现。')
+  const dir = await workspace(JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path: skills } }))
+  const deck = startDeck(dir, { HOME: user })
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_skills')
+
+  assert.deepEqual(
+    result.structuredContent.skills.map(({ name, path }: any) => [name, path]),
+    [['tdd', `${skills}/tdd/SKILL.md`]],
+  )
+})
+
+test('started for Codex, deck_skills says of each skill whether Codex finds this same file by its name, found, another, or not at all', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  const source = join(user, '.claude', 'skills')
+  for (const name of ['ask-matt', 'implement', 'tdd', 'wayfinder', 'grill']) {
+    await skillFile(source, name, `${name} 的说明。`)
+  }
+  const userSkills = join(user, '.agents', 'skills')
+  await mkdir(userSkills, { recursive: true })
+  // The user's Codex skills link implement's folder, and grill's.
+  await symlink(join(source, 'implement'), join(userSkills, 'implement'))
+  await symlink(join(source, 'grill'), join(userSkills, 'grill'))
+  // The project's link ask-matt's file itself.
+  await mkdir(join(dir, '.codex', 'skills', 'ask-matt'), { recursive: true })
+  await symlink(join(source, 'ask-matt', 'SKILL.md'), join(dir, '.codex', 'skills', 'ask-matt', 'SKILL.md'))
+  // A copy of tdd with the same words is another file; so is the copy of
+  // grill beside the link to it.
+  await skillFile(join(dir, '.agents', 'skills'), 'tdd', 'tdd 的说明。')
+  await skillFile(join(dir, '.agents', 'skills'), 'grill', 'grill 的说明。')
+  // triage's folder in the Skill Source is itself a link to a third place,
+  // which the user's Codex skills link too.
+  const elsewhere = join(user, 'matt-skills')
+  await skillFile(elsewhere, 'triage', 'triage 的说明。')
+  await symlink(join(elsewhere, 'triage'), join(source, 'triage'))
+  await symlink(join(elsewhere, 'triage'), join(userSkills, 'triage'))
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  const claudeCode = startDeck(dir, { HOME: user })
+  t.after(codex.stop)
+  t.after(claudeCode.stop)
+
+  const forCodex = await codex.callTool('deck_skills')
+  const forClaudeCode = await claudeCode.callTool('deck_skills')
+
+  assert.equal(forCodex.isError, false)
+  assert.deepEqual(
+    forCodex.structuredContent.skills.map(({ name, copy }: any) => [name, copy]),
+    [
+      ['ask-matt', 'same'],
+      ['grill', 'different'],
+      ['implement', 'same'],
+      ['tdd', 'different'],
+      ['triage', 'same'],
+      ['wayfinder', 'missing'],
+    ],
+  )
+  // Claude Code reads the Skill Source itself: there is no copy to compare.
+  assert.equal(forClaudeCode.structuredContent.skills.some((skill: any) => 'copy' in skill), false)
+})
+
 test('the Deck service will not start without the host it runs for', async () => {
   for (const args of [[], ['--host'], ['--host', 'cursor'], ['--host', 'codex', 'extra']]) {
     await assert.rejects(exec(process.execPath, [SERVER, ...args], { env: { ...process.env, HOME: await home() } }), (error: any) => {

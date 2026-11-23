@@ -1,7 +1,7 @@
 // Task kernel: the skills of a project's Skill Source, read and never
 // written. Host-agnostic: it knows a workspace, a home directory and how the
 // host calls a skill, a rule it is handed.
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, realpath } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 
 import type { ProjectConfig } from './config.ts'
@@ -16,6 +16,11 @@ export type CallOf = (name: string, plugin: string | undefined) => string
 // its host writes it; `path` is its file, `~` for the home.
 export type Skill = { name: string; call: string; description: string; path: string }
 
+// Whether the host, looking for a skill by its name in its own skill
+// directories, finds this same file, its links resolved: every copy it finds
+// is the Skill Source's file, one of them is another file, or it finds none.
+export type HostCopy = 'same' | 'different' | 'missing'
+
 // Why the Skill Source cannot be read: it is not there, or holds no skill of
 // that name.
 export class SkillSourceError extends Error {
@@ -27,6 +32,11 @@ export class SkillSourceError extends Error {
 }
 
 const isMissing = (error: any) => error.code === 'ENOENT' || error.code === 'ENOTDIR'
+
+// A directory written as a Skill Source's path is: `~/...` under the home,
+// otherwise absolute or relative to the Workspace.
+const resolveDirectory = (path: string, workspace: string, home: string) =>
+  path.startsWith('~/') ? join(home, path.slice(2)) : isAbsolute(path) ? path : join(workspace, path)
 
 // The frontmatter's `key: value` fields, and the body under it. A value
 // written as a block (`>` or `|`, then indented lines) is read as one line:
@@ -54,11 +64,7 @@ const parse = (text: string) => {
 const locate = async (source: SkillSource, workspace: string, home: string) => {
   const tilde = (path: string) => (path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path)
   if (source.type === 'directory') {
-    const root = source.path.startsWith('~/')
-      ? join(home, source.path.slice(2))
-      : isAbsolute(source.path)
-        ? source.path
-        : join(workspace, source.path)
+    const root = resolveDirectory(source.path, workspace, home)
     let entries: string[]
     try {
       entries = await readdir(root)
@@ -117,7 +123,7 @@ const locate = async (source: SkillSource, workspace: string, home: string) => {
 // no order of its own, and a plugin's folders are not shown.
 const readAll = async (source: SkillSource, workspace: string, home: string, callOf: CallOf) => {
   const { root, shown, plugin, files } = await locate(source, workspace, home)
-  const skills: (Skill & { text: string })[] = []
+  const skills: (Skill & { text: string; file: string })[] = []
   for (const file of files) {
     let text: string
     try {
@@ -130,14 +136,51 @@ const readAll = async (source: SkillSource, workspace: string, home: string, cal
     }
     const { fields, body } = parse(text)
     const name = fields.name || file.split('/').at(-2)!
-    skills.push({ name, call: callOf(name, plugin), description: fields.description ?? '', path: shown(file), text: body })
+    skills.push({ name, call: callOf(name, plugin), description: fields.description ?? '', path: shown(file), text: body, file: join(root, file) })
   }
 
   return skills.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }
 
-export const listSkills = async (source: SkillSource, workspace: string, home: string, callOf: CallOf): Promise<Skill[]> =>
-  (await readAll(source, workspace, home, callOf)).map(({ text, ...skill }) => skill)
+// The copy of a skill the host finds by its name in its own skill
+// directories, as the Skill Source's file at `file` is to it.
+const hostCopy = async (file: string, name: string, directories: string[], workspace: string, home: string): Promise<HostCopy> => {
+  const own = await realpath(file)
+  const found: string[] = []
+  for (const directory of directories) {
+    try {
+      found.push(await realpath(join(resolveDirectory(directory, workspace, home), name, 'SKILL.md')))
+    } catch (error: any) {
+      if (!isMissing(error)) {
+        throw error
+      }
+    }
+  }
+
+  return found.length === 0 ? 'missing' : found.every(each => each === own) ? 'same' : 'different'
+}
+
+// The skills of the Skill Source. Given the directories a host finds skills
+// in itself, each also says what the host finds there under its name.
+export const listSkills = async (
+  source: SkillSource,
+  workspace: string,
+  home: string,
+  callOf: CallOf,
+  hostDirectories?: string[],
+): Promise<(Skill & { copy?: HostCopy })[]> => {
+  const skills = await readAll(source, workspace, home, callOf)
+  const listed = []
+  for (const { text, file, ...skill } of skills) {
+    listed.push(
+      hostDirectories === undefined
+        ? skill
+        : { ...skill, copy: await hostCopy(file, skill.name, hostDirectories, workspace, home) },
+    )
+  }
+
+  return listed
+}
 
 // One skill with its text: the skill file under its frontmatter, as written.
 export const readSkill = async (source: SkillSource, workspace: string, home: string, callOf: CallOf, name: string) => {
@@ -146,5 +189,7 @@ export const readSkill = async (source: SkillSource, workspace: string, home: st
     throw new SkillSourceError('unknown-skill', `the Skill Source has no skill named ${name}`)
   }
 
-  return skill
+  const { file, ...read } = skill
+
+  return read
 }
