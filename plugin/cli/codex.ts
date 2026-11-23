@@ -93,12 +93,12 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
     const skill = await readIfThere(join(skillDir, 'SKILL.md'))
     const isOurs = skill?.includes(GENERATED) === true
 
-    if (args[0] === 'install') {
-      if (skill !== undefined && !isOurs) {
-        throw new Error(
-          `${skillDir} 里已有一份不是 Deck 生成的技能 ${CODEX_CONFIGURE_SKILL}，没有安装，什么都没改。移走它之后再运行一次 install。`,
-        )
-      }
+    if (args[0] === 'install' && skill !== undefined && !isOurs) {
+      process.stderr.write(
+        `${skillDir} 里已有一份不是 Deck 生成的技能 ${CODEX_CONFIGURE_SKILL}，没有安装，什么都没改。移走它之后再运行一次 install。\n`,
+      )
+      process.exitCode = 1
+    } else if (args[0] === 'install') {
       // The node registered is the first on install's PATH that is the node
       // running it, by the path found there: a package manager's link to it
       // outlives an upgrade, the versioned path the link reaches does not.

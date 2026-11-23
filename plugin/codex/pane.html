@@ -407,7 +407,7 @@ body{margin:0;background:var(--ground)}
       readAt = config.configured ? Date.now() : undefined
       showFreshness()
     } catch (error) {
-      $('failed').querySelector('.dk-notice__text').textContent = error.message
+      $('failed').querySelector('.dk-notice__text').textContent = `Deck 服务出错：${error.message}。点“刷新”重试。`
       $('loading').hidden = true
       $('failed').hidden = false
       readAt = undefined

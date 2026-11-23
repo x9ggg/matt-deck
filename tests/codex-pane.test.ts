@@ -191,7 +191,10 @@ test('the Pane says the read failed, and why, when the Deck service cannot read 
 
   assert.equal(text(document.querySelector('.dk-head__fresh')), '读取失败')
   assert.ok(document.querySelector('.dk-head__fresh')!.classList.contains('is-failed'))
-  assert.equal(text(document.querySelector('.dk-notice.is-danger .dk-notice__text')), '.matt-deck/config.json is not valid JSON')
+  assert.equal(
+    text(document.querySelector('.dk-notice.is-danger .dk-notice__text')),
+    'Deck 服务出错：.matt-deck/config.json is not valid JSON。点“刷新”重试。',
+  )
 })
 
 test('the Pane is dark or light as the Host is, and follows the Host as it changes', async t => {
