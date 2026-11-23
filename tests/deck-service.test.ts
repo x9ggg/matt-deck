@@ -2673,6 +2673,26 @@ test('the Sessions of Occupancies and reports carry the host their heartbeat rec
   )
 })
 
+test('started for Codex, deck_tasks lists the Occupancy a Claude Code Session recorded, by that host and its short id', async t => {
+  const dir = await configured()
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const claude = startDeck(dir, { ...gh.env, HOME: user })
+  t.after(claude.stop)
+  const codex = startDeck(dir, { ...gh.env, HOME: user }, 'codex')
+  t.after(codex.stop)
+  await claude.callTool('deck_heartbeat', { session: CLAUDE_SESSION })
+  await claude.callTool('deck_occupy', { session: CLAUDE_SESSION, task: 3 })
+
+  const { groups } = (await codex.callTool('deck_tasks')).structuredContent
+
+  assert.deepEqual(
+    groups.inProgress.map(({ number, occupant, occupantHost, occupantShort }: any) => [number, occupant, occupantHost, occupantShort]),
+    [[3, CLAUDE_SESSION, 'claude-code', '3f9c21d0']],
+  )
+})
+
 test('a Session local state recorded before hosts were is Claude Code\'s, and beats on with its host recorded', async t => {
   const user = await home()
   await mkdir(join(user, '.matt-deck'))

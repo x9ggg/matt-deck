@@ -22,8 +22,9 @@ export const openPage = async ({
   answer,
   hostContext = {},
 }: {
-  // What the Deck service answers a tool call the Host passes on.
-  answer: (name: string, args: object) => object | Promise<object>
+  // What the Deck service answers a tool call the Host passes on; the page's
+  // document is there to read what the page shows while the call is open.
+  answer: (name: string, args: object, document: Document) => object | Promise<object>
   hostContext?: HostContext
 }) => {
   const html = await readFile(PANE_PAGE, 'utf8')
@@ -96,7 +97,7 @@ export const openPage = async ({
         result: { protocolVersion: '2026-01-26', hostInfo: { name: 'fake-host' }, hostCapabilities: {}, hostContext },
       })
     } else if (data.method === 'tools/call') {
-      toPage({ id: data.id, result: await answer(data.params.name, data.params.arguments) })
+      toPage({ id: data.id, result: await answer(data.params.name, data.params.arguments, page.window.document) })
     } else if (data.method === 'ui/message') {
       // A message the page puts in the Session's prompt, or sends; the test
       // reads it from `sent`.
@@ -158,6 +159,15 @@ export const openPage = async ({
     },
     click: async (element: Element | null) => {
       ;(element as HTMLElement).click()
+      await settled()
+    },
+    // The Host shows the tab or hides it, as the person switches to it or
+    // away, and the page hears of it as a browser tells a page.
+    show: async (visible: boolean) => {
+      const { document, Event } = page.window
+      Object.defineProperty(document, 'visibilityState', { value: visible ? 'visible' : 'hidden', configurable: true })
+      Object.defineProperty(document, 'hidden', { value: !visible, configurable: true })
+      document.dispatchEvent(new Event('visibilitychange'))
       await settled()
     },
     close: () => {

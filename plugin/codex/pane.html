@@ -296,6 +296,8 @@ body{margin:0;background:var(--ground)}
 
 /* What the page hides it hides, whatever display a component's class gives. */
 [hidden]{display:none !important}
+/* A tab's content, and the groups in it, are laid out as the Pane's own. */
+[data-panel],#groups{display:contents}
 </style>
 </head>
 <body data-theme="deck">
@@ -326,6 +328,29 @@ body{margin:0;background:var(--ground)}
     <span class="dk-empty__title heading">此项目未配置。</span>
     <span>配置之后，这里显示这个项目的 Task。</span>
     <button class="dk-btn dk-btn--primary" type="button">配置这个项目</button>
+  </div>
+  <div data-panel="tasks" id="tasks" hidden>
+    <p class="dk-why" id="tasks-loading">正在读取 Task…</p>
+    <div class="dk-notice is-danger" role="status" id="tasks-failed" hidden>
+      <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+      <div class="dk-notice__body">
+        <span class="dk-notice__title heading">读取 Task 失败</span>
+        <span class="dk-notice__text"></span>
+      </div>
+    </div>
+    <div class="dk-filter" role="group" aria-label="筛选" id="filter" hidden>
+      <button class="dk-filter__chip" type="button" aria-pressed="true" data-filter="all">全部<span class="mono"></span></button>
+      <button class="dk-filter__chip is-ready" type="button" aria-pressed="false" data-filter="ready"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>可执行<span class="mono"></span></button>
+      <button class="dk-filter__chip is-running" type="button" aria-pressed="false" data-filter="inProgress"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg>进行中<span class="mono"></span></button>
+      <button class="dk-filter__chip is-blocked" type="button" aria-pressed="false" data-filter="blocked"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>阻塞<span class="mono"></span></button>
+      <button class="dk-filter__chip is-closed" type="button" aria-pressed="false" data-filter="done"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/></svg>已完成<span class="mono"></span></button>
+    </div>
+    <ul class="dk-list" id="containers" hidden></ul>
+    <div id="groups"></div>
+    <div class="dk-empty" id="tasks-empty" hidden>
+      <span class="dk-empty__title heading"></span>
+      <span></span>
+    </div>
   </div>
 </div>
 <script>
@@ -369,32 +394,244 @@ body{margin:0;background:var(--ground)}
   })
 
   // A tool of the Deck service; one that fails throws its message.
-  const callTool = async name => {
-    const result = await request('tools/call', { name, arguments: {} })
+  const callTool = async (name, args = {}) => {
+    const result = await request('tools/call', { name, arguments: args })
     if (result.isError) throw new Error(result.content?.[0]?.text ?? `${name} failed`)
     return result.structuredContent
   }
 
-  // How fresh the last read is, from the time it came back.
+  // What the last read came to: the time it came back, 'failed', or
+  // undefined while there is nothing read to say how fresh it is. The head
+  // writes it here alone, its text and its two classes together.
   let readAt
   const showFreshness = () => {
     const fresh = $('fresh')
-    fresh.classList.remove('is-stale')
-    if (readAt === undefined) return
-    const minutes = Math.floor(Math.max(0, Date.now() - readAt) / 60_000)
-    fresh.textContent = minutes === 0 ? '刚刚' : minutes < 60 ? `${minutes} 分钟前` : `${Math.floor(minutes / 60)} 小时前`
+    const minutes = typeof readAt === 'number' ? Math.floor(Math.max(0, Date.now() - readAt) / 60_000) : undefined
+    fresh.textContent =
+      readAt === 'failed' ? '读取失败'
+      : minutes === undefined ? ''
+      : minutes === 0 ? '刚刚'
+      : minutes < 60 ? `${minutes} 分钟前`
+      : `${Math.floor(minutes / 60)} 小时前`
+    fresh.classList.toggle('is-failed', readAt === 'failed')
     fresh.classList.toggle('is-stale', minutes > 10)
   }
   setInterval(showFreshness, 30_000)
+
+  // An element of the class, holding the children, a space between each.
+  const el = (tag, className, ...children) => {
+    const element = document.createElement(tag)
+    element.className = className
+    children.forEach((child, index) => element.append(...(index > 0 ? [' ', child] : [child])))
+    return element
+  }
+
+  const GROUPS = ['ready', 'inProgress', 'blocked', 'done']
+  const GROUP_TITLE = { ready: '可执行', inProgress: '进行中', blocked: '阻塞', done: '已完成' }
+  const TRIAGE_LABELS = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix']
+  const WAITING_LABELS = ['needs-triage', 'needs-info']
+  const HOST_NAME = { 'claude-code': 'Claude Code', codex: 'Codex' }
+  // What an empty list says under each filter: a fact and where to go.
+  const EMPTY = {
+    all: ['Task Source 里还没有 Task。', '在 Session 里用 Matt skills 建立。'],
+    ready: ['没有可执行的 Task。', '到“下一步”问该做什么。'],
+    inProgress: ['没有进行中的 Task。', '点上面的筛选看别的分组。'],
+    blocked: ['没有被阻塞的 Task。', '点上面的筛选看别的分组。'],
+    done: ['还没有已完成的 Task。', '点上面的筛选看别的分组。'],
+  }
+  // Why the Task Source could not be read, by the kind the Deck service
+  // gives: the Pane's own words, some of them code, and the reason it was
+  // given, as text.
+  const code = text => el('code', '', text)
+  const FAILURE = {
+    unauthenticated: () => [code('gh'), ' 未登录。运行 ', code('gh auth login'), ' 后点“刷新”重试。'],
+    offline: () => ['连不上 GitHub。检查网络后点“刷新”重试。'],
+    'gh-missing': () => ['找不到 ', code('gh'), ' 命令。安装 GitHub CLI 后点“刷新”重试。'],
+    'no-repository': () => ['这个 Workspace 没有指向 GitHub 的 remote，读不到 Issues。'],
+    failed: message => [code('gh'), ` 出错：${message}。点“刷新”重试。`],
+  }
+  // A row's state: the glyph's name and its path.
+  const PLATE = {
+    ready: ['可执行', '<path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/>'],
+    running: ['进行中 · 本 Session', '<path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/>'],
+    other: ['进行中 · 其他 Session', '<circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 2.4a5.6 5.6 0 0 0 0 11.2z" fill="currentColor"/>'],
+    orphaned: ['Orphaned', '<path d="M8 2 14.6 13.5H1.4z" fill="currentColor"/>'],
+    blocked: ['被阻塞', '<rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/>'],
+    closed: ['已解锁', '<path d="M8 1 15 8 8 15 1 8z" fill="currentColor"/>'],
+    closeout: ['Pending Closeout', '<path d="M8 1.6 14.4 8 8 14.4 1.6 8z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 5.2 10.8 8 8 10.8 5.2 8z" fill="currentColor"/>'],
+  }
+  const plate = state => {
+    const [label, paths] = PLATE[state]
+    const element = el('span', `dk-plate is-${state}`)
+    element.setAttribute('role', 'img')
+    element.setAttribute('aria-label', label)
+    element.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${paths}</svg>`
+    return element
+  }
+  const pad = n => String(n).padStart(2, '0')
+  // A closing time in the local time zone: `11-22 01:40`.
+  const shortTime = at => {
+    const date = new Date(at)
+    return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  }
+
+  // The Session this tab is in, the last list the Deck service gave, and the
+  // filter's choice: all, or one group.
+  let session
+  let list
+  let filter = 'all'
+
+  // A Task's state in the group the Deck service put it in; in progress, by
+  // the Session holding it.
+  const stateOf = (task, group) =>
+    group === 'inProgress'
+      ? task.isOrphaned ? 'orphaned' : task.occupant === session.session ? 'running' : 'other'
+      : { ready: 'ready', blocked: 'blocked', done: 'closed' }[group]
+
+  // A row: the glyph, the number and title, then what it says of itself.
+  const row = (task, state, className, before, after, meta, aside) =>
+    el('li', `dk-row is-${state}${className}`, plate(state), el('div', 'dk-row__main',
+      el('div', 'dk-row__line', ...before, el('span', `dk-id is-${state}`, `#${task.number}`), el('span', 'dk-row__title heading', task.title), ...after),
+      el('div', 'dk-row__line', el('span', 'dk-row__meta caption', ...meta), ...aside)))
+
+  const taskRow = (task, group) => {
+    const state = stateOf(task, group)
+    const status = {
+      ready: [el('span', '', '可执行')],
+      running: [el('span', '', '进行中 · 本 Session')],
+      // Another Session of this Host by its cut-short id alone, one of the
+      // other Host after the Host's name.
+      other: [el('span', '', `进行中 ·${task.occupantHost === session.sessionHost ? '' : ` ${HOST_NAME[task.occupantHost]}`}`, el('span', 'mono', task.occupantShort))],
+      orphaned: [el('span', 'is-warn', 'Orphaned')],
+      blocked: task.blockers.length > 0 ? [el('span', '', `被 ${task.blockers.map(number => `#${number}`).join(' ')} 阻塞`)] : [],
+      closed: [el('span', 'is-unlock', '已解锁')],
+    }[state]
+    if (state === 'closed' && task.hasEvidence) {
+      const evidence = el('span', 'is-pass', '验收证据')
+      evidence.insertAdjacentHTML('afterbegin', '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8.6 6.4 12.2 13.2 4.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>')
+      status.push(evidence)
+    }
+    // Blocked by no Task, it waits on the label that puts it there; else its
+    // first triage label.
+    const label = state === 'blocked' && task.blockers.length === 0
+      ? task.labels.find(each => WAITING_LABELS.includes(each))
+      : task.labels.find(each => TRIAGE_LABELS.includes(each))
+    const meta = [...status, ...(label === undefined ? [] : [el('span', 'dk-tag', label)])]
+    const aside = state === 'closed' && task.closedAt !== null ? [el('span', 'dk-row__aside caption', shortTime(task.closedAt))] : []
+    return row(task, state, '', [], [], meta, aside)
+  }
+
+  // A Spec or Map: its glyph by its direct Child Tasks in progress, else as a
+  // Task's (docs/pane-layout.md); its progress, and its Child Tasks by group.
+  const containerRow = container => {
+    // Its direct Child Tasks, each with the group it stands in; a Spec or Map
+    // among them where it stands as a Task.
+    const children = [
+      ...list.containers.map(child => [child, child.group]),
+      ...GROUPS.flatMap(group => list.groups[group].map(child => [child, group])),
+    ].filter(([child]) => child.parent === container.number)
+    const inGroup = group => children.filter(([, each]) => each === group).map(([child]) => child)
+    const inProgress = inGroup('inProgress')
+    const state = container.isPendingCloseout
+      ? 'closeout'
+      : inProgress.some(child => child.isOrphaned)
+        ? 'orphaned'
+        : inProgress.some(child => child.occupant === session.session)
+          ? 'running'
+          : inProgress.length > 0 ? 'other' : stateOf(container, container.group)
+    const { closed, total } = container.progress
+    const ring = el('span', `dk-ring${container.isPendingCloseout ? ' is-complete' : ''}`, `${closed}/${total}`)
+    ring.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 16 16" aria-hidden="true"><circle class="dk-ring__track" cx="8" cy="8" r="6"/><circle class="dk-ring__arc" cx="8" cy="8" r="6" stroke-dasharray="${total === 0 ? 0 : ((37.7 * closed) / total).toFixed(2)} 37.70"/></svg>`)
+    const meta = container.isPendingCloseout
+      ? [el('span', 'is-unlock', '待收尾核对')]
+      : [el('span', '', ['ready', 'inProgress', 'blocked'].map(group => `${inGroup(group).length} ${GROUP_TITLE[group]}`).join(' · '))]
+    return row(container, state, ' dk-row--container', [el('span', 'dk-kind label', container.kind === 'spec' ? 'Spec' : 'Map')], [ring], meta, [])
+  }
+
+  // The list as the filter shows it: under "all", the open Specs and Maps,
+  // then each group that has Tasks, past five rows its first five and a
+  // button to the rest; one group alone, all of it.
+  const showTasks = () => {
+    for (const chip of $('filter').children) {
+      const chosen = chip.dataset.filter
+      chip.setAttribute('aria-pressed', String(chosen === filter))
+      chip.querySelector('.mono').textContent = chosen === 'all'
+        ? GROUPS.reduce((sum, group) => sum + list.groups[group].length, 0)
+        : list.groups[chosen].length
+    }
+    const containers = filter === 'all' ? list.containers.filter(container => container.isOpen) : []
+    $('containers').replaceChildren(...containers.map(containerRow))
+    $('containers').hidden = containers.length === 0
+    const groups = (filter === 'all' ? GROUPS : [filter]).filter(group => list.groups[group].length > 0)
+    $('groups').replaceChildren(
+      ...groups.map(group => {
+        const tasks = list.groups[group]
+        const shown = filter === 'all' ? tasks.slice(0, 5) : tasks
+        const section = el('section', 'dk-group')
+        if (filter === 'all') {
+          section.append(el('header', 'dk-group__head', el('span', 'label', GROUP_TITLE[group]), el('span', 'dk-group__count mono', String(tasks.length))))
+        }
+        section.append(el('ul', 'dk-list', ...shown.map(task => taskRow(task, group))))
+        if (shown.length < tasks.length) {
+          const more = el('button', 'dk-group__more caption', `还有 ${tasks.length - shown.length} 个`)
+          more.type = 'button'
+          more.addEventListener('click', () => {
+            filter = group
+            showTasks()
+          })
+          section.append(more)
+        }
+        return section
+      }),
+    )
+    const isEmpty = containers.length === 0 && groups.length === 0
+    $('tasks-empty').hidden = !isEmpty
+    if (isEmpty) {
+      const [fact, where] = EMPTY[filter]
+      $('tasks-empty').children[0].textContent = fact
+      $('tasks-empty').children[1].textContent = where
+    }
+    $('filter').hidden = false
+  }
+  for (const chip of $('filter').children) {
+    chip.addEventListener('click', () => {
+      filter = chip.dataset.filter
+      showTasks()
+    })
+  }
+
+  // Reads the Tasks, the Task Source again when `refresh` asks for it. A read
+  // that fails says why above the list read before, if any.
+  const readTasks = async refresh => {
+    let failure
+    try {
+      const answer = await callTool('deck_tasks', refresh ? { refresh: true } : {})
+      if (answer.ok) list = answer
+      else failure = FAILURE[answer.failure.kind](answer.failure.message)
+    } catch (error) {
+      failure = [`Deck 服务出错：${error.message}。点“刷新”重试。`]
+    }
+    $('tasks-loading').hidden = true
+    $('tasks-failed').hidden = failure === undefined
+    if (failure !== undefined) {
+      $('tasks-failed').querySelector('.dk-notice__text').replaceChildren(...failure)
+      readAt = 'failed'
+    } else {
+      readAt = Date.now()
+    }
+    showFreshness()
+    if (list !== undefined) showTasks()
+  }
 
   // The call of the configure skill, as the Deck service gives it, read with
   // the config of a project that is not configured.
   let configureCall
 
-  const read = async () => {
+  const read = async (refresh = false) => {
     $('refresh').disabled = true
     try {
-      const [config, session] = await Promise.all([callTool('deck_config'), callTool('deck_session')])
+      const [config, named] = await Promise.all([callTool('deck_config'), callTool('deck_session')])
+      session = named
       if (!config.configured) configureCall = (await callTool('deck_configure')).call
       $('project').firstElementChild.textContent = config.workspace.slice(config.workspace.lastIndexOf('/') + 1)
       $('session').querySelector('b').textContent = session.sessionShort
@@ -402,29 +639,45 @@ body{margin:0;background:var(--ground)}
       $('loading').hidden = $('failed').hidden = true
       $('tabs').hidden = !config.configured
       $('unconfigured').hidden = config.configured
-      $('fresh').classList.remove('is-failed')
-      $('fresh').textContent = ''
-      readAt = config.configured ? Date.now() : undefined
-      showFreshness()
+      showPanel()
+      // A list read before keeps its freshness until the next read answers.
+      if (!config.configured || list === undefined) {
+        readAt = undefined
+        showFreshness()
+      }
+      if (config.configured) await readTasks(refresh)
     } catch (error) {
       $('failed').querySelector('.dk-notice__text').textContent = `Deck 服务出错：${error.message}。点“刷新”重试。`
       $('loading').hidden = true
       $('failed').hidden = false
-      readAt = undefined
-      $('fresh').textContent = '读取失败'
-      $('fresh').classList.add('is-failed')
+      readAt = 'failed'
+      showFreshness()
     } finally {
       $('refresh').disabled = false
     }
   }
 
   const tabs = [...$('tabs').querySelectorAll('[role="tab"]')]
+  // The content of the tab chosen, in a Configured Project.
+  const showPanel = () => {
+    const chosen = tabs.find(tab => tab.getAttribute('aria-selected') === 'true').dataset.tab
+    for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = $('tabs').hidden || panel.dataset.panel !== chosen
+  }
   for (const tab of tabs) {
     tab.addEventListener('click', () => {
       for (const each of tabs) each.setAttribute('aria-selected', String(each === tab))
+      showPanel()
     })
   }
-  $('refresh').addEventListener('click', read)
+  $('refresh').addEventListener('click', () => read(true))
+
+  // While the tab is shown the Pane reads every 60 seconds, and once as it
+  // is shown again; never while a read is under way.
+  const readIfShown = () => {
+    if (document.visibilityState === 'visible' && !$('refresh').disabled) read()
+  }
+  setInterval(readIfShown, 60_000)
+  document.addEventListener('visibilitychange', readIfShown)
 
   // Puts the call in the Session's prompt for the person to send (ADR-0006),
   // then stays off for 5 seconds, so a second click fills in no second copy.
