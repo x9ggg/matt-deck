@@ -2079,6 +2079,11 @@ test('a Deck service started for Codex calls every skill as $name, a plugin\'s t
   assert.equal(read.structuredContent.skill.call, '$tdd')
   assert.equal(asked.structuredContent.ok, true)
   assert.equal(asked.structuredContent.call, '$ask-matt')
+  // The text the Pane in a tab prefills: the call, then its arguments.
+  assert.equal(
+    asked.structuredContent.prompt,
+    `$ask-matt ${askArgs(asked.structuredContent.requestId, ['Specs and Maps: none', 'Ready:', '- #3 Task 3', 'In progress: none', 'Blocked: none', 'Done: 0 Tasks closed'].join('\n'))}`,
+  )
 })
 
 test('deck_skills reads a directory Skill Source written as an absolute path', async t => {

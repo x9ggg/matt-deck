@@ -332,6 +332,7 @@ body{margin:0;background:var(--ground)}
     <span>配置之后，这里显示这个项目的 Task。</span>
     <button class="dk-btn dk-btn--primary" type="button">配置这个项目</button>
   </div>
+  <div data-panel="next" id="next" hidden></div>
   <div data-panel="tasks" id="tasks" hidden>
     <p class="dk-why" id="tasks-loading">正在读取 Task…</p>
     <div class="dk-notice is-danger" role="status" id="tasks-failed" hidden>
@@ -628,6 +629,7 @@ body{margin:0;background:var(--ground)}
     }
     showFreshness()
     if (list !== undefined) showTasks()
+    showRecommendation()
   }
 
   // The call of the configure skill, as the Deck service gives it, read with
@@ -658,8 +660,11 @@ body{margin:0;background:var(--ground)}
       }
       if (config.configured) await readTasks(refresh)
       if (config.configured && refresh) {
+        // Read again, the page no longer says a request was not made.
+        asking = { ...asking, failure: undefined }
         skillsRead = false
         if (!$('skills').hidden) await showSkillsTab()
+        if (!$('next').hidden) await readSkills()
       }
     } catch (error) {
       $('failed').querySelector('.dk-notice__text').textContent = `Deck 服务出错：${error.message}。点“刷新”重试。`
@@ -843,14 +848,164 @@ body{margin:0;background:var(--ground)}
       const [answer, configure] = await Promise.all([callTool('deck_skills'), callTool('deck_configure')])
       configureCall = configure.call
       showSkills(answer)
+      askMatt = answer.ok ? (answer.skills.find(skill => skill.name === 'ask-matt') ?? null) : null
     } catch (error) {
       $('skill-list').replaceChildren(failedNotice('读取 Skill Source 失败', skillFailure({ message: error.message })))
+      askMatt = null
     }
+    showNext()
   }
 
   // The 技能 tab shows its list, read once since "刷新" was last clicked.
   const showSkillsTab = async () => {
     showSkillList()
+    if (!skillsRead) await readSkills()
+  }
+
+  // ask-matt as the last read of the skills lists it: undefined before the
+  // first, null where the read failed or listed none, and then deck_ask
+  // says why it cannot make the request.
+  let askMatt
+  const UNASKABLE = { different: 'Codex 里的 ask-matt 不是同一份，不能预填。', missing: 'Codex 里找不到 ask-matt，不能预填。' }
+
+  // The Recommendation Request of this tab, the last one asked: none yet,
+  // waiting for the agent's report, answered, or stopped after 10 minutes.
+  // Only the last one is waited for. `again` says it was asked while
+  // another waited; `failure`, why the last ask made none.
+  let asking = { phase: 'none' }
+  let waitingFor
+
+  // Asks the Deck service for a Recommendation Request and prefills it, then
+  // reads its Recommendation every 2 seconds, for 10 minutes at most.
+  const ask = async button => {
+    button.disabled = true
+    let answer
+    try {
+      answer = await callTool('deck_ask')
+    } catch (error) {
+      answer = { ok: false, failure: { message: error.message } }
+    }
+    if (!answer.ok) {
+      asking = { ...asking, failure: answer.failure }
+      showNext()
+      return
+    }
+    const { requestId } = answer
+    asking = { phase: 'waiting', requestId, again: asking.phase === 'waiting' }
+    prefill(button, answer.prompt)
+    showNext()
+    clearInterval(waitingFor)
+    const askedAt = Date.now()
+    waitingFor = setInterval(async () => {
+      if (Date.now() - askedAt >= 600_000) {
+        clearInterval(waitingFor)
+        asking = { phase: 'stopped' }
+        showNext()
+        return
+      }
+      let read
+      try {
+        read = await callTool('deck_recommendation', { requestId })
+      } catch {
+        return
+      }
+      // Only the request still waited for is answered by its read.
+      if (asking.requestId !== requestId || !read.found) return
+      clearInterval(waitingFor)
+      asking = { phase: 'answered', recommendation: read.recommendation }
+      showNext()
+    }, 2_000)
+  }
+
+  // The Recommendation as the "下一个成就" card: the Task by its number, with
+  // its glyph and title where the list read holds it; "无" for a field with
+  // nothing in it.
+  const recommendationCard = ({ task, nextStep, skill, reason, blockers }) => {
+    const found = list === undefined
+      ? undefined
+      : [...list.containers.map(each => [each, each.group]), ...GROUPS.flatMap(group => list.groups[group].map(each => [each, group]))]
+          .find(([each]) => each.number === task)
+    const glyph = found === undefined ? [] : [plate(stateOf(...found))]
+    glyph.forEach(each => each.classList.add('dk-plate--lg'))
+    const title = found !== undefined ? found[0].title : task === null ? '无' : '任务列表里没有这个 Task'
+    const field = (name, value) => [el('dt', 'caption', name), el('dd', '', value === '' ? '无' : value)]
+    return el(
+      'article',
+      'dk-rec',
+      el(
+        'div',
+        'dk-rec__head',
+        ...glyph,
+        el('div', 'dk-rec__titles', el('span', 'dk-rec__overline label', '下一个成就'), el('span', 'dk-rec__title title', title)),
+        ...(task === null ? [] : [el('span', 'mono', `#${task}`)]),
+      ),
+      el(
+        'dl',
+        'dk-rec__fields',
+        ...field('下一步', nextStep),
+        ...field('技能', skill === '' ? '' : el('span', 'mono', skill)),
+        ...field('理由', reason),
+        ...field('阻塞', blockers),
+      ),
+    )
+  }
+
+  // The 下一步 tab as the request stands and the skills say: a read of the
+  // skills draws it again. The timed reads leave it, its buttons too, but
+  // for the Recommendation's card, drawn again from the list they read.
+  const showNext = () => {
+    const why = askMatt && askMatt.copy !== 'same' ? UNASKABLE[askMatt.copy] : undefined
+    const askButton = (label, className) => {
+      const button = el('button', className, label)
+      button.type = 'button'
+      button.disabled = askMatt === undefined || why !== undefined
+      button.addEventListener('click', () => ask(button))
+      return button
+    }
+    const primary = () => askButton('我现在该做什么', 'dk-btn dk-btn--primary dk-btn--block')
+    const phases = (...states) =>
+      el('div', 'dk-phases caption', ...['已填入', '等待回报', '已回答'].map((label, index) => el('span', `dk-phase ${states[index]}`.trim(), label)))
+    const shown = []
+    if (asking.failure !== undefined) {
+      // The reason in the Pane's words, and the hint that holds here: not
+      // "刷新", which makes no request, but the button this tab shows.
+      const { kind, message } = asking.failure
+      const reason = FAILURE[kind]?.(message) ?? [skillFailure({ kind, message })]
+      const again = `再点“${asking.phase === 'waiting' || asking.phase === 'answered' ? '再问一次' : '我现在该做什么'}”重试。`
+      reason.push(reason.pop().replace(/点“刷新”(?:重试|重新读取)。$/, again))
+      const notice = failedNotice('没有填入推荐请求', '')
+      notice.querySelector('.dk-notice__text').replaceChildren(...reason)
+      shown.push(notice)
+    }
+    const hint = text => el('p', 'dk-next__hint caption', text)
+    if (asking.phase === 'none') shown.push(primary(), ...(why === undefined ? [hint('把 $ask-matt 填进输入框，附带 Task Snapshot。')] : []))
+    if (asking.phase === 'waiting') {
+      shown.push(
+        phases('is-done', 'is-now', ''),
+        el('div', 'dk-next__line', el('span', '', asking.again ? '已重新填入。输入框里上一份还在的话，先删掉再发送。' : '已填入输入框，等你发送。'), askButton('再问一次', 'dk-btn')),
+      )
+    }
+    if (asking.phase === 'answered') shown.push(phases('is-done', 'is-done', 'is-done'), recommendationCard(asking.recommendation))
+    if (asking.phase === 'stopped') {
+      shown.push(phases('is-done', 'is-cancelled', ''), hint('等了 10 分钟，没有收到回报，已停止等待。回答在对话里。'), primary())
+    }
+    if (why !== undefined) {
+      const rerun = el('button', 'dk-btn', '重跑配置')
+      rerun.type = 'button'
+      rerun.addEventListener('click', () => prefill(rerun, configureCall))
+      shown.push(el('div', 'dk-next__line', el('span', 'dk-why caption', why), rerun))
+    }
+    $('next').replaceChildren(el('div', 'dk-next', ...shown), ...(asking.phase === 'answered' ? [askButton('再问一次', 'dk-btn')] : []))
+  }
+
+  const showRecommendation = () => {
+    $('next').querySelector('.dk-rec')?.replaceWith(recommendationCard(asking.recommendation))
+  }
+
+  // The 下一步 tab, and the skills once since "刷新" was last clicked, to
+  // know whether Codex runs this ask-matt.
+  const showNextTab = async () => {
+    showNext()
     if (!skillsRead) await readSkills()
   }
 
@@ -865,6 +1020,7 @@ body{margin:0;background:var(--ground)}
       for (const each of tabs) each.setAttribute('aria-selected', String(each === tab))
       showPanel()
       if (tab.dataset.tab === 'skills') showSkillsTab()
+      if (tab.dataset.tab === 'next') showNextTab()
     })
   }
   $('refresh').addEventListener('click', () => read(true))

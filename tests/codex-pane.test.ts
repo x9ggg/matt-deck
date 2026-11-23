@@ -125,7 +125,7 @@ const shown = (page: { window: any }, element: Element | null) => {
 }
 
 test('in a Configured Project the Pane heads its four tabs with the project and the Session, which it asks only the Host for', async t => {
-  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  const page = await openPage({ answer: deckWithSkills() })
   t.after(page.close)
   const { document } = page
   const tabs = () => [...document.querySelectorAll('[role="tab"]')]
@@ -154,10 +154,13 @@ test('in a Configured Project the Pane heads its four tabs with the project and 
     { name: 'deck_config', arguments: {} },
     { name: 'deck_session', arguments: {} },
     { name: 'deck_tasks', arguments: {} },
+    // 下一步 reads the skills, to know whether Codex runs this ask-matt.
+    { name: 'deck_skills', arguments: {} },
+    { name: 'deck_configure', arguments: {} },
   ])
 
   await page.click(document.querySelector('.dk-head button'))
-  assert.equal(calls().length, 6)
+  assert.equal(calls().length, 10)
   assert.equal(text(document.querySelector('.dk-head__fresh')), '刚刚')
 })
 
@@ -1070,7 +1073,7 @@ test('"刷新" reads the skills again, on the 技能 tab at once and on another 
 })
 
 test('whatever the person clicks, the Pane only puts text in the prompt and never sends a message itself', async t => {
-  const configured = await openSkills()
+  const configured = await openSkills(deckThatRecommends().answer)
   t.after(configured.close)
   const unconfigured = await openPage({ answer: deckAt('/work/elsewhere', false) })
   t.after(unconfigured.close)
@@ -1100,15 +1103,557 @@ test('whatever the person clicks, the Pane only puts text in the prompt and neve
     await clickAll(configured)
   }
   await clickAll(unconfigured)
+  // The 下一步 tab's buttons, each once, as each click draws them anew.
+  await configured.click([...configured.document.querySelectorAll('[role="tab"]')].find(tab => text(tab) === '下一步')!)
+  await configured.click(button(configured, '我现在该做什么'))
+  await configured.click(button(configured, '再问一次'))
 
   const messages = [...configured.sent, ...unconfigured.sent].filter(message => message.method === 'ui/message')
-  // The prefills of the skills, of their texts, "重跑配置" and "配置这个项目".
+  // The prefills of the skills, of their texts, "重跑配置", "配置这个项目" and
+  // the two Recommendation Requests.
   assert.deepEqual(
     [...new Set(messages.map(({ params }) => params.content[0].text))].sort(),
-    [CONFIGURE_CALL, '$ask-matt', IMPLEMENT].sort(),
+    [CONFIGURE_CALL, '$ask-matt', IMPLEMENT, promptOf(1), promptOf(2)].sort(),
   )
   assert.deepEqual(
     messages.map(({ params }) => params._meta?.['openai/message']?.send),
     messages.map(() => false),
   )
+})
+
+// The Deck service of a Configured Project that makes Recommendation
+// Requests: each with an id and a prompt no page could write, so a page that
+// prefills one took it from the answer. `reported` holds what the agent has
+// reported by request; `reads`, the request of each read of one.
+const deckThatRecommends = (skills: object[] = SKILLS) => {
+  let made = 0
+  const reported = new Map<string, object>()
+  const reads: string[] = []
+  return {
+    reported,
+    reads,
+    answer: (name: string, args: any) => {
+      if (name === 'deck_ask') {
+        made++
+        return answered({
+          ok: true,
+          requestId: `request-${made}`,
+          call: '$ask-matt',
+          command: 'ask-matt',
+          args: `the arguments of request ${made}`,
+          prompt: promptOf(made),
+        })
+      }
+      if (name === 'deck_recommendation') {
+        reads.push(args.requestId)
+        const recommendation = reported.get(args.requestId)
+        return answered(recommendation === undefined ? { found: false } : { found: true, recommendation })
+      }
+      return deckWithSkills(skills)(name, args)
+    },
+  }
+}
+const promptOf = (request: number) => `$ask-matt as the Deck service writes request ${request} 5c8a`
+
+const openNext = async (deck: { answer: (name: string, args: any) => object }) => {
+  const page = await openPage({ answer: deck.answer })
+  await page.click([...page.document.querySelectorAll('[role="tab"]')].find(tab => text(tab) === '下一步')!)
+  return page
+}
+
+// The 下一步 tab as the person reads it: the phases with the one it is at,
+// then each line, and each button with whether it is on.
+const nextTab = (page: { document: Document; window: any }) => {
+  const panel = page.document.querySelector('[data-panel="next"]')!
+  const phases = [...panel.querySelectorAll('.dk-phase')].map(phase =>
+    phase.classList.contains('is-now') ? `>${text(phase)}` : phase.classList.contains('is-cancelled') ? `-${text(phase)}` : phase.classList.contains('is-done') ? `+${text(phase)}` : text(phase),
+  )
+  const said = [...panel.querySelectorAll('.dk-next__hint, .dk-next__line > span, .dk-notice__title, .dk-notice__text')].map(text)
+  const buttons = [...panel.querySelectorAll('button')].map(button => `${text(button)}${(button as HTMLButtonElement).disabled ? '（停用）' : ''}`)
+  return { shown: shown(page, panel), phases, said, buttons }
+}
+// The Recommendation's fields, each name then what it says.
+const fields = (page: { document: Document }) => [...page.document.querySelectorAll('.dk-rec__fields > *')].map(text)
+const button = (page: { document: Document }, label: string) =>
+  [...page.document.querySelectorAll('[data-panel="next"] button')].find(each => text(each) === label)!
+
+// A Recommendation as the agent reports it, with words no page writes.
+const RECOMMENDATION = {
+  task: 70,
+  nextStep: '先画返回栏，再接钻取 7q4x。',
+  skill: '$implement-as-the-agent-reports-2d9b',
+  reason: '它挡着 #73 和 #71 3m8v。',
+  blockers: '',
+}
+
+test('"我现在该做什么" puts the Recommendation Request the Deck service gives in the prompt, unsent, and waits for the report', async t => {
+  const deck = deckThatRecommends()
+  const page = await openNext(deck)
+  t.after(page.close)
+
+  assert.deepEqual(nextTab(page), {
+    shown: true,
+    phases: [],
+    said: ['把 $ask-matt 填进输入框，附带 Task Snapshot。'],
+    buttons: ['我现在该做什么'],
+  })
+  await page.click(button(page, '我现在该做什么'))
+
+  assert.deepEqual(prefills(page), [prefilled(promptOf(1))])
+  assert.deepEqual(nextTab(page), {
+    shown: true,
+    phases: ['+已填入', '>等待回报', '已回答'],
+    said: ['已填入输入框，等你发送。'],
+    buttons: ['再问一次'],
+  })
+})
+
+test('the Pane reads the request\'s Recommendation every 2 seconds and shows it as it comes', async t => {
+  const deck = deckThatRecommends()
+  const page = await openNext(deck)
+  t.after(page.close)
+  await page.click(button(page, '我现在该做什么'))
+
+  await page.advance(1_999)
+  assert.deepEqual(deck.reads, [])
+  await page.advance(1)
+  assert.deepEqual(deck.reads, ['request-1'])
+  await page.advance(4_000)
+  assert.deepEqual(deck.reads, ['request-1', 'request-1', 'request-1'])
+
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+  const { document } = page
+  assert.deepEqual(nextTab(page).phases, ['+已填入', '+等待回报', '+已回答'])
+  assert.deepEqual(parts(document.querySelector('.dk-rec__head'), 'span'), ['下一个成就', 'Task 详情', '#70'])
+  // The glyph is the Task's as the list read has it, at its large size.
+  assert.equal(document.querySelector('.dk-rec__head .dk-plate')!.getAttribute('aria-label'), '可执行')
+  assert.equal(document.querySelector('.dk-rec__head .dk-plate')!.classList.contains('dk-plate--lg'), true)
+  assert.deepEqual(fields(page), [
+    '下一步',
+    '先画返回栏，再接钻取 7q4x。',
+    '技能',
+    '$implement-as-the-agent-reports-2d9b',
+    '理由',
+    '它挡着 #73 和 #71 3m8v。',
+    '阻塞',
+    '无',
+  ])
+  assert.equal(document.querySelector('.dk-rec__fields .mono')!.textContent, RECOMMENDATION.skill)
+  assert.deepEqual(nextTab(page).buttons, ['再问一次'])
+  // Once answered it reads no more.
+  await page.advance(60_000)
+  assert.equal(deck.reads.length, 4)
+})
+
+test('after 10 minutes with no report the Pane stops waiting and says so, and a report after that is not shown', async t => {
+  const deck = deckThatRecommends()
+  const page = await openNext(deck)
+  t.after(page.close)
+  await page.click(button(page, '我现在该做什么'))
+
+  await page.advance(599_999)
+  assert.equal(nextTab(page).phases[1], '>等待回报')
+  assert.equal(deck.reads.length, 299)
+  await page.advance(1)
+
+  assert.deepEqual(nextTab(page), {
+    shown: true,
+    phases: ['+已填入', '-等待回报', '已回答'],
+    said: ['等了 10 分钟，没有收到回报，已停止等待。回答在对话里。'],
+    buttons: ['我现在该做什么'],
+  })
+  // Stopped, the tab is not drawn again: the button the person may be on
+  // stays where it is.
+  const primary = button(page, '我现在该做什么')
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(10_000)
+  assert.equal(deck.reads.length, 299)
+  assert.equal(page.document.querySelector('.dk-rec'), null)
+  assert.equal(primary.isConnected, true)
+
+  // Asked again once stopped, it waits anew.
+  await page.click(button(page, '我现在该做什么'))
+  assert.deepEqual(prefills(page), [prefilled(promptOf(1)), prefilled(promptOf(2))])
+  assert.deepEqual(nextTab(page).said, ['已填入输入框，等你发送。'])
+  await page.advance(2_000)
+  assert.deepEqual(deck.reads.slice(299), ['request-2'])
+})
+
+test('"再问一次" makes a new request and waits for it alone; asked while one waits, it says to delete the copy before', async t => {
+  const deck = deckThatRecommends()
+  const page = await openNext(deck)
+  t.after(page.close)
+  await page.click(button(page, '我现在该做什么'))
+  await page.advance(2_000)
+
+  await page.click(button(page, '再问一次'))
+  assert.deepEqual(prefills(page), [prefilled(promptOf(1)), prefilled(promptOf(2))])
+  assert.deepEqual(nextTab(page), {
+    shown: true,
+    phases: ['+已填入', '>等待回报', '已回答'],
+    said: ['已重新填入。输入框里上一份还在的话，先删掉再发送。'],
+    buttons: ['再问一次'],
+  })
+
+  // The first request's report, come after the second was asked, is not
+  // shown; nor is it read again.
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+  assert.deepEqual(deck.reads, ['request-1', 'request-2'])
+  assert.equal(page.document.querySelector('.dk-rec'), null)
+  // Ten minutes count from the second request.
+  await page.advance(594_000)
+  assert.equal(nextTab(page).phases[1], '>等待回报')
+
+  deck.reported.set('request-2', { ...RECOMMENDATION, task: 74 })
+  await page.advance(2_000)
+  assert.deepEqual(parts(page.document.querySelector('.dk-rec__head'), 'span'), ['下一个成就', '执行与 Occupancy 登记', '#74'])
+
+  // Asked again once answered, it waits with nothing to delete.
+  await page.click(button(page, '再问一次'))
+  assert.deepEqual(nextTab(page).said, ['已填入输入框，等你发送。'])
+  assert.equal(page.document.querySelector('.dk-rec'), null)
+})
+
+test('a report read late, after the request was asked again, is not shown', async t => {
+  // The read of the first request answers only once the second is asked.
+  let release: () => void = () => {}
+  const deck = deckThatRecommends()
+  const page = await openNext({
+    answer: (name: string, args: any) =>
+      name === 'deck_recommendation' && args.requestId === 'request-1'
+        ? new Promise(resolve => {
+            release = () => resolve(answered({ found: true, recommendation: RECOMMENDATION }))
+          })
+        : deck.answer(name, args),
+  })
+  t.after(page.close)
+  await page.click(button(page, '我现在该做什么'))
+  // While the read is held, the page is never settled: wait a moment.
+  const moment = () => new Promise(resolve => setTimeout(resolve, 20))
+  const reading = page.advance(2_000)
+  await moment()
+  ;(button(page, '再问一次') as HTMLElement).click()
+  await moment()
+  release()
+  await reading
+
+  assert.equal(page.document.querySelector('.dk-rec'), null)
+  assert.deepEqual(nextTab(page).said, ['已重新填入。输入框里上一份还在的话，先删掉再发送。'])
+})
+
+test('a Recommendation\'s fields are shown as the agent wrote them, "无" where empty, and a Task the list does not hold by its number', async t => {
+  const deck = deckThatRecommends()
+  const page = await openNext(deck)
+  t.after(page.close)
+  const answer = async (recommendation: object) => {
+    await page.click(button(page, page.document.querySelector('.dk-rec') === null ? '我现在该做什么' : '再问一次'))
+    deck.reported.set(`request-${prefills(page).length}`, recommendation)
+    await page.advance(2_000)
+  }
+
+  await answer({ task: null, nextStep: '', skill: '', reason: '', blockers: '' })
+  assert.deepEqual(parts(page.document.querySelector('.dk-rec__head'), 'span'), ['下一个成就', '无'])
+  assert.equal(page.document.querySelector('.dk-rec__head .dk-plate'), null)
+  assert.deepEqual(fields(page), ['下一步', '无', '技能', '无', '理由', '无', '阻塞', '无'])
+  assert.equal(page.document.querySelector('.dk-rec__fields .mono'), null)
+
+  await answer({ task: 999, nextStep: '<b>先</b>读 `x`', skill: '<i>$tdd</i>', reason: '**粗**', blockers: '被 <em>#1</em> 挡着' })
+  assert.deepEqual(parts(page.document.querySelector('.dk-rec__head'), 'span'), ['下一个成就', '任务列表里没有这个 Task', '#999'])
+  assert.deepEqual(fields(page), [
+    '下一步',
+    '<b>先</b>读 `x`',
+    '技能',
+    '<i>$tdd</i>',
+    '理由',
+    '**粗**',
+    '阻塞',
+    '被 <em>#1</em> 挡着',
+  ])
+  assert.equal(page.document.querySelectorAll('.dk-rec b, .dk-rec i, .dk-rec em, .dk-rec code').length, 0)
+
+  // A Task's title from the list, as text too; a Task in progress by its state.
+  await answer({ ...RECOMMENDATION, task: 72 })
+  assert.equal(page.document.querySelector('.dk-rec__head .dk-plate')!.getAttribute('aria-label'), '进行中 · 其他 Session')
+  // A Spec the list holds by its title.
+  await answer({ ...RECOMMENDATION, task: 64 })
+  assert.deepEqual(parts(page.document.querySelector('.dk-rec__head'), 'span'), ['下一个成就', '规格：里程碑二', '#64'])
+})
+
+test('a read of the Recommendation that fails leaves the Pane waiting, and the next read shows it', async t => {
+  let failing = true
+  const deck = deckThatRecommends()
+  const page = await openNext({
+    answer: (name: string, args: any) =>
+      name === 'deck_recommendation' && failing
+        ? { content: [{ type: 'text', text: 'the state is locked' }], isError: true }
+        : deck.answer(name, args),
+  })
+  t.after(page.close)
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', RECOMMENDATION)
+
+  await page.advance(2_000)
+  assert.deepEqual(nextTab(page).phases, ['+已填入', '>等待回报', '已回答'])
+  failing = false
+  await page.advance(2_000)
+  assert.deepEqual(nextTab(page).phases, ['+已填入', '+等待回报', '+已回答'])
+})
+
+test('when the skills cannot be read, "我现在该做什么" is on, and the Deck service says why it cannot make the request', async t => {
+  const deck = deckThatRecommends()
+  const page = await openNext({
+    answer: (name: string, args: any) =>
+      name === 'deck_skills'
+        ? { content: [{ type: 'text', text: 'the Skill Source is gone' }], isError: true }
+        : name === 'deck_ask'
+          ? answered({ ok: false, failure: { kind: 'missing', message: 'the directory ~/x does not exist' } })
+          : deck.answer(name, args),
+  })
+  t.after(page.close)
+
+  assert.deepEqual(nextTab(page).buttons, ['我现在该做什么'])
+  await page.click(button(page, '我现在该做什么'))
+  assert.deepEqual(nextTab(page).said.slice(0, 2), ['没有填入推荐请求', '找不到 Skill Source。重跑配置之后恢复。'])
+})
+
+test('a Recommendation\'s Task title is shown as text', async t => {
+  const tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [task(70, '<b>Task</b> 详情')] } }
+  const deck = deckThatRecommends()
+  const page = await openNext({
+    answer: (name: string, args: any) => (name === 'deck_tasks' ? answered(tasks) : deck.answer(name, args)),
+  })
+  t.after(page.close)
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+
+  assert.equal(page.document.querySelector('.dk-rec__title')!.textContent, '<b>Task</b> 详情')
+})
+
+test('the reads every 60 seconds, as the tab is shown again and on "刷新" leave the request waiting and its Recommendation shown', async t => {
+  const deck = deckThatRecommends()
+  const page = await openNext(deck)
+  t.after(page.close)
+  const refresh = page.document.querySelector('.dk-head button')!
+  await page.click(button(page, '我现在该做什么'))
+  await page.click(button(page, '再问一次'))
+  const waiting = nextTab(page)
+
+  await page.advance(58_000)
+  await page.show(false)
+  await page.show(true)
+  await page.click(refresh)
+  assert.deepEqual(nextTab(page), waiting)
+
+  deck.reported.set('request-2', RECOMMENDATION)
+  await page.advance(2_000)
+  const answeredTab = nextTab(page)
+  const card = text(page.document.querySelector('.dk-rec'))
+  await page.advance(60_000)
+  await page.show(false)
+  await page.show(true)
+  await page.click(refresh)
+  assert.deepEqual(nextTab(page), answeredTab)
+  assert.equal(text(page.document.querySelector('.dk-rec')), card)
+})
+
+test('when Codex does not run this ask-matt, "我现在该做什么" is off and says why, with "重跑配置"', async t => {
+  for (const [copy, why] of [
+    ['different', 'Codex 里的 ask-matt 不是同一份，不能预填。'],
+    ['missing', 'Codex 里找不到 ask-matt，不能预填。'],
+  ]) {
+    const deck = deckThatRecommends(SKILLS.map(skill => (skill.name === 'ask-matt' ? { ...skill, copy } : skill)))
+    const page = await openNext(deck)
+    t.after(page.close)
+
+    assert.deepEqual(nextTab(page), { shown: true, phases: [], said: [why], buttons: ['我现在该做什么（停用）', '重跑配置'] })
+    await page.click(button(page, '我现在该做什么'))
+    await page.click(button(page, '重跑配置'))
+    assert.deepEqual(prefills(page), [prefilled(CONFIGURE_CALL)])
+  }
+})
+
+test('"我现在该做什么" is off until the skills are read, and on again once a read finds ask-matt the same file', async t => {
+  let release: () => void = () => {}
+  let reads = 0
+  const deck = deckThatRecommends()
+  const page = await openPage({
+    answer: (name: string, args: any) => {
+      if (name !== 'deck_skills') return deck.answer(name, args)
+      reads++
+      const answer = deckWithSkills(SKILLS.map(skill => (skill.name === 'ask-matt' && reads === 2 ? { ...skill, copy: 'missing' } : skill)))(name, args)
+      return reads === 1 ? new Promise(resolve => (release = () => resolve(answer))) : answer
+    },
+  })
+  t.after(page.close)
+  // While the skills are held, the page is never settled: wait a moment.
+  ;([...page.document.querySelectorAll('[role="tab"]')].find(tab => text(tab) === '下一步') as HTMLElement).click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+
+  assert.deepEqual(nextTab(page).buttons, ['我现在该做什么（停用）'])
+  release()
+  await page.settled()
+  assert.deepEqual(nextTab(page).buttons, ['我现在该做什么'])
+  // "刷新" on this tab reads the skills again.
+  await page.click(page.document.querySelector('.dk-head button'))
+  assert.equal(reads, 2)
+  assert.deepEqual(nextTab(page).buttons, ['我现在该做什么（停用）', '重跑配置'])
+  // Shown again without a "刷新" in between, the tab reads no skills.
+  const tabs = [...page.document.querySelectorAll('[role="tab"]')]
+  await page.click(tabs[1]!)
+  await page.click(tabs[0]!)
+  assert.equal(reads, 2)
+})
+
+test('when the Deck service cannot make the request the 下一步 tab says why in its own words, to click the button again, and nothing is prefilled', async t => {
+  let failure: object = {}
+  let asks = 0
+  const deck = deckThatRecommends()
+  const page = await openNext({
+    answer: (name: string, args: any) => {
+      if (name !== 'deck_ask') return deck.answer(name, args)
+      asks++
+      return failure
+    },
+  })
+  t.after(page.close)
+  const fail = async (answer: object) => {
+    failure = answer
+    await page.click(button(page, '我现在该做什么'))
+    return nextTab(page)
+  }
+  const failedAs = async (kind: string, message: string) => (await fail(answered({ ok: false, failure: { kind, message } }))).said[1]
+
+  assert.deepEqual(await fail(answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp 9z' } })), {
+    shown: true,
+    phases: [],
+    said: ['没有填入推荐请求', '连不上 GitHub。检查网络后再点“我现在该做什么”重试。', '把 $ask-matt 填进输入框，附带 Task Snapshot。'],
+    buttons: ['我现在该做什么'],
+  })
+  assert.equal(await failedAs('unauthenticated', 'not logged in 4k'), 'gh 未登录。运行 gh auth login 后再点“我现在该做什么”重试。')
+  assert.equal(await failedAs('gh-missing', 'no gh 4k'), '找不到 gh 命令。安装 GitHub CLI 后再点“我现在该做什么”重试。')
+  assert.equal(await failedAs('no-repository', 'no remote 4k'), '这个 Workspace 没有指向 GitHub 的 remote，读不到 Issues。')
+  // The reason the Deck service gives stays as it is, even where it looks
+  // like the Pane's own words.
+  assert.equal(await failedAs('failed', 'HTTP 502, 点“刷新”重试。'), 'gh 出错：HTTP 502, 点“刷新”重试。。再点“我现在该做什么”重试。')
+  assert.equal(await failedAs('unknown-skill', 'the Skill Source has no skill named ask-matt'), 'Skill Source 里已经没有这个技能。再点“我现在该做什么”重试。')
+  assert.equal(await failedAs('missing', 'the directory ~/x does not exist'), '找不到 Skill Source。重跑配置之后恢复。')
+  assert.deepEqual(
+    (await fail({ content: [{ type: 'text', text: 'the state is locked 6w1p' }], isError: true })).said[1],
+    'Deck 服务出错：the state is locked 6w1p。再点“我现在该做什么”重试。',
+  )
+  assert.deepEqual(prefills(page), [])
+  // "刷新" reads the page again, and the notice of a request that was not
+  // made goes; it makes no request.
+  assert.equal(asks, 8)
+  await page.click(page.document.querySelector('.dk-head button'))
+  assert.deepEqual(nextTab(page).said, ['把 $ask-matt 填进输入框，附带 Task Snapshot。'])
+  assert.equal(asks, 8)
+  await fail(answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp 9z' } }))
+  // Away on another tab "刷新" takes it away too.
+  const tabs = [...page.document.querySelectorAll('[role="tab"]')]
+  await page.click(tabs[1]!)
+  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(tabs[0]!)
+  assert.deepEqual(nextTab(page).said, ['把 $ask-matt 填进输入框，附带 Task Snapshot。'])
+  await page.advance(10_000)
+  assert.deepEqual(deck.reads, [])
+
+  // A request made after that says nothing of the one that was not.
+  failure = deck.answer('deck_ask', {})
+  await page.click(button(page, '我现在该做什么'))
+  assert.deepEqual(nextTab(page).said, ['已填入输入框，等你发送。'])
+})
+
+test('while the Deck service makes the request, the button clicked is off, so a second click makes no second request', async t => {
+  let release: () => void = () => {}
+  let asks = 0
+  const deck = deckThatRecommends()
+  const page = await openNext({
+    answer: (name: string, args: any) => {
+      if (name !== 'deck_ask') return deck.answer(name, args)
+      asks++
+      const answer = deck.answer(name, args)
+      return new Promise(resolve => (release = () => resolve(answer)))
+    },
+  })
+  t.after(page.close)
+  const moment = () => new Promise(resolve => setTimeout(resolve, 20))
+
+  const primary = button(page, '我现在该做什么') as HTMLButtonElement
+  primary.click()
+  await moment()
+  assert.equal(primary.disabled, true)
+  primary.click()
+  await moment()
+  release()
+  await page.settled()
+  assert.equal(asks, 1)
+  assert.deepEqual(prefills(page), [prefilled(promptOf(1))])
+})
+
+test('"再问一次" that cannot make a request says why and keeps waiting for the request before', async t => {
+  let fails = false
+  const deck = deckThatRecommends()
+  const page = await openNext({
+    answer: (name: string, args: any) =>
+      name === 'deck_ask' && fails ? answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp 9z' } }) : deck.answer(name, args),
+  })
+  t.after(page.close)
+  await page.click(button(page, '我现在该做什么'))
+  fails = true
+  await page.click(button(page, '再问一次'))
+
+  assert.deepEqual(nextTab(page), {
+    shown: true,
+    phases: ['+已填入', '>等待回报', '已回答'],
+    said: ['没有填入推荐请求', '连不上 GitHub。检查网络后再点“再问一次”重试。', '已填入输入框，等你发送。'],
+    buttons: ['再问一次'],
+  })
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+  assert.deepEqual(parts(page.document.querySelector('.dk-rec__head'), 'span'), ['下一个成就', 'Task 详情', '#70'])
+
+  // Once answered, the notice is gone; a request that fails then says to
+  // click "再问一次" again, over the Recommendation still shown.
+  assert.deepEqual(nextTab(page).said, [])
+  await page.click(button(page, '再问一次'))
+  assert.deepEqual(nextTab(page).said, ['没有填入推荐请求', '连不上 GitHub。检查网络后再点“再问一次”重试。'])
+  assert.notEqual(page.document.querySelector('.dk-rec'), null)
+})
+
+test('a Recommendation shown follows the list as the timed reads find it, its buttons left as they are', async t => {
+  let tasks: any = TASKS
+  const deck = deckThatRecommends()
+  const page = await openNext({ answer: (name: string, args: any) => (name === 'deck_tasks' ? answered(tasks) : deck.answer(name, args)) })
+  t.after(page.close)
+  const card = () => [
+    page.document.querySelector('.dk-rec__head .dk-plate')!.getAttribute('aria-label'),
+    text(page.document.querySelector('.dk-rec__title')),
+  ]
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+  assert.deepEqual(card(), ['可执行', 'Task 详情'])
+  const again = button(page, '再问一次')
+  const before = nextTab(page)
+
+  // #70, renamed, taken by another Session.
+  const taken = task(70, 'Task 详情 9h2c', { occupant: OTHER_CODEX, occupantHost: 'codex', occupantShort: '77e0aa15' })
+  tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [], inProgress: [taken, ...TASKS.groups.inProgress] } }
+  await page.advance(58_000)
+  assert.deepEqual(card(), ['进行中 · 其他 Session', 'Task 详情 9h2c'])
+  assert.equal(again.isConnected, true)
+  assert.deepEqual(nextTab(page), before)
+
+  // Closed, as the tab is shown again.
+  tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [], done: [task(70, 'Task 详情 5r7w', { isOpen: false, closedAt: '2026-11-22T09:01:00Z' }), ...TASKS.groups.done] } }
+  await page.show(false)
+  await page.show(true)
+  assert.deepEqual(card(), ['已解锁', 'Task 详情 5r7w'])
+  assert.equal(again.isConnected, true)
+  assert.deepEqual(nextTab(page), before)
+  assert.equal(deck.reads.length, 1)
 })

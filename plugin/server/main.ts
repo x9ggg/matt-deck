@@ -476,7 +476,7 @@ const tools = {
   },
   deck_ask: {
     description:
-      'For the Pane: make a Recommendation Request as it is sent. Answers the request\'s id, the call of this project\'s ask-matt as this host writes it, the call without its first character as the command that runs it, and its arguments: the Task Snapshot read from the Task Source now, and the ask to report through deck_recommend.',
+      'For the Pane: make a Recommendation Request as it is sent. Answers the request\'s id, the call of this project\'s ask-matt as this host writes it, the call without its first character as the command that runs it, and its arguments: the Task Snapshot read from the Task Source now, and the ask to report through deck_recommend; and as prompt the call followed by its arguments, which the Pane in a tab prefills.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: async (): Promise<ToolResult> => {
       const project = await readProjectConfig(workspace)
@@ -488,7 +488,8 @@ const tools = {
         const { call } = await readSkill(project.config.skillSource, workspace, homedir(), callOf(host), 'ask-matt')
         const list = tasksOf(await readSource(true))
         const requestId = randomUUID()
-        answer = { ok: true, requestId, call, command: call.slice(1), args: askArgs(requestId, snapshotOf(list)) }
+        const args = askArgs(requestId, snapshotOf(list))
+        answer = { ok: true, requestId, call, command: call.slice(1), args, prompt: `${call} ${args}` }
       } catch (error: any) {
         if (!(error instanceof SkillSourceError) && !(error instanceof TaskSourceError)) {
           throw error
