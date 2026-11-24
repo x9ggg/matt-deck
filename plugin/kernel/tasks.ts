@@ -7,12 +7,14 @@ import type { NameSession, Occupant } from './occupancy.ts'
 
 // A Task as the Task Source holds it, before it is grouped: whether it is a
 // Map, its `parent` and `blockedBy` already read from whichever way the
-// source writes them.
+// source writes them. Only a Map View reads its `updatedAt` and `body`.
 export type SourceTask = {
   number: number
   title: string
   isOpen: boolean
   closedAt: string | null
+  updatedAt: string
+  body: string
   labels: string[]
   isMap: boolean
   parent: number | null
@@ -137,7 +139,7 @@ export const listTasks = (
 ): TaskList => {
   const read = [...source.tasks].sort((a, b) => a.number - b.number)
   const isOpen = new Map(read.map(task => [task.number, task.isOpen]))
-  const tasks = read.map(({ blockedBy, isMap, ...task }) => {
+  const tasks = read.map(({ blockedBy, isMap, updatedAt, body, ...task }) => {
     const occupancy = task.isOpen ? occupants.get(task.number) : undefined
     const named = occupancy === undefined ? undefined : nameSession(occupancy.session, occupancy.host)
 
@@ -205,6 +207,12 @@ const DRAWN_ELSEWHERE = /^\s*#{1,6}\s*\**\s*(parent|blocked by|acceptance criter
 // The Task `number`, with the identity of the Task Source holding it.
 export const readTask = async (source: TaskSource, number: number): Promise<{ identity: string; task: TaskDetail }> => {
   const { identity, body, ...task } = await source.readOne(number)
+
+  return { identity, task: { ...task, ...describe(body) } }
+}
+
+// A body split into its description and its acceptance criteria.
+export const describe = (body: string): Pick<TaskDetail, 'description' | 'acceptance'> => {
   const acceptance: TaskDetail['acceptance'] = []
   const kept: string[] = []
   let isDropping = false
@@ -246,7 +254,7 @@ export const readTask = async (source: TaskSource, number: number): Promise<{ id
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 
-  return { identity, task: { ...task, description, acceptance } }
+  return { description, acceptance }
 }
 
 // The issues of the workspace's GitHub repository, read with the `gh` command
@@ -256,7 +264,7 @@ const QUERY = `query($owner: String!, $name: String!, $endCursor: String) {
     nameWithOwner
     issues(first: 100, after: $endCursor, states: [OPEN, CLOSED]) {
       nodes {
-        number title state closedAt body
+        number title state closedAt updatedAt body
         labels(first: 50) { nodes { name } }
         parent { number repository { nameWithOwner } }
         blockedBy(first: 50) { nodes { number repository { nameWithOwner } } }
@@ -275,6 +283,7 @@ type IssueNode = {
   title: string
   state: 'OPEN' | 'CLOSED'
   closedAt: string | null
+  updatedAt: string
   body: string
   labels: { nodes: { name: string }[] }
   parent: IssueRef | null
@@ -544,6 +553,8 @@ export const githubIssues = (workspace: string): TaskSource => ({
           title: node.title,
           isOpen: node.state === 'OPEN',
           closedAt: node.closedAt,
+          updatedAt: node.updatedAt,
+          body: node.body,
           labels: node.labels.nodes.map(label => label.name),
           isMap: node.labels.nodes.some(label => label.name === 'wayfinder:map'),
           // A sub-issue first, then the body's `Parent` section, then a `Part

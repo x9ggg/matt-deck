@@ -296,9 +296,9 @@ body{margin:0;background:var(--ground)}
 
 /* What the page hides it hides, whatever display a component's class gives. */
 [hidden]{display:none !important}
-/* A tab's content, and the groups in it, are laid out as the Pane's own; so
-   is what is drilled into, its way back and its content. */
-[data-panel],#groups,#into,#into-end,#into-body{display:contents}
+/* A tab's content, the groups and the Map View in it, are laid out as the
+   Pane's own; so is what is drilled into, its way back and its content. */
+[data-panel],#groups,#map-view,#into,#into-end,#into-body{display:contents}
 /* So is the skill list; a skill's text is as its file has it. */
 #skill-list{display:contents}
 .dk-raw{white-space:pre-wrap;overflow-wrap:anywhere}
@@ -365,6 +365,21 @@ body{margin:0;background:var(--ground)}
       <span></span>
     </div>
   </div>
+  <div data-panel="map" id="map" hidden>
+    <p class="dk-why" id="map-loading">正在读取 Task…</p>
+    <div class="dk-notice is-danger" role="status" id="map-failed" hidden>
+      <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+      <div class="dk-notice__body">
+        <span class="dk-notice__title heading">读取 Task 失败</span>
+        <span class="dk-notice__text"></span>
+      </div>
+    </div>
+    <div id="map-view"></div>
+    <div class="dk-empty" id="map-empty" hidden>
+      <span class="dk-empty__title heading">还没有 Spec 或 Map。</span>
+      <span>带 Child Task 的 Task 会出现在这里。</span>
+    </div>
+  </div>
   <div data-panel="skills" id="skills" hidden>
     <div id="skill-list"><p class="dk-why">正在读取技能…</p></div>
   </div>
@@ -380,7 +395,8 @@ body{margin:0;background:var(--ground)}
 <script>
 // Talks to the Host as an MCP App: a handshake, then the Deck service's tools
 // called through the Host. The Session is the one the Host opened this tab
-// in; the page never names it, the Deck service reads it from each call.
+// in, which the Deck service reads from each call; the page passes the id it
+// gave back to deck_map only, to say which Session asks.
 ;(async () => {
   const $ = id => document.getElementById(id)
 
@@ -561,30 +577,36 @@ body{margin:0;background:var(--ground)}
     ...list.containers.map(each => [each, each.group]),
     ...GROUPS.flatMap(group => list.groups[group].map(each => [each, group])),
   ]
+  // A Spec's or Map's direct Child Tasks, each with the group it stands in.
+  const childrenOf = container => entries().filter(([child]) => child.parent === container.number)
 
-  // A Spec or Map: its glyph by its direct Child Tasks in progress, else as a
-  // Task's (docs/pane-layout.md); its progress, and its Child Tasks by group.
-  const containerRow = container => {
-    // Its direct Child Tasks, each with the group it stands in; a Spec or Map
-    // among them where it stands as a Task.
-    const children = entries().filter(([child]) => child.parent === container.number)
-    const inGroup = group => children.filter(([, each]) => each === group).map(([child]) => child)
-    const inProgress = inGroup('inProgress')
-    const state = container.isPendingCloseout
+  // A Spec's or Map's glyph: by its direct Child Tasks in progress, else as
+  // a Task's (docs/pane-layout.md).
+  const containerState = container => {
+    const inProgress = childrenOf(container).filter(([, group]) => group === 'inProgress').map(([child]) => child)
+    return container.isPendingCloseout
       ? 'closeout'
       : inProgress.some(child => child.isOrphaned)
         ? 'orphaned'
         : inProgress.some(child => child.occupant === session.session)
           ? 'running'
           : inProgress.length > 0 ? 'other' : stateOf(container, container.group)
+  }
+
+  // A Spec or Map: its glyph, its progress, its Child Tasks by group, then
+  // the actions given; clicked, its detail unless told otherwise.
+  const containerRow = (container, actions, onClick = () => openTask(container.number)) => {
+    const children = childrenOf(container)
+    const inGroup = group => children.filter(([, each]) => each === group).map(([child]) => child)
+    const state = containerState(container)
     const { closed, total } = container.progress
     const ring = el('span', `dk-ring${container.isPendingCloseout ? ' is-complete' : ''}`, `${closed}/${total}`)
     ring.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 16 16" aria-hidden="true"><circle class="dk-ring__track" cx="8" cy="8" r="6"/><circle class="dk-ring__arc" cx="8" cy="8" r="6" stroke-dasharray="${total === 0 ? 0 : ((37.7 * closed) / total).toFixed(2)} 37.70"/></svg>`)
     const meta = container.isPendingCloseout
       ? [el('span', 'is-unlock', '待收尾核对')]
       : [el('span', '', ['ready', 'inProgress', 'blocked'].map(group => `${inGroup(group).length} ${GROUP_TITLE[group]}`).join(' · '))]
-    const element = row(container, state, ' dk-row--container', [el('span', 'dk-kind label', container.kind === 'spec' ? 'Spec' : 'Map')], [ring], meta, [])
-    element.addEventListener('click', () => openTask(container.number))
+    const element = row(container, state, ' dk-row--container', [el('span', 'dk-kind label', container.kind === 'spec' ? 'Spec' : 'Map')], [ring], meta, actions)
+    element.addEventListener('click', onClick)
     return element
   }
 
@@ -600,7 +622,17 @@ body{margin:0;background:var(--ground)}
         : list.groups[chosen].length
     }
     const containers = filter === 'all' ? list.containers.filter(container => container.isOpen) : []
-    $('containers').replaceChildren(...containers.map(containerRow))
+    $('containers').replaceChildren(
+      ...containers.map(container => {
+        const open = smallButton('地图')
+        // Its own: a click on it is no click on the row, which opens the detail.
+        open.addEventListener('click', event => {
+          event.stopPropagation()
+          openMap(container.number)
+        })
+        return containerRow(container, [el('span', 'dk-row__actions', open)])
+      }),
+    )
     $('containers').hidden = containers.length === 0
     const groups = (filter === 'all' ? GROUPS : [filter]).filter(group => list.groups[group].length > 0)
     $('groups').replaceChildren(
@@ -762,27 +794,158 @@ body{margin:0;background:var(--ground)}
     }
   }
 
-  // Reads the Tasks, the Task Source again when `refresh` asks for it. A read
-  // that fails says why above the list read before, if any.
+  // The Map Views the Deck service gave with the last list, open ones
+  // first; the one the "地图" tab shows, by number, else the first; whether
+  // the tab lists them to switch to instead; whether the wall shows every
+  // blocked Child Task. Kept here: each read draws the tab anew.
+  let maps
+  let mapShown
+  let isSwitching = false
+  let isWallOpen = false
+
+  const refs = numbers => numbers.map(number => `#${number}`).join(' ')
+  const CARD_STATE = { ready: '可执行', running: '进行中', other: '进行中', orphaned: 'Orphaned', blocked: '阻塞', closed: '已解锁' }
+  // The card's four counts: the group, its glyph, its name.
+  const COUNTS = [['ready', 'ready', '可执行'], ['inProgress', 'running', '进行中'], ['blocked', 'blocked', '阻塞'], ['done', 'closed', '已解锁']]
+
+  // The card naming the Spec or Map: its kind and number, "切换" when there
+  // is another, its title and goal, its Child Tasks counted by group, and
+  // its progress.
+  const mapCard = map => {
+    const head = el('div', 'dk-spec__head', el('span', 'dk-kind label', map.kind === 'spec' ? 'Spec' : 'Map'), el('span', `dk-id is-${containerState(map)}`, `#${map.number}`))
+    if (maps.length > 1) {
+      const switching = smallButton('切换')
+      switching.addEventListener('click', () => {
+        isSwitching = true
+        showMap()
+      })
+      head.append(' ', switching)
+    }
+    const counts = COUNTS.map(([group, glyph, name]) => {
+      const badge = el('span', `dk-badge caption is-${glyph}`, `${name} ${map.wall.filter(card => card.group === group).length}`)
+      badge.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 16 16" aria-hidden="true">${PLATE[glyph][1]}</svg>`)
+      return badge
+    })
+    const { closed, inProgress, total } = map.progress
+    const share = count => (total === 0 ? 0 : (100 * count) / total)
+    const bars = [['dk-progress__closed', closed], ['dk-progress__active', inProgress]].map(([className, count]) => {
+      const bar = el('i', className)
+      bar.style.width = `${share(count).toFixed(2)}%`
+      return bar
+    })
+    const progress = el('div', 'dk-progress',
+      el('div', 'dk-progress__head', el('span', 'label', '解锁进度'), el('span', 'dk-progress__nums', el('span', 'dk-progress__count display', `${closed} / ${total}`), el('span', 'dk-progress__pct caption', `${Math.round(share(closed))}%`))),
+      el('div', 'dk-progress__track', ...bars))
+    progress.setAttribute('role', 'progressbar')
+    progress.setAttribute('aria-label', '解锁进度')
+    progress.setAttribute('aria-valuemin', '0')
+    progress.setAttribute('aria-valuemax', String(total))
+    progress.setAttribute('aria-valuenow', String(closed))
+    return el('article', 'dk-spec', head, el('span', 'dk-spec__title title', map.title),
+      ...(map.goal === null ? [] : [el('span', 'dk-spec__goal', map.goal)]),
+      el('div', 'dk-spec__stats', ...counts), progress)
+  }
+
+  // A Child Task's card: its glyph, number and state; its title; what blocks
+  // it and what it blocks, else who holds it or whether it has Acceptance
+  // Evidence; when it was updated, or closed.
+  const wallCard = card => {
+    const state = stateOf(card, card.group)
+    const edges = [
+      ...(card.blockers.length > 0 ? [`被 ${refs(card.blockers)} 阻塞`] : []),
+      ...(card.blocking.length > 0 ? [`挡着 ${refs(card.blocking)}`] : []),
+    ]
+    const relation = edges.length > 0 ? [edges.join(' · ')]
+      : state === 'other' ? [...(card.occupantHost === session.sessionHost ? [] : [HOST_NAME[card.occupantHost]]), el('span', 'mono', card.occupantShort)]
+      : state === 'orphaned' ? ['Session 已结束']
+      : state === 'closed' ? [card.hasEvidence ? glyphed(el('span', 'is-pass', '验收证据'), CHECK) : '没有验收证据']
+      : [' ']
+    const glyph = plate(state)
+    glyph.classList.add('dk-plate--sm')
+    return el('article', `dk-card is-${state}`,
+      el('div', 'dk-card__head', glyph, el('span', `dk-id is-${state}`, `#${card.number}`), el('span', 'dk-card__state caption', CARD_STATE[state])),
+      el('span', 'dk-card__title heading', card.title),
+      el('span', 'dk-card__meta caption', ...relation),
+      el('div', 'dk-card__foot caption', el('span', '', state === 'closed' ? shortTime(card.closedAt) : `更新 ${shortTime(card.updatedAt).slice(0, 5)}`)))
+  }
+
+  // The "地图" tab: the Map View shown, its blocked Child Tasks past three
+  // behind a button, or the Specs and Maps to switch to.
+  const showMap = () => {
+    const map = maps.find(each => each.number === mapShown) ?? maps[0]
+    // The one drawn is the one shown from now on, chosen or not; one gone
+    // from the answer gives way to the first, its wall closed.
+    if (map?.number !== mapShown) isWallOpen = false
+    mapShown = map?.number
+    $('map-empty').hidden = map !== undefined
+    if (map === undefined) {
+      // With nothing to switch between, the list to switch to is closed.
+      isSwitching = false
+      $('map-view').replaceChildren()
+    } else if (isSwitching) {
+      const back = smallButton('返回')
+      back.addEventListener('click', () => {
+        isSwitching = false
+        showMap()
+      })
+      const choices = maps.map(each => {
+        const choice = containerRow(each, [], () => openMap(each.number))
+        choice.classList.toggle('is-selected', each === map)
+        return choice
+      })
+      $('map-view').replaceChildren(el('div', 'dk-bar', back, el('span', 'dk-crumbs', '地图 /', el('b', '', '切换'))), el('ul', 'dk-list', ...choices))
+    } else {
+      const unshown = isWallOpen ? [] : map.wall.filter(card => card.group === 'blocked').slice(3)
+      const more = el('button', 'dk-group__more caption', `还有 ${unshown.length} 个被阻塞`)
+      more.type = 'button'
+      more.addEventListener('click', () => {
+        isWallOpen = true
+        showMap()
+      })
+      $('map-view').replaceChildren(mapCard(map), el('div', 'dk-wall', ...map.wall.filter(card => !unshown.includes(card)).map(wallCard)), ...(unshown.length === 0 ? [] : [more]))
+    }
+  }
+
+  // Into a Map View, from a row of "任务" or from the list to switch to: the
+  // "地图" tab shows the Spec or Map `number`. Back from it is the "任务" tab,
+  // its filter as it was.
+  const openMap = number => {
+    if (number !== mapShown) isWallOpen = false
+    mapShown = number
+    showMap()
+    selectTab('map')
+  }
+
+  // Reads the Tasks, the Task Source again when `refresh` asks for it, then
+  // their Map Views from that read. A read that fails says why, in "任务" and
+  // in "地图", above what was read before, if anything.
   const readTasks = async refresh => {
     let failure
     try {
       const answer = await callTool('deck_tasks', refresh ? { refresh: true } : {})
-      if (answer.ok) list = answer
-      else failure = FAILURE[answer.failure.kind](answer.failure.message)
+      const viewed = answer.ok ? await callTool('deck_map', { session: session.session }) : answer
+      if (viewed.ok) {
+        list = answer
+        maps = viewed.maps
+      } else {
+        failure = FAILURE[viewed.failure.kind](viewed.failure.message)
+      }
     } catch (error) {
       failure = [`Deck 服务出错：${error.message}。点“刷新”重试。`]
     }
-    $('tasks-loading').hidden = true
-    $('tasks-failed').hidden = failure === undefined
-    if (failure !== undefined) {
-      $('tasks-failed').querySelector('.dk-notice__text').replaceChildren(...failure)
-      readAt = 'failed'
-    } else {
-      readAt = Date.now()
+    $('tasks-loading').hidden = $('map-loading').hidden = true
+    for (const notice of [$('tasks-failed'), $('map-failed')]) {
+      notice.hidden = failure === undefined
+      if (failure !== undefined) {
+        notice.querySelector('.dk-notice__text').replaceChildren(...failure.map(part => (typeof part === 'string' ? part : part.cloneNode(true))))
+      }
     }
+    readAt = failure === undefined ? Date.now() : 'failed'
     showFreshness()
-    if (list !== undefined) showTasks()
+    if (list !== undefined) {
+      showTasks()
+      showMap()
+    }
     showRecommendation()
   }
 
@@ -1170,15 +1333,20 @@ body{margin:0;background:var(--ground)}
     for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = $('tabs').hidden || into !== undefined || panel.dataset.panel !== chosen
     $('into').hidden = $('tabs').hidden || into === undefined
   }
-  for (const tab of tabs) {
-    tab.addEventListener('click', () => {
-      for (const each of tabs) each.setAttribute('aria-selected', String(each === tab))
-      into = undefined
-      showPanel()
-      if (tab.dataset.tab === 'skills') showSkillsTab()
-      if (tab.dataset.tab === 'next') showNextTab()
-    })
+  // A tab chosen leaves the way drilled in, and the list of Specs and Maps
+  // to switch to.
+  const selectTab = chosen => {
+    for (const each of tabs) each.setAttribute('aria-selected', String(each.dataset.tab === chosen))
+    into = undefined
+    if (isSwitching) {
+      isSwitching = false
+      showMap()
+    }
+    showPanel()
+    if (chosen === 'skills') showSkillsTab()
+    if (chosen === 'next') showNextTab()
   }
+  for (const tab of tabs) tab.addEventListener('click', () => selectTab(tab.dataset.tab))
   $('back').addEventListener('click', back)
   $('refresh').addEventListener('click', () => read(true))
 

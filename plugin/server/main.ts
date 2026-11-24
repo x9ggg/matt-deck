@@ -11,6 +11,7 @@ import { createInterface } from 'node:readline'
 
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
 import { inspectProject } from '../kernel/inspect.ts'
+import { mapViews } from '../kernel/maps.ts'
 import { beat, endSession, occupy, release, settleOccupancies } from '../kernel/occupancy.ts'
 import { askArgs, readRecommendation, saveRecommendation, snapshotOf } from '../kernel/recommend.ts'
 import { evidencedTasks, readReports, saveReport } from '../kernel/reports.ts'
@@ -192,6 +193,33 @@ const tools = {
       const list = tasksOf(read)
 
       return { content: [{ type: 'text', text: JSON.stringify(list) }], structuredContent: list, isError: false }
+    },
+  },
+  deck_map: {
+    description:
+      'For the Pane: every Spec and Map of this project, open ones first, each with its goal (the first sentence of its body, or null) and its Child Tasks in the order its Map View shows them: ready; in progress, the asking Session\'s first, then other Sessions\', then Orphaned; blocked, each blocker before the Tasks it blocks; closed. Each Child Task says when it was last updated and which open Tasks it blocks. Reads as deck_tasks does, from its cache.',
+    inputSchema: {
+      type: 'object',
+      properties: { session: { type: 'string', minLength: 1, description: 'The id of the Session asking.' } },
+      required: ['session'],
+      additionalProperties: false,
+    },
+    run: async ({ session }: any): Promise<ToolResult> => {
+      if (typeof session !== 'string' || session === '') {
+        return { content: [{ type: 'text', text: 'deck_map takes the id of the Session asking' }], isError: true }
+      }
+      let answer: object
+      try {
+        const read = await readSource(false)
+        answer = { ok: true, fetchedAt: read.fetchedAt, maps: mapViews(tasksOf(read), read.source, session) }
+      } catch (error: any) {
+        if (!(error instanceof TaskSourceError)) {
+          throw error
+        }
+        answer = { ok: false, failure: { kind: error.kind, message: error.message } }
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
     },
   },
   deck_occupy: {

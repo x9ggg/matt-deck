@@ -553,6 +553,7 @@ const issue = ({
   title = `Task ${number}`,
   state = 'OPEN',
   closedAt = null,
+  updatedAt = '2026-11-11T09:00:00Z',
   labels = [],
   body = '',
   parent = null,
@@ -562,6 +563,7 @@ const issue = ({
   title?: string
   state?: 'OPEN' | 'CLOSED'
   closedAt?: string | null
+  updatedAt?: string
   labels?: string[]
   body?: string
   parent?: IssueGiven | null
@@ -571,6 +573,7 @@ const issue = ({
   title,
   state,
   closedAt,
+  updatedAt,
   body,
   labels: { nodes: labels.map(name => ({ name })) },
   parent: parent === null ? null : ref(parent),
@@ -1673,6 +1676,164 @@ test('deck_tasks marks only open Specs with every Child Task closed as Pending C
   // All source access is read-only, including after entering Pending Closeout.
   assert.ok((await gh.calls()).every(call => call.args[0] === 'api' && call.args[1] === 'graphql' &&
     call.args.some(arg => arg.startsWith('query=query('))))
+})
+
+// The Child Tasks on a Map View's wall, by number, as deck_map orders them.
+const wallOf = (map: { wall: { number: number }[] }) => numbers(map.wall)
+
+test('deck_map orders a Spec\'s Child Tasks as its Map View shows them: ready, in progress by Session, blocked with each blocker first, closed', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 1, title: '规格' }),
+    // Ready, a Child Task that is a Map among them where it stands as a Task.
+    issue({ number: 9, parent: 1 }),
+    issue({ number: 4, parent: 1, updatedAt: '2026-11-20T10:00:00Z' }),
+    issue({ number: 30, parent: 1, labels: ['wayfinder:map'] }),
+    // In progress: another Session's, this Session's, another Session's, an
+    // Orphaned one with the lowest number.
+    issue({ number: 5, parent: 1 }),
+    issue({ number: 6, parent: 1 }),
+    issue({ number: 7, parent: 1 }),
+    issue({ number: 3, parent: 1 }),
+    // Blocked: a chain whose blockers have the higher numbers, a Task
+    // waiting on triage, and one blocked from outside the Spec. A closed
+    // Task blocks nothing.
+    issue({ number: 20, parent: 1, blockedBy: [21, 2] }),
+    issue({ number: 21, parent: 1, blockedBy: [22] }),
+    issue({ number: 22, parent: 1, blockedBy: [4] }),
+    issue({ number: 23, parent: 1, labels: ['needs-triage'] }),
+    issue({ number: 24, parent: 1, blockedBy: [40] }),
+    // Closed, the last closed first.
+    issue({ number: 2, parent: 1, state: 'CLOSED', closedAt: '2026-11-11T05:40:00Z' }),
+    issue({ number: 8, parent: 1, state: 'CLOSED', closedAt: '2026-11-12T05:40:00Z', blockedBy: [9] }),
+    // Outside the Spec: one blocking a Child Task, one a Child Task blocks.
+    issue({ number: 40 }),
+    issue({ number: 41, blockedBy: [9] }),
+    // A Map a Child Task blocks, listed apart from the groups.
+    issue({ number: 45, labels: ['wayfinder:map'], blockedBy: [4] }),
+  ])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(deck.stop)
+  for (const [task, session] of [[5, 'other-b'], [6, 'this-session'], [7, 'other-a'], [3, 'ended']] as const) {
+    await deck.callTool('deck_occupy', { task, session })
+    await deck.callTool('deck_heartbeat', { session })
+  }
+  await deck.callTool('deck_end_session', { session: 'ended' })
+
+  const result = await deck.callTool('deck_map', { session: 'this-session' })
+  assert.equal(result.isError, false)
+  const [spec, map] = result.structuredContent.maps
+
+  assert.equal(result.structuredContent.ok, true)
+  assert.equal(spec.number, 1)
+  assert.equal(spec.title, '规格')
+  assert.deepEqual(wallOf(spec), [4, 9, 30, 6, 5, 7, 3, 22, 21, 20, 23, 24, 8, 2])
+  assert.deepEqual(
+    spec.wall.map((card: any) => card.group),
+    ['ready', 'ready', 'ready', 'inProgress', 'inProgress', 'inProgress', 'inProgress', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked', 'done', 'done'],
+  )
+  // Each with the open Tasks it blocks, in the Spec or not.
+  assert.deepEqual(
+    Object.fromEntries(spec.wall.filter((card: any) => card.blocking.length > 0).map((card: any) => [card.number, card.blocking])),
+    { 4: [22, 45], 9: [41], 21: [20], 22: [21] },
+  )
+  // As deck_tasks lists it, with when it was last updated.
+  const four = spec.wall[0]
+  assert.equal(four.updatedAt, '2026-11-20T10:00:00Z')
+  assert.equal(four.title, 'Task 4')
+  assert.deepEqual(spec.wall.find((card: any) => card.number === 20).blockers, [21])
+  assert.equal(spec.wall.find((card: any) => card.number === 3).isOrphaned, true)
+  assert.equal(map.number, 30)
+  assert.deepEqual(wallOf(map), [])
+
+  // Asked by another Session, its Tasks in progress come first.
+  const other = (await deck.callTool('deck_map', { session: 'other-b' })).structuredContent.maps[0]
+  assert.deepEqual(wallOf(other).slice(3, 7), [5, 6, 7, 3])
+  // Asked by the Session that ended, its own Orphaned Task stands with the
+  // Orphaned ones, after every other Session's.
+  const ended = (await deck.callTool('deck_map', { session: 'ended' })).structuredContent.maps[0]
+  assert.deepEqual(wallOf(ended).slice(3, 7), [5, 6, 7, 3])
+})
+
+test('deck_map still orders the Child Tasks when Blocking Edges loop', { timeout: 20_000 }, async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 1 }),
+    issue({ number: 2, parent: 1, blockedBy: [3] }),
+    issue({ number: 3, parent: 1, blockedBy: [2] }),
+    issue({ number: 4, parent: 1, blockedBy: [3] }),
+    issue({ number: 5, parent: 1, blockedBy: [5] }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const [spec] = (await deck.callTool('deck_map', { session: 'this-session' })).structuredContent.maps
+
+  // The loop is cut where it is first reached; each Child Task is there once.
+  assert.deepEqual(wallOf(spec), [3, 2, 4, 5])
+  assert.deepEqual(
+    spec.wall.map((card: any) => [card.number, card.blocking]),
+    [[3, [2, 4]], [2, [3]], [4, []], [5, [5]]],
+  )
+})
+
+test('deck_map lists every Spec and Map, open ones first, each with the first sentence of its body as its goal', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    // What the detail draws elsewhere, a heading, a code block and a
+    // checklist item are no goal; a paragraph over two lines is one.
+    issue({
+      number: 1,
+      state: 'CLOSED',
+      closedAt: '2026-11-12T05:40:00Z',
+      body: 'Part of #99\n\n## Problem Statement\n\n```\nnot. this\n```\n\n- [ ] Not this.\n\nThe first line\nruns on。Then more.\n\nAnother paragraph.\n',
+    }),
+    issue({ number: 2, parent: 1, state: 'CLOSED', closedAt: '2026-11-12T05:40:00Z' }),
+    issue({ number: 3, labels: ['wayfinder:map'], body: 'Version 1.2 ships. Then the rest!\n' }),
+    issue({ number: 4, labels: ['wayfinder:map'], body: '## What to build\nNo end to it\n\nThe next paragraph.\n' }),
+    issue({ number: 5, labels: ['wayfinder:map'], body: '## Parent\n\n#3\n\n## Acceptance criteria\n\n- [ ] Done.\n' }),
+    issue({ number: 6, labels: ['wayfinder:map'] }),
+    issue({ number: 7, labels: ['wayfinder:map'], body: '真的吗？还有。\n' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  // Read just after the Tasks, it answers from the same read of the Task Source.
+  await deck.callTool('deck_tasks')
+  const { maps } = (await deck.callTool('deck_map', { session: 'this-session' })).structuredContent
+  assert.equal((await gh.calls()).length, 1)
+
+  assert.deepEqual(
+    maps.map(({ number, kind, isOpen, goal }: any) => ({ number, kind, isOpen, goal })),
+    [
+      { number: 3, kind: 'map', isOpen: true, goal: 'Version 1.2 ships.' },
+      { number: 4, kind: 'map', isOpen: true, goal: 'No end to it' },
+      { number: 5, kind: 'map', isOpen: true, goal: null },
+      { number: 6, kind: 'map', isOpen: true, goal: null },
+      { number: 7, kind: 'map', isOpen: true, goal: '真的吗？' },
+      { number: 1, kind: 'spec', isOpen: false, goal: 'The first line runs on。' },
+    ],
+  )
+  assert.deepEqual(maps[5].progress, { closed: 1, inProgress: 0, total: 1 })
+})
+
+test('deck_map says why the Task Source cannot be read, and takes the id of the Session asking', async t => {
+  const gh = await fakeGh()
+  await gh.answer({ exitCode: 4, stderr: 'To get started with GitHub CLI, please run:  gh auth login\n' })
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const failed = await deck.callTool('deck_map', { session: 'this-session' })
+  assert.equal(failed.isError, false)
+  assert.equal(failed.structuredContent.ok, false)
+  assert.equal(failed.structuredContent.failure.kind, 'unauthenticated')
+
+  for (const args of [{}, { session: '' }, { session: 3 }]) {
+    const refused = await deck.callTool('deck_map', args)
+    assert.equal(refused.isError, true)
+    assert.match(refused.content[0].text, /deck_map takes the id of the Session/)
+  }
 })
 
 test('deck_tasks says why the Task Source cannot be read', async t => {

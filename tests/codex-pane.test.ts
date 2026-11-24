@@ -159,10 +159,51 @@ const DETAILS: Record<number, object> = {
   ),
 }
 
+// A Child Task as deck_map puts it on a wall: as deck_tasks lists it, in its
+// group, blocking no Task.
+const card = (listed: object, group: string, more: object = {}) => ({
+  ...listed,
+  group,
+  updatedAt: '2026-11-22T08:00:00Z',
+  blocking: [],
+  ...more,
+})
+const [READY, MINE, OTHER, CLAUDE, ORPHANED] = [TASKS.groups.ready[0]!, ...TASKS.groups.inProgress]
+const [BLOCKED, WAITING] = TASKS.groups.blocked
+const [EVIDENCED, CLOSED] = TASKS.groups.done
+
+// The Map Views as the Deck service gives them: Spec #64, its wall in an
+// order the page could not have worked out, and the closed Map.
+const MAPS = {
+  ok: true,
+  fetchedAt: TASKS.fetchedAt,
+  maps: [
+    {
+      ...TASKS.containers[0],
+      goal: '在 Codex 桌面应用的标签页里放一个 Pane。',
+      wall: [
+        card(READY, 'ready', { blocking: [73] }),
+        card(MINE, 'inProgress'),
+        card(CLAUDE, 'inProgress'),
+        card(OTHER, 'inProgress'),
+        card(ORPHANED, 'inProgress'),
+        // Held by a Session and blocking others, a card says what it blocks.
+        card(task(76, '接管', { occupant: CLAUDE_CODE, occupantHost: 'claude-code', occupantShort: '3f9c21d0' }), 'inProgress', { blocking: [77] }),
+        card(task(78, '失联', { occupant: OTHER_CODEX, occupantHost: 'codex', occupantShort: '77e0aa15', isOrphaned: true }), 'inProgress', { blocking: [79] }),
+        card(WAITING, 'blocked'),
+        card(BLOCKED, 'blocked', { blocking: [99, 100] }),
+        card(EVIDENCED, 'done'),
+        card(CLOSED, 'done'),
+      ],
+    },
+    { ...TASKS.containers[1], goal: null, wall: [] },
+  ],
+}
+
 // The Deck service of a Session started in the Workspace at `workspace`, its
-// Task Source holding `tasks`.
+// Task Source holding `tasks`, which its Map Views `maps` show.
 const deckAt =
-  (workspace: string, configured = true, tasks: object = TASKS) =>
+  (workspace: string, configured = true, tasks: object = TASKS, maps: object = MAPS) =>
   (name: string, args: any = {}) => {
     if (name === 'deck_config') {
       return answered(
@@ -186,6 +227,9 @@ const deckAt =
     }
     if (name === 'deck_task' && DETAILS[args.number] !== undefined) {
       return answered(DETAILS[args.number]!)
+    }
+    if (name === 'deck_map') {
+      return answered(maps)
     }
     throw new Error(`unexpected call of ${name}`)
   }
@@ -236,13 +280,14 @@ test('in a Configured Project the Pane heads its four tabs with the project and 
     { name: 'deck_config', arguments: {} },
     { name: 'deck_session', arguments: {} },
     { name: 'deck_tasks', arguments: {} },
+    { name: 'deck_map', arguments: { session: SESSION.session } },
     // 下一步 reads the skills, to know whether Codex runs this ask-matt.
     { name: 'deck_skills', arguments: {} },
     { name: 'deck_configure', arguments: {} },
   ])
 
   await page.click(document.querySelector('.dk-head button'))
-  assert.equal(calls().length, 10)
+  assert.equal(calls().length, 12)
   assert.equal(text(document.querySelector('.dk-head__fresh')), '刚刚')
 })
 
@@ -428,7 +473,7 @@ test('the "任务" tab shows the Tasks in the four groups the Deck service puts 
   // The open Spec, with its Child Tasks counted from the same read; the
   // closed Map is not listed.
   assert.deepEqual([...document.querySelectorAll('.dk-row--container')].map(text), [
-    'Spec #64 规格：里程碑二 2/9 1 可执行 · 4 进行中 · 2 阻塞',
+    'Spec #64 规格：里程碑二 2/9 1 可执行 · 4 进行中 · 2 阻塞 地图',
   ])
   // This Session's Task is drawn apart from another Session's; an Orphaned
   // Child Task marks its Spec.
@@ -2250,4 +2295,572 @@ test('the detail\'s parts are drawn as the layout draws them: section heads, the
   await page.click([...document.querySelectorAll('.dk-bar button')].find(each => text(each) === '返回')!)
   await page.click(rowOf(document, 70))
   assert.equal(style('.dk-detail li').paddingLeft, '24px')
+})
+
+const tabNamed = (document: Document, name: string) =>
+  [...document.querySelectorAll('[role="tab"]')].find(each => text(each) === name)!
+// What the "地图" tab shows as the person reads it: the card, the wall's
+// cards, and the button under the wall.
+const mapShown = (page: { window: any; document: Document }) => ({
+  card: [...page.document.querySelectorAll('#map .dk-spec')].filter(each => shown(page, each)).map(text),
+  wall: [...page.document.querySelectorAll('#map .dk-card')].filter(each => shown(page, each)).map(text),
+  more: [...page.document.querySelectorAll('#map button.dk-group__more')].filter(each => shown(page, each)).map(text),
+})
+
+test('the "地图" tab shows the Map View of a Spec: its card, then its Child Tasks in the order the Deck service gives, each saying what blocks it and what it blocks', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+
+  assert.deepEqual(mapShown(page), {
+    card: ['Spec #64 切换 规格：里程碑二 在 Codex 桌面应用的标签页里放一个 Pane。 可执行 1 进行中 6 阻塞 2 已解锁 2 解锁进度 2 / 9 22%'],
+    wall: [
+      '#70 可执行 Task 详情 挡着 #73 更新 11-22',
+      '#74 进行中 执行与 Occupancy 登记 更新 11-22',
+      '#69 进行中 任务列表 Claude Code 3f9c21d0 更新 11-22',
+      '#72 进行中 Matt 技能 77e0aa15 更新 11-22',
+      '#75 Orphaned 心跳与 Orphaned Session 已结束 更新 11-22',
+      '#76 进行中 接管 挡着 #77 更新 11-22',
+      '#78 Orphaned 失联 挡着 #79 更新 11-22',
+      '#19 阻塞 等分诊 更新 11-22',
+      '#73 阻塞 推荐：我现在该做什么 被 #72 #70 阻塞 · 挡着 #99 #100 更新 11-22',
+      '#66 已解锁 骨架 验收证据 11-22 01:40',
+      '#65 已解锁 预先重构 没有验收证据 11-21 22:10',
+    ],
+    more: [],
+  })
+  // The Spec is marked as its row in "任务" is; each card as its Task's row.
+  assert.ok(document.querySelector('#map .dk-spec .dk-id')!.classList.contains('is-orphaned'))
+  assert.deepEqual(
+    [...document.querySelectorAll('#map .dk-card .dk-plate')].map(each => each.getAttribute('aria-label')),
+    ['可执行', '进行中 · 本 Session', '进行中 · 其他 Session', '进行中 · 其他 Session', 'Orphaned', '进行中 · 其他 Session', 'Orphaned', '被阻塞', '被阻塞', '已解锁', '已解锁'],
+  )
+  // Closed and in progress, of the Child Tasks.
+  const bars = [...document.querySelectorAll<HTMLElement>('#map .dk-progress__track i')].map(each => each.style.width)
+  assert.deepEqual(bars, ['22.22%', '44.44%'])
+  assert.equal(shown(page, document.querySelector('#map .dk-empty')), false)
+  // The card and the wall are laid out as the Pane's own, a gap between them.
+  assert.equal(page.window.getComputedStyle(document.querySelector('#map-view')!).display, 'contents')
+})
+
+test('a Map View with no Blocking Edge says nothing of blocking, and shows what the Deck service gives as text', async t => {
+  const map = {
+    ...task(90, '<i>示例</i>', { labels: [], parent: null }),
+    kind: 'map',
+    isPendingCloseout: false,
+    group: 'ready',
+    children: [91, 92],
+    progress: { closed: 1, inProgress: 0, total: 2 },
+  }
+  const ready = task(91, '<b>一个</b>', { parent: 90 })
+  const closed = task(92, '关了', { parent: 90, isOpen: false, closedAt: '2026-11-20T10:00:00Z' })
+  const tasks = { ...TASKS, containers: [map], groups: { ready: [ready], inProgress: [], blocked: [], done: [closed] } }
+  const maps = { ...MAPS, maps: [{ ...map, goal: null, wall: [card(ready, 'ready', { updatedAt: '2026-11-21T23:00:00Z' }), card(closed, 'done')] }] }
+  const page = await openPage({ answer: deckAt('/work/matt-deck', true, tasks, maps) })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '地图'))
+
+  // One Map only: nothing to switch to. No goal: none is drawn.
+  assert.deepEqual(mapShown(page), {
+    card: ['Map #90 <i>示例</i> 可执行 1 进行中 0 阻塞 0 已解锁 1 解锁进度 1 / 2 50%'],
+    wall: ['#91 可执行 <b>一个</b> 更新 11-21', '#92 已解锁 关了 没有验收证据 11-20 10:00'],
+    more: [],
+  })
+  assert.equal(page.document.querySelector('#map .dk-spec__goal'), null)
+  assert.equal(page.document.querySelector('#map .dk-spec__title *, #map .dk-card__title *'), null)
+})
+
+test('the title, goal, Session and Blocking Edges the Deck service gives are put in the Map View as text, and the titles in the list to switch to too', async t => {
+  const goal = '<u>目标</u><script>window.injected = true</script>'
+  const other = task(93, '<em>占着</em>', { parent: 90, occupant: OTHER_CODEX, occupantHost: 'codex', occupantShort: '<b>77e0aa15</b>' })
+  const blocked = task(94, '被挡', { parent: 90, blockers: ['<s>93</s>'], blockedBy: [93] })
+  const maps = {
+    ...MAPS,
+    maps: [
+      { ...MAPS.maps[0], title: '<i>规格</i>', goal, wall: [card(other, 'inProgress'), card(blocked, 'blocked', { blocking: ['<q>95</q>'] })] },
+      { ...MAPS.maps[1], title: '<i>旧地图</i>' },
+    ],
+  }
+  const page = await openPage({ answer: deckAt('/work/matt-deck', true, TASKS, maps) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+
+  assert.equal(text(document.querySelector('#map .dk-spec__title')), '<i>规格</i>')
+  assert.equal(document.querySelector('#map .dk-spec__goal')!.textContent, goal)
+  assert.deepEqual(mapShown(page).wall, [
+    '#93 进行中 <em>占着</em> <b>77e0aa15</b> 更新 11-22',
+    '#94 阻塞 被挡 被 #<s>93</s> 阻塞 · 挡着 #<q>95</q> 更新 11-22',
+  ])
+  assert.equal(
+    document.querySelector('#map .dk-spec__title *, #map .dk-spec__goal *, #map .dk-card__title *, #map .dk-card__meta .mono *'),
+    null,
+  )
+  // The relation line holds no element but the Session's id.
+  assert.deepEqual([...document.querySelectorAll('#map .dk-card__meta *')].map(each => each.className), ['mono'])
+  assert.equal((page.window as any).injected, undefined)
+
+  await page.click(document.querySelector('#map .dk-spec__head button'))
+  assert.deepEqual([...document.querySelectorAll('#map .dk-row__title')].map(text), ['<i>规格</i>', '<i>旧地图</i>'])
+  assert.equal(document.querySelector('#map .dk-row__title *'), null)
+})
+
+test('a wall shows three blocked Child Tasks and puts the rest behind "还有 N 个被阻塞", which shows them all, read again or not', async t => {
+  const blocked = [80, 81, 82, 83, 84].map(number => task(number, `被挡 ${number}`, { blockers: [70], blockedBy: [70] }))
+  const wallOf = (cards: object[]) => ({
+    ...MAPS,
+    maps: [{ ...MAPS.maps[0], wall: [card(READY, 'ready'), ...cards, card(CLOSED, 'done')] }, { ...MAPS.maps[1], wall: cards }],
+  })
+  let maps = wallOf(blocked.map(each => card(each, 'blocked')))
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({ answer: name => (name === 'deck_map' ? answered(maps) : answer(name)) })
+  t.after(page.close)
+  const { document } = page
+  const numbersShown = () => mapShown(page).wall.map(each => Number(each!.split(' ')[0]!.slice(1)))
+  await page.click(tabNamed(document, '地图'))
+
+  // The closed Child Tasks after them all the same.
+  assert.deepEqual(numbersShown(), [70, 80, 81, 82, 65])
+  assert.deepEqual(mapShown(page).more, ['还有 2 个被阻塞'])
+  // Blocked by one Task, a card names it.
+  assert.equal(mapShown(page).wall[1], '#80 阻塞 被挡 80 被 #70 阻塞 更新 11-22')
+
+  await page.click(document.querySelector('#map button.dk-group__more'))
+  assert.deepEqual(numbersShown(), [70, 80, 81, 82, 83, 84, 65])
+  assert.deepEqual(mapShown(page).more, [])
+  // Read again, the wall stays open.
+  await page.click(document.querySelector('.dk-head button'))
+  assert.deepEqual(numbersShown(), [70, 80, 81, 82, 83, 84, 65])
+  // Another Map View's wall is not.
+  await page.click(document.querySelector('#map .dk-spec__head button'))
+  await page.click([...document.querySelectorAll('#map .dk-row')][1]!)
+  assert.deepEqual(numbersShown(), [80, 81, 82])
+  assert.deepEqual(mapShown(page).more, ['还有 2 个被阻塞'])
+
+  // Three are all shown, with no button.
+  maps = wallOf(blocked.slice(0, 3).map(each => card(each, 'blocked')))
+  const three = await openPage({ answer: name => (name === 'deck_map' ? answered(maps) : answer(name)) })
+  t.after(three.close)
+  await three.click(tabNamed(three.document, '地图'))
+  assert.equal(mapShown(three).wall.length, 5)
+  assert.deepEqual(mapShown(three).more, [])
+})
+
+test('with more than one Spec or Map, "切换" lists them all to choose the Map View from, and "返回" goes back to it unchanged', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+  const switchButton = () => document.querySelector('#map .dk-spec__head button')
+  const choicesShown = () => [...document.querySelectorAll('#map .dk-row')].filter(each => shown(page, each)).map(text)
+  await page.click(tabNamed(document, '地图'))
+
+  await page.click(switchButton())
+  assert.equal(text(document.querySelector('#map .dk-bar')), '返回 地图 / 切换')
+  // As "任务" draws them, without its action; the one shown is marked.
+  assert.deepEqual(choicesShown(), ['Spec #64 规格：里程碑二 2/9 1 可执行 · 4 进行中 · 2 阻塞', 'Map #50 旧地图 0/0 0 可执行 · 0 进行中 · 0 阻塞'])
+  assert.deepEqual([...document.querySelectorAll('#map .dk-row.is-selected')].map(each => text(each.querySelector('.dk-id'))), ['#64'])
+  assert.deepEqual(mapShown(page).card, [])
+
+  // "返回" chooses none.
+  await page.click(document.querySelector('#map .dk-bar button'))
+  assert.equal(mapShown(page).card[0]!.startsWith('Spec #64'), true)
+  assert.deepEqual(choicesShown(), [])
+
+  // A row chooses its Map View, which stays chosen as the Pane reads again.
+  await page.click(switchButton())
+  await page.click([...document.querySelectorAll('#map .dk-row')][1]!)
+  assert.deepEqual(mapShown(page), { card: ['Map #50 切换 旧地图 可执行 0 进行中 0 阻塞 0 已解锁 0 解锁进度 0 / 0 0%'], wall: [], more: [] })
+  await page.click(document.querySelector('.dk-head button'))
+  assert.equal(mapShown(page).card[0]!.startsWith('Map #50'), true)
+
+  // Another tab leaves the list to switch to: back in "地图" is the Map View.
+  await page.click(switchButton())
+  await page.click(tabNamed(document, '任务'))
+  await page.click(tabNamed(document, '地图'))
+  assert.deepEqual(choicesShown(), [])
+  assert.equal(mapShown(page).card[0]!.startsWith('Map #50'), true)
+})
+
+test('"地图" on a Spec\'s or Map\'s row in "任务" opens its Map View, and "任务" goes back to the list as it was', async t => {
+  const second = {
+    ...TASKS.containers[0],
+    ...task(90, '另一张地图', { labels: [], parent: null }),
+    kind: 'map',
+    children: [],
+    progress: { closed: 0, inProgress: 0, total: 0 },
+  }
+  const tasks = { ...TASKS, containers: [TASKS.containers[0], second] }
+  const maps = { ...MAPS, maps: [...MAPS.maps, { ...second, goal: null, wall: [] }] }
+  const page = await openPage({ answer: deckAt('/work/matt-deck', true, tasks, maps) })
+  t.after(page.close)
+  const { document } = page
+  const selected = () => [...document.querySelectorAll('[role="tab"][aria-selected="true"]')].map(text)
+  const listBefore = groupsShown(document)
+
+  const mapButton = (row: number) => [...document.querySelectorAll('#tasks .dk-row--container')][row]!.querySelector('button')
+  await page.click(mapButton(1))
+  assert.deepEqual(selected(), ['地图'])
+  assert.deepEqual(mapShown(page).card, ['Map #90 切换 另一张地图 可执行 0 进行中 0 阻塞 0 已解锁 0 解锁进度 0 / 0 0%'])
+
+  await page.click(tabNamed(document, '任务'))
+  assert.deepEqual(selected(), ['任务'])
+  assert.deepEqual(groupsShown(document), listBefore)
+  assert.equal(shown(page, document.querySelector('.dk-filter')), true)
+  await page.click(mapButton(0))
+  assert.equal(mapShown(page).card[0]!.startsWith('Spec #64'), true)
+})
+
+test('with no Spec and no Map the "地图" tab says so and what would be there', async t => {
+  const tasks = { ...TASKS, containers: [] }
+  const page = await openPage({ answer: deckAt('/work/matt-deck', true, tasks, { ...MAPS, maps: [] }) })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '地图'))
+
+  assert.deepEqual([...page.document.querySelector('#map .dk-empty')!.children].map(text), ['还没有 Spec 或 Map。', '带 Child Task 的 Task 会出现在这里。'])
+  assert.equal(shown(page, page.document.querySelector('#map .dk-empty')), true)
+  assert.deepEqual(mapShown(page), { card: [], wall: [], more: [] })
+})
+
+test('the "地图" tab says it is reading until the first read comes back, and why a read failed, over the Map View read before', async t => {
+  let failure: object | undefined
+  const answer = deckAt('/work/matt-deck')
+  let whileReading: unknown
+  const page = await openPage({
+    answer: (name, _args, document) => {
+      if (name === 'deck_tasks' && whileReading === undefined) {
+        whileReading = [...document.querySelectorAll('#map .dk-why')].filter(each => !each.hasAttribute('hidden')).map(text)
+      }
+      return name === 'deck_map' && failure !== undefined ? answered({ ok: false, failure }) : answer(name)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+  const notice = () =>
+    [...document.querySelectorAll('#map .dk-notice.is-danger')].filter(each => shown(page, each)).map(each => [
+      text(each.querySelector('.dk-notice__title')),
+      text(each.querySelector('.dk-notice__text')),
+      [...each.querySelectorAll('code')].map(text),
+    ])
+  await page.click(tabNamed(document, '地图'))
+
+  assert.deepEqual(whileReading, ['正在读取 Task…'])
+  assert.deepEqual([...document.querySelectorAll('#map .dk-why')].filter(each => shown(page, each)), [])
+  assert.deepEqual(notice(), [])
+
+  failure = { kind: 'unauthenticated', message: 'not logged in' }
+  await page.click(document.querySelector('.dk-head button'))
+  assert.deepEqual(notice(), [['读取 Task 失败', 'gh 未登录。运行 gh auth login 后点“刷新”重试。', ['gh', 'gh auth login']]])
+  assert.equal(text(document.querySelector('.dk-head__fresh')), '读取失败')
+  assert.equal(mapShown(page).card[0]!.startsWith('Spec #64'), true)
+  // And so does "任务", its words its own.
+  await page.click(tabNamed(document, '任务'))
+  assert.equal(text([...document.querySelectorAll('#tasks .dk-notice.is-danger')].find(each => shown(page, each))!.querySelector('.dk-notice__text')), 'gh 未登录。运行 gh auth login 后点“刷新”重试。')
+
+  failure = undefined
+  await page.click(document.querySelector('.dk-head button'))
+  await page.click(tabNamed(document, '地图'))
+  assert.deepEqual(notice(), [])
+})
+
+test('the timed reads and the read as the tab is shown again read the Map Views anew and keep what the person looks at: the Map View chosen, its open wall, the list to switch to', async t => {
+  const blocked = [80, 81, 82, 83, 84].map(number => card(task(number, `被挡 ${number}`, { blockers: [70], blockedBy: [70] }), 'blocked'))
+  let maps = { ...MAPS, maps: [MAPS.maps[0], { ...MAPS.maps[1], wall: blocked }] }
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({ answer: name => (name === 'deck_map' ? answered(maps) : answer(name)) })
+  t.after(page.close)
+  const { document } = page
+  const mapReads = () => page.sent.filter(message => message.params?.name === 'deck_map').map(({ params }) => params.arguments)
+  await page.click(tabNamed(document, '地图'))
+  await page.click(document.querySelector('#map .dk-spec__head button'))
+  await page.click([...document.querySelectorAll('#map .dk-row')][1]!)
+  await page.click(document.querySelector('#map button.dk-group__more'))
+  assert.equal(mapShown(page).wall.length, 5)
+
+  // What the Deck service gives next is drawn: a Child Task closed since.
+  maps = { ...MAPS, maps: [MAPS.maps[0], { ...MAPS.maps[1], wall: [...blocked, card(CLOSED, 'done')] }] }
+  await page.advance(60_000)
+  assert.equal(mapShown(page).card[0]!.startsWith('Map #50'), true)
+  assert.equal(mapShown(page).wall.length, 6)
+  assert.deepEqual(mapShown(page).more, [])
+
+  await page.show(false)
+  await page.show(true)
+  assert.equal(mapShown(page).wall.length, 6)
+
+  // The list to switch to stays open through a timed read too.
+  await page.click(document.querySelector('#map .dk-spec__head button'))
+  await page.advance(60_000)
+  assert.equal(text(document.querySelector('#map .dk-bar')), '返回 地图 / 切换')
+
+  // Each of them read the Map Views as this Session sees them, past no cache.
+  assert.deepEqual(mapReads(), [1, 2, 3, 4].map(() => ({ session: SESSION.session })))
+})
+
+test('the Tasks and their Map Views are one read: when deck_map fails after deck_tasks answered, both tabs say why over what they showed before', async t => {
+  let tasks: object = TASKS
+  let mapAnswer: () => object = () => answered(MAPS)
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({
+    answer: name => (name === 'deck_tasks' ? answered(tasks) : name === 'deck_map' ? mapAnswer() : answer(name)),
+  })
+  t.after(page.close)
+  const { document } = page
+  const noticeIn = (tab: string) =>
+    [...document.querySelectorAll(`#${tab} .dk-notice.is-danger`)].filter(each => shown(page, each)).map(each => text(each.querySelector('.dk-notice__text')))
+  const before = groupsShown(document)
+
+  // The Task Source has changed, and deck_map cannot read it.
+  tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [] } }
+  mapAnswer = () => answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp' } })
+  await page.click(document.querySelector('.dk-head button'))
+  assert.deepEqual(noticeIn('tasks'), ['连不上 GitHub。检查网络后点“刷新”重试。'])
+  assert.deepEqual(groupsShown(document), before)
+  assert.equal(text(document.querySelector('.dk-head__fresh')), '读取失败')
+  await page.click(tabNamed(document, '地图'))
+  assert.deepEqual(noticeIn('map'), ['连不上 GitHub。检查网络后点“刷新”重试。'])
+  assert.equal(mapShown(page).wall.length, MAPS.maps[0]!.wall.length)
+
+  // A tool error of deck_map says so in both, the same way.
+  mapAnswer = () => ({ content: [{ type: 'text', text: 'database is locked' }], isError: true })
+  await page.click(document.querySelector('.dk-head button'))
+  assert.deepEqual(noticeIn('map'), ['Deck 服务出错：database is locked。点“刷新”重试。'])
+  await page.click(tabNamed(document, '任务'))
+  assert.deepEqual(noticeIn('tasks'), ['Deck 服务出错：database is locked。点“刷新”重试。'])
+  assert.deepEqual(groupsShown(document), before)
+
+  // Read again, both are what the Deck service now gives.
+  mapAnswer = () => answered(MAPS)
+  await page.click(document.querySelector('.dk-head button'))
+  assert.deepEqual(noticeIn('tasks'), [])
+  assert.notDeepEqual(groupsShown(document), before)
+})
+
+// A Spec or Map as deck_map gives it, its wall five blocked Child Tasks.
+const blockedWall = [80, 81, 82, 83, 84].map(number => card(task(number, `被挡 ${number}`, { blockers: [70], blockedBy: [70] }), 'blocked'))
+const viewOf = (number: number, title: string, more: object = {}) => ({
+  ...TASKS.containers[0],
+  ...task(number, title, { labels: [], parent: null }),
+  kind: 'spec',
+  children: [],
+  goal: null,
+  wall: blockedWall,
+  ...more,
+})
+// A page whose deck_map answers what `maps()` gives at each call.
+const openWithMaps = async (maps: () => object[]) => {
+  const answer = deckAt('/work/matt-deck')
+  return openPage({ answer: (name, args) => (name === 'deck_map' ? answered({ ...MAPS, maps: maps() }) : answer(name, args)) })
+}
+const cardTitle = (page: { window: any; document: Document }) => text(page.document.querySelector('#map .dk-spec__title'))
+
+test('the Map View shown without being chosen stays the one shown, its wall open, as the order the Deck service gives changes', async t => {
+  let maps = [viewOf(64, '规格'), viewOf(90, '另一张')]
+  const page = await openWithMaps(() => maps)
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+  await page.click(document.querySelector('#map button.dk-group__more'))
+  assert.equal(cardTitle(page), '规格')
+
+  // One with a lower number comes in front of it.
+  maps = [viewOf(10, '新来的'), ...maps]
+  await page.advance(60_000)
+  assert.equal(cardTitle(page), '规格')
+  assert.equal(mapShown(page).wall.length, 5)
+
+  // It closes, and goes after the open ones.
+  maps = [maps[0]!, maps[2]!, viewOf(64, '规格', { isOpen: false })]
+  await page.advance(60_000)
+  assert.equal(cardTitle(page), '规格')
+  assert.equal(mapShown(page).wall.length, 5)
+  assert.deepEqual(mapShown(page).more, [])
+})
+
+test('choosing the Map View already shown through "切换" keeps its wall open; choosing another closes it', async t => {
+  const page = await openWithMaps(() => [viewOf(64, '规格'), viewOf(90, '另一张')])
+  t.after(page.close)
+  const { document } = page
+  const choose = async (row: number) => {
+    await page.click(document.querySelector('#map .dk-spec__head button'))
+    await page.click([...document.querySelectorAll('#map .dk-row')][row]!)
+  }
+  await page.click(tabNamed(document, '地图'))
+  await page.click(document.querySelector('#map button.dk-group__more'))
+
+  await choose(0)
+  assert.equal(cardTitle(page), '规格')
+  assert.equal(mapShown(page).wall.length, 5)
+
+  await choose(1)
+  assert.equal(cardTitle(page), '另一张')
+  assert.deepEqual(mapShown(page).more, ['还有 2 个被阻塞'])
+})
+
+test('when the Map View shown is gone from what the Deck service gives, the first one is shown, its wall closed, and stays shown', async t => {
+  let maps = [viewOf(64, '规格'), viewOf(90, '另一张')]
+  const page = await openWithMaps(() => maps)
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+  await page.click(document.querySelector('#map .dk-spec__head button'))
+  await page.click([...document.querySelectorAll('#map .dk-row')][1]!)
+  await page.click(document.querySelector('#map button.dk-group__more'))
+
+  maps = [viewOf(64, '规格')]
+  await page.advance(60_000)
+  assert.equal(cardTitle(page), '规格')
+  assert.deepEqual(mapShown(page).more, ['还有 2 个被阻塞'])
+
+  // Back again, it is not shown in place of the one shown since.
+  maps = [viewOf(64, '规格'), viewOf(90, '另一张')]
+  await page.advance(60_000)
+  assert.equal(cardTitle(page), '规格')
+})
+
+test('when every Spec and Map is gone while the list to switch to is open, the tab says there is none, and shows a Map View when they are back', async t => {
+  let maps: object[] = [viewOf(64, '规格'), viewOf(90, '另一张')]
+  const page = await openWithMaps(() => maps)
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+  await page.click(document.querySelector('#map .dk-spec__head button'))
+
+  maps = []
+  await page.advance(60_000)
+  assert.equal(shown(page, document.querySelector('#map .dk-empty')), true)
+  assert.equal(document.querySelector('#map .dk-bar'), null)
+
+  maps = [viewOf(64, '规格'), viewOf(90, '另一张')]
+  await page.advance(60_000)
+  assert.equal(document.querySelector('#map .dk-bar'), null)
+  assert.equal(cardTitle(page), '规格')
+})
+
+test('the Map View chosen and its open wall stay through a read that fails and through the project being not configured for a while', async t => {
+  let failing = false
+  let configured = true
+  const maps = [viewOf(64, '规格'), viewOf(90, '另一张')]
+  const yes = deckAt('/work/matt-deck')
+  const no = deckAt('/work/matt-deck', false)
+  const page = await openPage({
+    answer: name =>
+      name === 'deck_map'
+        ? answered(failing ? { ok: false, failure: { kind: 'offline', message: 'dial tcp' } } : { ...MAPS, maps })
+        : (configured ? yes : no)(name),
+  })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+  await page.click(document.querySelector('#map .dk-spec__head button'))
+  await page.click([...document.querySelectorAll('#map .dk-row')][1]!)
+  await page.click(document.querySelector('#map button.dk-group__more'))
+
+  failing = true
+  await page.advance(60_000)
+  failing = false
+  await page.advance(60_000)
+  assert.equal(cardTitle(page), '另一张')
+  assert.equal(mapShown(page).wall.length, 5)
+
+  configured = false
+  await page.advance(60_000)
+  configured = true
+  await page.advance(60_000)
+  assert.equal(cardTitle(page), '另一张')
+  assert.equal(mapShown(page).wall.length, 5)
+})
+
+test('a Recommendation shown keeps the Task as the list read before has it while deck_map fails, and follows the list once both read', async t => {
+  let tasks: any = TASKS
+  let mapFails = false
+  const deck = deckThatRecommends()
+  const page = await openNext({
+    answer: (name: string, args: any) =>
+      name === 'deck_tasks'
+        ? answered(tasks)
+        : name === 'deck_map' && mapFails
+          ? answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp' } })
+          : deck.answer(name, args),
+  })
+  t.after(page.close)
+  const title = () => text(page.document.querySelector('.dk-rec__title'))
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+  assert.equal(title(), 'Task 详情')
+
+  // #70 renamed, and deck_map cannot read: the list and the card are as before.
+  tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [task(70, 'Task 详情 3k8d')] } }
+  mapFails = true
+  await page.advance(58_000)
+  assert.equal(title(), 'Task 详情')
+  assert.equal(text(page.document.querySelector('.dk-head__fresh')), '读取失败')
+
+  mapFails = false
+  await page.advance(60_000)
+  assert.equal(title(), 'Task 详情 3k8d')
+})
+
+test('"地图" on a Spec\'s row opens its Map View and not its detail; a click elsewhere on the row opens the detail', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+  const detailReads = () => page.sent.filter(message => message.params?.name === 'deck_task').length
+  const selected = () => [...document.querySelectorAll('[role="tab"][aria-selected="true"]')].map(text)
+  const spec = () => document.querySelector('#tasks .dk-row--container')!
+
+  await page.click(spec().querySelector('button'))
+  assert.deepEqual(selected(), ['地图'])
+  assert.equal(cardTitle(page), '规格：里程碑二')
+  assert.equal(detailReads(), 0)
+  assert.equal(shown(page, document.querySelector('.dk-detail')), false)
+
+  await page.click(tabNamed(document, '任务'))
+  await page.click(spec().querySelector('.dk-row__title'))
+  assert.deepEqual(selected(), ['任务'])
+  assert.equal(detailReads(), 1)
+  assert.equal(text(document.querySelector('#crumbs')), '任务 / #64')
+  assert.equal(shown(page, document.querySelector('.dk-detail')), true)
+})
+
+test('a Task\'s detail open, the Map View shown, its open wall and the list to switch to are kept through the timed reads, and the "地图" tab leaves the detail', async t => {
+  const maps = [viewOf(64, '规格'), viewOf(90, '另一张')]
+  const page = await openWithMaps(() => maps)
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+  await page.click(document.querySelector('#map .dk-spec__head button'))
+  await page.click([...document.querySelectorAll('#map .dk-row')][1]!)
+  await page.click(document.querySelector('#map button.dk-group__more'))
+
+  // Into #70's detail from "任务", through a timed read.
+  await page.click(tabNamed(document, '任务'))
+  await page.click(rowOf(document, 70))
+  await page.advance(60_000)
+  assert.equal(text(document.querySelector('#crumbs')), '任务 / #70')
+
+  // Back from it, then on "地图": as it was.
+  await page.click(document.querySelector('#back'))
+  assert.equal(shown(page, document.querySelector('.dk-filter')), true)
+  await page.click(tabNamed(document, '地图'))
+  assert.equal(cardTitle(page), '另一张')
+  assert.equal(mapShown(page).wall.length, 5)
+
+  // "地图" from a detail leaves it; back on "任务" is the list.
+  await page.click(tabNamed(document, '任务'))
+  await page.click(rowOf(document, 70))
+  await page.click(tabNamed(document, '地图'))
+  assert.equal(shown(page, document.querySelector('#into')), false)
+  assert.equal(cardTitle(page), '另一张')
+  assert.equal(mapShown(page).wall.length, 5)
+  await page.click(tabNamed(document, '任务'))
+  assert.equal(shown(page, document.querySelector('#into')), false)
+  assert.equal(shown(page, document.querySelector('.dk-filter')), true)
+  await page.click(tabNamed(document, '地图'))
+
+  // The list to switch to stays open through a timed read.
+  await page.click(document.querySelector('#map .dk-spec__head button'))
+  await page.advance(60_000)
+  assert.equal(text(document.querySelector('#map .dk-bar')), '返回 地图 / 切换')
 })
