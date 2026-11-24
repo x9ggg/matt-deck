@@ -197,7 +197,7 @@ const tools = {
   },
   deck_map: {
     description:
-      'For the Pane: every Spec and Map of this project, open ones first, each with its goal (the first sentence of its body, or null) and its Child Tasks in the order its Map View shows them: ready; in progress, the asking Session\'s first, then other Sessions\', then Orphaned; blocked, each blocker before the Tasks it blocks; closed. Each Child Task says when it was last updated and which open Tasks it blocks. Reads as deck_tasks does, from its cache.',
+      'For the Pane: every Spec and Map of this project, open ones first, each with its goal (the first sentence of its body, or null) and its Child Tasks in the order its Map View shows them: ready; in progress, the asking Session\'s first, then other Sessions\', then Orphaned; blocked, each blocker before the Tasks it blocks; closed. Each Child Task says when it was last updated and which open Tasks it blocks. A Pending Closeout Spec carries as closeoutPrompt the closeout check the Pane prefills; every other Spec or Map, null. Reads as deck_tasks does, from its cache.',
     inputSchema: {
       type: 'object',
       properties: { session: { type: 'string', minLength: 1, description: 'The id of the Session asking.' } },

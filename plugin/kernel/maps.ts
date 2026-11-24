@@ -9,11 +9,25 @@ import type { Container, Group, SourceRead, Task, TaskList } from './tasks.ts'
 // in the Spec or Map or not, by number.
 export type WallCard = Task & { group: Group; updatedAt: string; blocking: number[] }
 
-// A Spec or Map with its goal, the first sentence of its body or null, and
-// its Child Tasks in the order its wall shows them.
-export type MapView = Container & { goal: string | null; wall: WallCard[] }
+// A Spec or Map with its goal, the first sentence of its body or null, its
+// Child Tasks in the order its wall shows them, and, Pending Closeout, the
+// closeout check the Pane prefills, else null.
+export type MapView = Container & { goal: string | null; wall: WallCard[]; closeoutPrompt: string | null }
 
 const GROUPS: Group[] = ['ready', 'inProgress', 'blocked', 'done']
+
+// The closeout check of a Pending Closeout Spec, as Claude Code's Pane words
+// it (plugin/hooks/register.tsx): a check for the person to decide on, never
+// a request to close the Spec.
+const closeoutPrompt = ({ number, progress }: Container) =>
+  `请对当前项目的 Spec #${number} 做收尾核对。Pane 显示 Child Task 已全部关闭` +
+  `（${progress.closed}/${progress.total}），这只是触发条件，不是完成或验收通过的证据。\n\n` +
+  '先重新读取 Spec 及其全部 Child Task 的正文、评论和当前状态。对照 Spec 的每条用户故事与验收条件，' +
+  '逐条核对 Child Task 的交付、最终代码、测试或运行结果，并列出可复核的 Acceptance Evidence 及出处；' +
+  '不要只依赖关闭状态或任务自述。说明改动所在的分支、提交或工作区及仓库检查结果，' +
+  '区分已验证、未验证和不满足的条目。以“不做”或“重复”关闭的 Child Task，说明原承诺如何满足以及是否有用户确认。\n\n' +
+  '在本 Session 中说明核对结论、剩余缺口、对应的 Spec 条目和建议下一步。' +
+  '本次只核对并报告，不关闭 Spec，也不自动重开或修改任何 Task；是否关闭 Spec 由用户决定。'
 
 // The first sentence of the first paragraph of a body's description that is
 // no heading and no code block; all of the paragraph when it ends no sentence.
@@ -91,6 +105,7 @@ export const mapViews = (list: TaskList, source: SourceRead, session: string): M
       ...container,
       goal: goalOf(read.get(container.number)!.body),
       wall: GROUPS.flatMap(group => (group === 'blocked' ? ordered : cards.filter(card => card.group === group))),
+      closeoutPrompt: container.isPendingCloseout ? closeoutPrompt(container) : null,
     }
   }
 

@@ -1818,6 +1818,49 @@ test('deck_map lists every Spec and Map, open ones first, each with the first se
   assert.deepEqual(maps[5].progress, { closed: 1, inProgress: 0, total: 1 })
 })
 
+test('deck_map gives a Pending Closeout Spec the closeout check to prefill, the one Claude Code\'s Pane prefills, and no other Spec or Map one', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 1 }),
+    issue({ number: 2, parent: 1, state: 'CLOSED' }),
+    issue({ number: 3, parent: 1, state: 'CLOSED' }),
+    // A Child Task still open.
+    issue({ number: 10 }),
+    issue({ number: 11, parent: 10, state: 'CLOSED' }),
+    issue({ number: 12, parent: 10 }),
+    // A Map, and a closed Spec, with every Child Task closed.
+    issue({ number: 20, labels: ['wayfinder:map'] }),
+    issue({ number: 21, parent: 20, state: 'CLOSED' }),
+    issue({ number: 30, state: 'CLOSED' }),
+    issue({ number: 31, parent: 30, state: 'CLOSED' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { maps } = (await deck.callTool('deck_map', { session: 'this-session' })).structuredContent
+
+  assert.deepEqual(
+    maps.map(({ number, isPendingCloseout, closeoutPrompt }: any) => ({ number, isPendingCloseout, closeoutPrompt })),
+    [
+      {
+        number: 1,
+        isPendingCloseout: true,
+        closeoutPrompt:
+          '请对当前项目的 Spec #1 做收尾核对。Pane 显示 Child Task 已全部关闭（2/2），这只是触发条件，不是完成或验收通过的证据。\n\n' +
+          '先重新读取 Spec 及其全部 Child Task 的正文、评论和当前状态。对照 Spec 的每条用户故事与验收条件，' +
+          '逐条核对 Child Task 的交付、最终代码、测试或运行结果，并列出可复核的 Acceptance Evidence 及出处；' +
+          '不要只依赖关闭状态或任务自述。说明改动所在的分支、提交或工作区及仓库检查结果，' +
+          '区分已验证、未验证和不满足的条目。以“不做”或“重复”关闭的 Child Task，说明原承诺如何满足以及是否有用户确认。\n\n' +
+          '在本 Session 中说明核对结论、剩余缺口、对应的 Spec 条目和建议下一步。' +
+          '本次只核对并报告，不关闭 Spec，也不自动重开或修改任何 Task；是否关闭 Spec 由用户决定。',
+      },
+      { number: 10, isPendingCloseout: false, closeoutPrompt: null },
+      { number: 20, isPendingCloseout: false, closeoutPrompt: null },
+      { number: 30, isPendingCloseout: false, closeoutPrompt: null },
+    ],
+  )
+})
+
 test('deck_map says why the Task Source cannot be read, and takes the id of the Session asking', async t => {
   const gh = await fakeGh()
   await gh.answer({ exitCode: 4, stderr: 'To get started with GitHub CLI, please run:  gh auth login\n' })

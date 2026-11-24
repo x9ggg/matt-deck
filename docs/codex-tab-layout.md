@@ -140,6 +140,7 @@ Codex 桌面应用的标签页里，Pane 的每个画面怎么排。画面在 [`
 - 小节的顺序固定：描述、验收条件、被阻塞、执行记录。没有阻塞者时不画“被阻塞”；没有执行记录时写“还没有 Session 执行过这个 Task。”。正文怎么拆成描述和验收条件，照 `pane-layout.md`。
 - “被阻塞”一行一个阻塞者：它自己的状态图形、编号、标题。点它钻进那个 Task。
 - 返回栏里的动作和这个 Task 在列表那一行里的相同（`#detail-bar`）。没有动作的 Task 那里空着，不放停用的按钮。
+- Pending Closeout 的 Spec：状态那一行照它作为 Task 的状态写（Pending Closeout 不是 Task Status），返回栏里是金色的“收尾核对”，和它那一行的一样。
 - 执行记录一条一个 Session（`#detail-log`）：Session 的标识、时间、回报的结果。另一个宿主的 Session 前面写宿主名。有 Acceptance Evidence 时，用绿色的 ✓ 写在回报它的那一条里，连同出处。Deck 不判断验收是否通过。
 
 ## 地图

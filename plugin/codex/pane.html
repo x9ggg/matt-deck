@@ -630,7 +630,8 @@ body{margin:0;background:var(--ground)}
           event.stopPropagation()
           openMap(container.number)
         })
-        return containerRow(container, [el('span', 'dk-row__actions', open)])
+        const closeout = container.isPendingCloseout ? [closeoutButton(closeoutOf(container.number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
+        return containerRow(container, [el('span', 'dk-row__actions', ...closeout, open)])
       }),
     )
     $('containers').hidden = containers.length === 0
@@ -774,8 +775,10 @@ body{margin:0;background:var(--ground)}
     // Through the Host, which opens it in the browser: the page holds no link.
     open.addEventListener('click', () => request('ui/open-link', { url: task.url }))
 
+    const closeout = entry?.isPendingCloseout ? [closeoutButton(closeoutOf(number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
+
     return {
-      end: [open],
+      end: [...closeout, open],
       body: [el('div', 'dk-detail',
         el('div', 'dk-detail__title title', el('span', `dk-id${state === undefined ? '' : ` is-${state}`}`, `#${task.number}`), el('span', '', task.title)),
         meta,
@@ -804,6 +807,23 @@ body{margin:0;background:var(--ground)}
   let isWallOpen = false
 
   const refs = numbers => numbers.map(number => `#${number}`).join(' ')
+
+  // The closeout check of the Pending Closeout Spec `number`, as its Map View
+  // read with the list gives it; none where deck_map answered from a read
+  // that found it no Pending Closeout.
+  const closeoutOf = number => maps.find(map => map.number === number)?.closeoutPrompt ?? null
+  // "收尾核对", which puts the closeout check in the prompt, off with none; on
+  // a row, it is no click on the row.
+  const closeoutButton = (prompt, className) => {
+    const button = el('button', className, '收尾核对')
+    button.type = 'button'
+    button.disabled = prompt === null
+    button.addEventListener('click', event => {
+      event.stopPropagation()
+      prefill(button, prompt)
+    })
+    return button
+  }
   const CARD_STATE = { ready: '可执行', running: '进行中', other: '进行中', orphaned: 'Orphaned', blocked: '阻塞', closed: '已解锁' }
   // The card's four counts: the group, its glyph, its name.
   const COUNTS = [['ready', 'ready', '可执行'], ['inProgress', 'running', '进行中'], ['blocked', 'blocked', '阻塞'], ['done', 'closed', '已解锁']]
@@ -812,7 +832,8 @@ body{margin:0;background:var(--ground)}
   // is another, its title and goal, its Child Tasks counted by group, and
   // its progress.
   const mapCard = map => {
-    const head = el('div', 'dk-spec__head', el('span', 'dk-kind label', map.kind === 'spec' ? 'Spec' : 'Map'), el('span', `dk-id is-${containerState(map)}`, `#${map.number}`))
+    const head = el('div', 'dk-spec__head', el('span', 'dk-kind label', map.kind === 'spec' ? 'Spec' : 'Map'), el('span', `dk-id is-${containerState(map)}`, `#${map.number}`),
+      ...(map.isPendingCloseout ? [el('span', 'is-unlock caption', '待收尾核对')] : []))
     if (maps.length > 1) {
       const switching = smallButton('切换')
       switching.addEventListener('click', () => {
@@ -833,7 +854,7 @@ body{margin:0;background:var(--ground)}
       bar.style.width = `${share(count).toFixed(2)}%`
       return bar
     })
-    const progress = el('div', 'dk-progress',
+    const progress = el('div', `dk-progress${map.isPendingCloseout ? ' is-complete' : ''}`,
       el('div', 'dk-progress__head', el('span', 'label', '解锁进度'), el('span', 'dk-progress__nums', el('span', 'dk-progress__count display', `${closed} / ${total}`), el('span', 'dk-progress__pct caption', `${Math.round(share(closed))}%`))),
       el('div', 'dk-progress__track', ...bars))
     progress.setAttribute('role', 'progressbar')
@@ -841,9 +862,10 @@ body{margin:0;background:var(--ground)}
     progress.setAttribute('aria-valuemin', '0')
     progress.setAttribute('aria-valuemax', String(total))
     progress.setAttribute('aria-valuenow', String(closed))
-    return el('article', 'dk-spec', head, el('span', 'dk-spec__title title', map.title),
+    return el('article', `dk-spec${map.isPendingCloseout ? ' is-closeout' : ''}`, head, el('span', 'dk-spec__title title', map.title),
       ...(map.goal === null ? [] : [el('span', 'dk-spec__goal', map.goal)]),
-      el('div', 'dk-spec__stats', ...counts), progress)
+      el('div', 'dk-spec__stats', ...counts), progress,
+      ...(map.isPendingCloseout ? [el('div', 'dk-spec__foot caption', el('span', '', 'Child Task 已全部解锁，Spec 还没关闭。'), closeoutButton(map.closeoutPrompt, 'dk-btn dk-btn--unlock'))] : []))
   }
 
   // A Child Task's card: its glyph, number and state; its title; what blocks

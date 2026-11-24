@@ -2864,3 +2864,203 @@ test('a Task\'s detail open, the Map View shown, its open wall and the list to s
   await page.advance(60_000)
   assert.equal(text(document.querySelector('#map .dk-bar')), '返回 地图 / 切换')
 })
+
+// A project with two Specs: #64, every Child Task of it closed, Pending
+// Closeout while `pending` says so, and #80, a Child Task of it still open.
+// Each closeout check the Deck service gives is one the page could not write.
+const closeoutPromptOf = (read: number) => `收尾核对 #64 as the Deck service words it, read ${read} 7d1e`
+const closeoutProject = (pending: boolean, read = 1) => {
+  const spec = (number: number, title: string, children: number[], closed: number, isPendingCloseout: boolean) => ({
+    ...task(number, title, { labels: [], parent: null }),
+    kind: 'spec',
+    isPendingCloseout,
+    group: 'ready',
+    children,
+    progress: { closed, inProgress: 0, total: children.length },
+  })
+  const [pendingSpec, openSpec] = [spec(64, '规格：里程碑二', [66, 65], pending ? 2 : 1, pending), spec(80, '规格：里程碑三', [81, 82], 1, false)]
+  const [ready, reopened] = [task(81, '还开着', { parent: 80 }), task(65, '预先重构', { parent: 64 })]
+  const done = [
+    task(66, '骨架', { isOpen: false, closedAt: '2026-11-22T01:40:00Z', parent: 64 }),
+    ...(pending ? [task(65, '预先重构', { isOpen: false, closedAt: '2026-11-21T22:10:00Z', parent: 64 })] : []),
+    task(82, '关了', { isOpen: false, closedAt: '2026-11-20T10:00:00Z', parent: 80 }),
+  ]
+  const tasks = { ...TASKS, containers: [pendingSpec, openSpec], groups: { ready: pending ? [ready] : [ready, reopened], inProgress: [], blocked: [], done } }
+  const wallOf = (number: number) => [
+    ...tasks.groups.ready.filter(each => each.parent === number).map(each => card(each, 'ready')),
+    ...done.filter(each => each.parent === number).map(each => card(each, 'done')),
+  ]
+  const maps = {
+    ...MAPS,
+    maps: [
+      { ...pendingSpec, goal: null, wall: wallOf(64), closeoutPrompt: pending ? closeoutPromptOf(read) : null },
+      { ...openSpec, goal: null, wall: wallOf(80), closeoutPrompt: null },
+    ],
+  }
+  return { tasks, maps }
+}
+// The Deck service of that project, read after read as `project` says.
+const deckOfCloseout = (project: () => { tasks: object; maps: object }) => (name: string, args: any = {}) =>
+  name === 'deck_tasks' ? answered(project().tasks)
+  : name === 'deck_map' ? answered(project().maps)
+  : name === 'deck_task' && args.number === 80 ? answered(detail(80, '规格：里程碑三', { labels: [] }))
+  : deckAt('/work/matt-deck')(name, args)
+
+const buttonsOf = (element: Element) => [...element.querySelectorAll('button')].map(each => [text(each), each.className])
+
+test('a Pending Closeout Spec\'s row offers a gold "收尾核对" before "地图"; a Spec with a Child Task open offers "地图" alone and is not Pending Closeout', async t => {
+  const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)) })
+  t.after(page.close)
+  const [pending, open] = [rowOf(page.document, 64), rowOf(page.document, 80)]
+
+  assert.deepEqual(buttonsOf(pending), [['收尾核对', 'dk-btn dk-btn--sm dk-btn--unlock'], ['地图', 'dk-btn dk-btn--sm']])
+  assert.ok(pending.classList.contains('is-closeout'))
+  assert.equal(text(pending.querySelector('.dk-row__meta')), '待收尾核对')
+  assert.deepEqual(buttonsOf(open), [['地图', 'dk-btn dk-btn--sm']])
+  assert.equal(open.classList.contains('is-closeout'), false)
+  assert.equal(text(open.querySelector('.dk-row__meta')), '1 可执行 · 0 进行中 · 0 阻塞')
+  assert.doesNotMatch(text(page.document.querySelector('#tasks'))!, /已完成 · |验收通过/)
+})
+
+test('"收尾核对" on a row puts the closeout check the Deck service gives in the prompt, unsent, opens no detail, and is off for 5 seconds', async t => {
+  const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)) })
+  t.after(page.close)
+  const button = () => rowOf(page.document, 64).querySelector('button')!
+
+  await page.click(button())
+  assert.deepEqual(prefills(page), [prefilled(closeoutPromptOf(1))])
+  assert.equal(detailShown(page), undefined)
+  assert.deepEqual([text(button()), button().disabled], ['已填入', true])
+  await page.click(button())
+  assert.equal(prefills(page).length, 1)
+
+  await page.advance(4_999)
+  assert.deepEqual([text(button()), button().disabled], ['已填入', true])
+  await page.advance(1)
+  assert.deepEqual([text(button()), button().disabled], ['收尾核对', false])
+})
+
+test('a Pending Closeout Spec\'s Map View card is drawn for its closeout, and its gold "收尾核对" prefills the closeout check, unsent', async t => {
+  const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+  const plate = () => document.querySelector('#map .dk-spec')!
+
+  assert.deepEqual(mapShown(page).card, ['Spec #64 待收尾核对 切换 规格：里程碑二 可执行 0 进行中 0 阻塞 0 已解锁 2 解锁进度 2 / 2 100% Child Task 已全部解锁，Spec 还没关闭。 收尾核对'])
+  assert.ok(plate().classList.contains('is-closeout'))
+  assert.ok(plate().querySelector('.dk-id')!.classList.contains('is-closeout'))
+  assert.equal(plate().querySelector('.dk-spec__head .is-unlock')?.textContent, '待收尾核对')
+  assert.ok(plate().querySelector('.dk-progress')!.classList.contains('is-complete'))
+  assert.deepEqual(buttonsOf(plate().querySelector('.dk-spec__foot')!), [['收尾核对', 'dk-btn dk-btn--unlock']])
+
+  const button = plate().querySelector<HTMLButtonElement>('.dk-spec__foot button')!
+  await page.click(button)
+  assert.deepEqual(prefills(page), [prefilled(closeoutPromptOf(1))])
+  assert.deepEqual([text(button), button.disabled], ['已填入', true])
+  await page.advance(5_000)
+  assert.deepEqual([text(button), button.disabled], ['收尾核对', false])
+})
+
+test('the Map View of a Spec with a Child Task open is not drawn for a closeout and offers none', async t => {
+  const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 80).querySelector('button'))
+  const plate = document.querySelector('#map .dk-spec')!
+
+  assert.deepEqual(mapShown(page).card, ['Spec #80 切换 规格：里程碑三 可执行 1 进行中 0 阻塞 0 已解锁 1 解锁进度 1 / 2 50%'])
+  assert.equal(plate.classList.contains('is-closeout'), false)
+  assert.equal(plate.querySelector('.dk-progress')!.classList.contains('is-complete'), false)
+  assert.equal(plate.querySelector('.dk-spec__foot'), null)
+})
+
+test('a Pending Closeout Spec\'s detail says its state as a Task and has "收尾核对" in the way back, before "在 GitHub 打开"; another Spec\'s has none', async t => {
+  const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)) })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowOf(document, 64))
+  assert.deepEqual(detailShown(page)!.bar, ['返回', '收尾核对', '在 GitHub 打开'])
+  assert.deepEqual(detailShown(page)!.meta, ['可执行', '未指派', '更新 11-21'])
+  const button = [...document.querySelectorAll<HTMLButtonElement>('#into-end button')].find(each => text(each) === '收尾核对')!
+  assert.equal(button.className, 'dk-btn dk-btn--sm dk-btn--unlock')
+  await page.click(button)
+  assert.deepEqual(prefills(page), [prefilled(closeoutPromptOf(1))])
+  assert.deepEqual([text(button), button.disabled], ['已填入', true])
+
+  await page.click(document.querySelector('#back'))
+  await page.click(rowOf(document, 80))
+  assert.deepEqual(detailShown(page)!.bar, ['返回', '在 GitHub 打开'])
+})
+
+test('each read draws the closeout anew: a Child Task reopened takes "收尾核对" away from the row, the card and the detail, and closed again brings it back with the check read last', async t => {
+  let project = closeoutProject(true, 1)
+  const page = await openPage({ answer: deckOfCloseout(() => project) })
+  t.after(page.close)
+  const { document } = page
+  const offered = () => ({
+    row: buttonsOf(rowOf(document, 64)).map(([label]) => label),
+    card: [...document.querySelectorAll('#map .dk-spec__foot button')].map(text),
+    detail: detailShown(page)?.bar,
+  })
+  await page.click(rowOf(document, 64))
+
+  project = closeoutProject(false)
+  await page.advance(60_000)
+  assert.deepEqual(offered(), { row: ['地图'], card: [], detail: ['返回', '在 GitHub 打开'] })
+  assert.equal(document.querySelector('#map .dk-spec')!.classList.contains('is-closeout'), false)
+
+  project = closeoutProject(true, 2)
+  await page.show(false)
+  await page.show(true)
+  assert.deepEqual(offered(), { row: ['收尾核对', '地图'], card: ['收尾核对'], detail: ['返回', '收尾核对', '在 GitHub 打开'] })
+  await page.click([...document.querySelectorAll('#into-end button')].find(each => text(each) === '收尾核对')!)
+  await page.advance(5_000)
+  await page.click(document.querySelector('#back'))
+  await page.click(rowOf(document, 64).querySelector('button'))
+  await page.advance(5_000)
+  await page.click(tabNamed(document, '地图'))
+  await page.click(document.querySelector('#map .dk-spec__foot button'))
+  assert.deepEqual(prefills(page), [1, 2, 3].map(() => prefilled(closeoutPromptOf(2))))
+})
+
+test('a Spec deck_tasks finds Pending Closeout while deck_map, answering from another read, does not or has no Map View of it, has "收尾核对" off', async t => {
+  const { tasks } = closeoutProject(true)
+  const { maps } = closeoutProject(false)
+  for (const viewed of [maps, { ...maps, maps: maps.maps.slice(1) }]) {
+    const page = await openPage({ answer: deckOfCloseout(() => ({ tasks, maps: viewed })) })
+    t.after(page.close)
+
+    const button = rowOf(page.document, 64).querySelector('button')!
+    assert.deepEqual([text(button), button.disabled], ['收尾核对', true])
+    await page.click(rowOf(page.document, 64))
+    assert.deepEqual(detailShown(page)!.bar, ['返回', '收尾核对', '在 GitHub 打开'])
+    assert.equal(page.document.querySelector<HTMLButtonElement>('#into-end button')!.disabled, true)
+    await page.click(page.document.querySelector('#into-end button'))
+    assert.deepEqual(prefills(page), [])
+  }
+})
+
+test('"待收尾核对" and the gold "收尾核对" are drawn in the closeout\'s pair of colours, dark and light: its words gold, the button\'s words on gold', async t => {
+  const PAIRS = {
+    dark: { words: 'rgb(242, 193, 78)', button: ['rgb(28, 19, 0)', 'rgb(242, 193, 78)'] },
+    light: { words: 'rgb(130, 91, 0)', button: ['rgb(255, 255, 255)', 'rgb(130, 91, 0)'] },
+  }
+  for (const theme of ['dark', 'light'] as const) {
+    const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)), hostContext: { theme } })
+    t.after(page.close)
+    const { document } = page
+    const style = (element: Element) => page.window.getComputedStyle(element)
+    const pair = (button: Element) => [style(button).color, style(button).backgroundColor]
+
+    assert.equal(style(rowOf(document, 64).querySelector('.dk-row__meta .is-unlock')!).color, PAIRS[theme].words, theme)
+    assert.deepEqual(pair(rowOf(document, 64).querySelector('button')!), PAIRS[theme].button, theme)
+    await page.click(tabNamed(document, '地图'))
+    assert.equal(style(document.querySelector('#map .dk-spec__head .is-unlock')!).color, PAIRS[theme].words, theme)
+    assert.deepEqual(pair(document.querySelector('#map .dk-spec__foot button')!), PAIRS[theme].button, theme)
+    await page.click(tabNamed(document, '任务'))
+    await page.click(rowOf(document, 64))
+    assert.deepEqual(pair([...document.querySelectorAll('#into-end button')].find(each => text(each) === '收尾核对')!), PAIRS[theme].button, theme)
+  }
+})
