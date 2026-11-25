@@ -50,6 +50,19 @@ const startDeck = (cwd: string, env: Record<string, string> = {}, host = 'claude
     callTool: (name: string, args: object = {}) =>
       request('tools/call', { name, arguments: args }).then(reply => reply.result),
     stop: () => child.kill(),
+    // Closes the Deck service's input; answers the code it exited with.
+    close: () =>
+      new Promise<number | null>(resolve => {
+        child.once('exit', code => resolve(code))
+        child.stdin.end()
+      }),
+    // Ends the Deck service as the host does, by SIGTERM, or with no chance
+    // to record anything, by SIGKILL; answers the signal it exited by.
+    end: (signal: 'SIGTERM' | 'SIGKILL' = 'SIGTERM') =>
+      new Promise<NodeJS.Signals | null>(resolve => {
+        child.once('exit', (_code, exitedBy) => resolve(exitedBy))
+        child.kill(signal)
+      }),
   }
 }
 
@@ -3441,8 +3454,9 @@ const callFrom = (deck: ReturnType<typeof startDeck>, session: string | undefine
     .then(reply => reply.result)
 
 test('started for Codex, deck_execute answers the Execute Prompt of a Task, $implement on it and the ask to report through deck_report, for the page only', async t => {
-  const user = await home()
-  const deck = startDeck(await configured(), { HOME: user }, 'codex')
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 1 }), issue({ number: 74 })])
+  const deck = startDeck(await configured(), gh.env, 'codex')
   t.after(deck.stop)
 
   const { result: listed } = await deck.request('tools/list')
@@ -3463,7 +3477,7 @@ test('started for Codex, deck_execute answers the Execute Prompt of a Task, $imp
   )
   assert.deepEqual(malformed.map(each => each.isError), [true, true, true, true])
   // Only filled in, the prompt occupies nothing.
-  assert.deepEqual(await readdir(user), [])
+  assert.deepEqual((await deck.callTool('deck_inspect')).structuredContent.occupancies, [])
 })
 
 // The Codex hook on UserPromptSubmit calls this tool with the prompt sent.
@@ -3544,11 +3558,12 @@ test('the hook\'s tool records no Occupancy for a prompt with no $implement on a
   ]
   assert.deepEqual(await gh.calls(), [])
   quiet.push(await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #4\n$implement #8' }))
-  // Not even in the local state, for the next read to release; the time of
-  // each call is all it holds.
+  // Not even in the local state, for the next read to release. deck_inspect
+  // lists an open Task's Occupancies only, so the state is read itself.
   const state = new DatabaseSync(join(user, '.matt-deck', 'deck.sqlite'), { readOnly: true })
-  assert.deepEqual(state.prepare('SELECT * FROM occupancies').all(), [])
+  const recorded = state.prepare('SELECT * FROM occupancies').all()
   state.close()
+  assert.deepEqual(recorded, [])
 
   for (const each of quiet) {
     assert.deepEqual(each, { content: [], isError: false })
@@ -3869,4 +3884,244 @@ test('started for Codex, deck_report with no Session, in the call or in its _met
   assert.match(unnamed.content[0].text, /the id of the Session reporting/)
   await gh.answer({ stdout: viewed({ number: 3 }) })
   assert.deepEqual((await deck.callTool('deck_task', { number: 3 })).structuredContent.reports, [])
+})
+
+// Long enough for every Deck service to notice its clock moved: the fake
+// clock looks every few milliseconds.
+const tick = () => new Promise(resolve => setTimeout(resolve, 300))
+
+// Each Occupancy as a Pane reads it: its Task, Session, host and whether it
+// is Orphaned.
+const heldIn = async (deck: ReturnType<typeof startDeck>) =>
+  (await deck.callTool('deck_inspect')).structuredContent.occupancies.map(
+    ({ task, session, sessionHost, isOrphaned }: any) => [task, session, sessionHost, isOrphaned],
+  )
+
+test('started for Codex, a Deck service beats for the Session its first call names, at once and every minute after; vanished, the Occupancy is Orphaned three minutes after the last beat, and held again from the Session\'s next call', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 }), issue({ number: 7 })])
+  const start = Date.UTC(2026, 10, 26, 9, 0)
+  const clock = await fakeClock(start)
+  const env = { ...gh.env, ...clock.env, HOME: user }
+  const dir = await configured()
+  const claude = startDeck(dir, env)
+  t.after(claude.stop)
+  // Two Sessions, each with the Deck service Codex starts it.
+  const early = startDeck(dir, env, 'codex')
+  t.after(early.stop)
+  const late = startDeck(dir, env, 'codex')
+  t.after(late.stop)
+  await callFrom(early, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' })
+  // A Session a later call names is not the one the service beats for.
+  const later = '019a8c3e-1f2b-7c4d-9e0f-2e3f88a1bb26'
+  await callFrom(early, later, HOOK_TOOL, { prompt: '$implement #7' })
+  await callFrom(late, CODEX_NEIGHBOUR, HOOK_TOOL, { prompt: '$implement #5' })
+  const atOnce = await heldIn(claude)
+
+  // One vanishes a moment before its first minute, one as its second ends.
+  await clock.set(start + MINUTE - 1)
+  await tick()
+  await early.end('SIGKILL')
+  for (const now of [start + MINUTE, start + 2 * MINUTE - 1, start + 2 * MINUTE]) {
+    await clock.set(now)
+    await tick()
+  }
+  await late.end('SIGKILL')
+  await clock.set(start + 3 * MINUTE)
+  const atThree = await heldIn(claude)
+  await clock.set(start + 3 * MINUTE + 1)
+  const pastThree = await heldIn(claude)
+  await clock.set(start + 5 * MINUTE)
+  const atFive = await heldIn(claude)
+  await clock.set(start + 5 * MINUTE + 1)
+  const pastFive = await heldIn(claude)
+  // Back in the first Session, Codex starts it a new Deck service, which the
+  // Pane opened there calls: its first read already shows its own
+  // Occupancy in progress.
+  const resumed = startDeck(dir, env, 'codex')
+  t.after(resumed.stop)
+  const firstRead = (await callFrom(resumed, CODEX_SESSION, 'deck_tasks', {})).structuredContent.groups.inProgress.map(
+    ({ number, isOrphaned }: any) => [number, isOrphaned],
+  )
+  const back = await heldIn(claude)
+
+  assert.deepEqual(atOnce, [
+    [3, CODEX_SESSION, 'codex', false],
+    [5, CODEX_NEIGHBOUR, 'codex', false],
+    [7, later, 'claude-code', true],
+  ])
+  assert.deepEqual(atThree.slice(0, 2), [[3, CODEX_SESSION, 'codex', false], [5, CODEX_NEIGHBOUR, 'codex', false]])
+  assert.deepEqual(pastThree.slice(0, 2), [[3, CODEX_SESSION, 'codex', true], [5, CODEX_NEIGHBOUR, 'codex', false]])
+  assert.deepEqual(atFive[1], [5, CODEX_NEIGHBOUR, 'codex', false])
+  assert.deepEqual(pastFive[1], [5, CODEX_NEIGHBOUR, 'codex', true])
+  assert.deepEqual(firstRead.slice(0, 2), [[3, false], [5, true]])
+  assert.deepEqual(back.slice(0, 2), [[3, CODEX_SESSION, 'codex', false], [5, CODEX_NEIGHBOUR, 'codex', true]])
+})
+
+test('started for Codex, a Deck service beats again a minute after its first beat: vanished after that beat and before the next, its Occupancy is held three minutes after it and Orphaned past them', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const start = Date.UTC(2026, 10, 26, 9, 0)
+  const clock = await fakeClock(start)
+  const env = { ...gh.env, ...clock.env, HOME: user }
+  const dir = await configured()
+  const claude = startDeck(dir, env)
+  t.after(claude.stop)
+  const deck = startDeck(dir, env, 'codex')
+  t.after(deck.stop)
+  await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' })
+
+  await clock.set(start + MINUTE)
+  await tick()
+  await deck.end('SIGKILL')
+  await clock.set(start + 4 * MINUTE)
+  const atFour = await heldIn(claude)
+  await clock.set(start + 4 * MINUTE + 1)
+  const pastFour = await heldIn(claude)
+
+  assert.deepEqual(atFour, [[3, CODEX_SESSION, 'codex', false]])
+  assert.deepEqual(pastFour, [[3, CODEX_SESSION, 'codex', true]])
+})
+
+test('started for Codex, a Deck service the host ends by SIGTERM records its Session\'s end: the Occupancy is Orphaned in every Pane, Claude Code\'s too, until a new Deck service for that Session is called', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const env = { ...gh.env, HOME: user }
+  const dir = await configured()
+  const claude = startDeck(dir, env)
+  t.after(claude.stop)
+  const other = startDeck(dir, env, 'codex')
+  t.after(other.stop)
+  const ending = startDeck(dir, env, 'codex')
+  t.after(ending.stop)
+  const inProgress = async (deck: ReturnType<typeof startDeck>, session?: string) =>
+    (await callFrom(deck, session, 'deck_tasks', {})).structuredContent.groups.inProgress.map(
+      ({ number, occupant, occupantHost, isOrphaned }: any) => [number, occupant, occupantHost, isOrphaned],
+    )
+  await callFrom(ending, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' })
+  const before = await inProgress(claude)
+
+  const exitedBy = await ending.end()
+  const inClaudeCode = await inProgress(claude)
+  const inCodex = await inProgress(other, CODEX_NEIGHBOUR)
+  // Back in that Session, a message sent calls the hook's tool of the Deck
+  // service Codex starts it anew.
+  const resumed = startDeck(dir, env, 'codex')
+  t.after(resumed.stop)
+  await callFrom(resumed, CODEX_SESSION, HOOK_TOOL, { prompt: '接着做' })
+  const back = await inProgress(claude)
+
+  // It ends as it did before it recorded anything.
+  assert.equal(exitedBy, 'SIGTERM')
+  assert.deepEqual(before, [[3, CODEX_SESSION, 'codex', false]])
+  assert.deepEqual(inClaudeCode, [[3, CODEX_SESSION, 'codex', true]])
+  assert.deepEqual(inCodex, [[3, CODEX_SESSION, 'codex', true]])
+  assert.deepEqual(back, [[3, CODEX_SESSION, 'codex', false]])
+})
+
+test('a Deck service no call has named a Session to beats for none and records no end as it is ended, nor does one started for Claude Code, whose Mod beats, whatever a call names', async t => {
+  const start = Date.UTC(2026, 10, 26, 9, 0)
+  const clock = await fakeClock(start)
+  const codexHome = await home()
+  const claudeHome = await home()
+  const codex = startDeck(await configured(), { ...clock.env, HOME: codexHome }, 'codex')
+  t.after(codex.stop)
+  const claude = startDeck(await configured(), { ...clock.env, HOME: claudeHome })
+  t.after(claude.stop)
+  await codex.request('initialize', { protocolVersion: '2025-06-18' })
+  await codex.request('tools/list')
+  await callFrom(codex, undefined, 'deck_configure', {})
+  await callFrom(codex, '', 'deck_configure', {})
+  await callFrom(codex, 7 as unknown as string, 'deck_configure', {})
+  await callFrom(claude, CLAUDE_SESSION, 'deck_config', {})
+
+  await clock.set(start + 5 * MINUTE)
+  await tick()
+  const exitedBy = await Promise.all([codex.end(), claude.end()])
+
+  assert.deepEqual(exitedBy, ['SIGTERM', 'SIGTERM'])
+  assert.deepEqual(await readdir(codexHome), [])
+  assert.deepEqual(await readdir(claudeHome), [])
+})
+
+test('started for Codex in a project that is not configured, a Deck service beats for none and records no end; configured since, it beats from its next call', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const env = { ...gh.env, HOME: user }
+  const dir = await workspace()
+  const before = startDeck(dir, env, 'codex')
+  t.after(before.stop)
+  await callFrom(before, CODEX_SESSION, 'deck_config', {})
+  const exitedBy = await before.end()
+  const left = await readdir(user)
+  const deck = startDeck(dir, env, 'codex')
+  t.after(deck.stop)
+  await callFrom(deck, CODEX_SESSION, 'deck_config', {})
+  // Nor while its config is malformed.
+  await mkdir(join(dir, '.matt-deck'))
+  await writeFile(join(dir, '.matt-deck', 'config.json'), '{ not json')
+  await callFrom(deck, CODEX_SESSION, 'deck_config', {})
+  const malformed = await readdir(user)
+  await writeFile(
+    join(dir, '.matt-deck', 'config.json'),
+    JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'plugin', name: 'mattpocock-skills' } }),
+  )
+
+  await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' })
+
+  assert.equal(exitedBy, 'SIGTERM')
+  assert.deepEqual(left, [])
+  assert.deepEqual(malformed, [])
+  const claude = startDeck(dir, env)
+  t.after(claude.stop)
+  assert.deepEqual(await heldIn(claude), [[3, CODEX_SESSION, 'codex', false]])
+})
+
+test('started for Codex, a Deck service two Sessions call at once beats for one of them only', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 })])
+  const env = { ...gh.env, HOME: user }
+  const dir = await configured()
+  const deck = startDeck(dir, env, 'codex')
+  t.after(deck.stop)
+  const claude = startDeck(dir, env)
+  t.after(claude.stop)
+
+  await Promise.all([
+    callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' }),
+    callFrom(deck, CODEX_NEIGHBOUR, HOOK_TOOL, { prompt: '$implement #5' }),
+  ])
+
+  const held = await heldIn(claude)
+  assert.deepEqual(held.map(([task]: any) => task), [3, 5])
+  assert.deepEqual(held.map(([, , , isOrphaned]: any) => isOrphaned).sort(), [false, true])
+})
+
+// A Deck service that failed to exit would keep the test waiting.
+test('started for Codex, a Deck service that beats exits as its input closes, as one that does not', { timeout: 10_000 }, async t => {
+  const user = await home()
+  const deck = startDeck(await configured(), { HOME: user }, 'codex')
+  t.after(deck.stop)
+  await callFrom(deck, CODEX_SESSION, 'deck_config', {})
+
+  assert.equal(await deck.close(), 0)
+})
+
+test('started for Codex, a Deck service whose local state cannot be written still answers the call it beats on, and ends by SIGTERM', async t => {
+  const user = await home()
+  // Where the local state's folder would be, a file.
+  await writeFile(join(user, '.matt-deck'), '')
+  const dir = await configured()
+  const deck = startDeck(dir, { HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  const answered = await callFrom(deck, CODEX_SESSION, 'deck_config', {})
+
+  assert.equal(answered.structuredContent.configured, true)
+  assert.equal(await deck.end(), 'SIGTERM')
 })

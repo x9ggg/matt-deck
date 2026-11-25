@@ -827,6 +827,57 @@ const served: { tools: Record<string, Tool>; resources: (typeof PANE)[] } =
     ? { tools: { ...tools, ...codexTools }, resources: [PANE] }
     : { tools: { ...tools, ...claudeCodeTools }, resources: [] }
 
+// The Session this Deck service beats for. In Claude Code the Mod beats; in
+// Codex each Session has a Deck service of its own (ADR-0006), which beats
+// for the Session the first call naming one comes from, at once and every
+// minute after. Codex also starts Deck services no call ever reaches: one
+// no call has named a Session to beats for none. As the Mod's, the beat is
+// only in a Configured Project, where an Occupancy can be: Deck is offered
+// in every project of the user, and Codex's own Sessions trigger its hooks.
+const HEARTBEAT_MS = 60_000
+let beating: string | undefined
+
+// A beat that fails to be written is shown nowhere; the next one may be.
+const beatOnce = (session: string) => {
+  try {
+    beat(homedir(), session, Date.now(), host)
+  } catch {}
+}
+
+const beatFor = async (session: unknown) => {
+  if (host !== 'codex' || beating !== undefined || typeof session !== 'string' || session === '') {
+    return
+  }
+  const isConfigured = await readProjectConfig(workspace).then(
+    read => read.configured,
+    () => false,
+  )
+  // A call that came in meanwhile may have begun the beat.
+  if (!isConfigured || beating !== undefined) {
+    return
+  }
+  beating = session
+  beatOnce(session)
+  // The beat alone keeps no Deck service running: one whose input closes
+  // exits as before, and its Session's Occupancies are Orphaned once the
+  // last beat is three minutes old.
+  setInterval(() => beatOnce(session), HEARTBEAT_MS).unref()
+}
+
+// Codex was seen ending Deck services by SIGTERM: those it starts for a few
+// seconds, and every one as the desktop app quits. Ended so, the service
+// records its Session's end, and the Session's Occupancies of open Tasks
+// are Orphaned until it beats again. The service then ends by that signal,
+// as it did before it recorded anything.
+process.once('SIGTERM', () => {
+  if (beating !== undefined) {
+    try {
+      endSession(homedir(), beating, Date.now())
+    } catch {}
+  }
+  process.kill(process.pid, 'SIGTERM')
+})
+
 const handle = async (method: string, params: any): Promise<object> => {
   switch (method) {
     case 'initialize':
@@ -861,6 +912,7 @@ const handle = async (method: string, params: any): Promise<object> => {
       return { contents: [{ uri: resource.uri, mimeType: resource.mimeType, text }] }
     }
     case 'tools/call': {
+      await beatFor(params?._meta?.threadId)
       const tool = served.tools[params?.name]
       if (tool === undefined) {
         throw Object.assign(new Error(`Unknown tool: ${params?.name}`), { code: -32602 })
