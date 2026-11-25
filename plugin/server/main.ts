@@ -12,7 +12,7 @@ import { createInterface } from 'node:readline'
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
 import { inspectProject } from '../kernel/inspect.ts'
 import { mapViews } from '../kernel/maps.ts'
-import { beat, endSession, occupy, release, settleOccupancies } from '../kernel/occupancy.ts'
+import { beat, endSession, implementedTasks, occupy, release, settleOccupancies } from '../kernel/occupancy.ts'
 import { askArgs, readRecommendation, saveRecommendation, snapshotOf } from '../kernel/recommend.ts'
 import { evidencedTasks, readReports, saveReport } from '../kernel/reports.ts'
 import { surveySetup } from '../kernel/setup.ts'
@@ -21,7 +21,7 @@ import { githubIssues, listTasks, readTask, TaskSourceError } from '../kernel/ta
 import { workspaceAt } from '../kernel/workspace.ts'
 import type { ProjectConfig } from '../kernel/config.ts'
 import type { SourceRead, TaskListFailure } from '../kernel/tasks.ts'
-import { callOf, CODEX_CONFIGURE_SKILL, hostNamed, nameSession, skillDirectories } from './hosts.ts'
+import { callOf, CODEX_CONFIGURE_SKILL, CODEX_HOOK_TOOL, hostNamed, nameSession, skillDirectories } from './hosts.ts'
 
 const USAGE = `Usage: node <matt-deck>/server/main.ts --host <claude-code|codex>
 
@@ -421,13 +421,15 @@ const tools = {
         session: {
           type: 'string',
           minLength: 1,
-          description: 'The id of the Session reporting. The Matt Deck Pane fills it in; leave it out.',
+          description: 'The id of the Session reporting. Matt Deck fills it in; leave it out.',
         },
       },
       required: ['task', 'result', 'evidence'],
       additionalProperties: false,
     },
-    run: async ({ task, result, evidence, session }: any): Promise<ToolResult> => {
+    run: async ({ task, result, evidence, session: given }: any, meta: any): Promise<ToolResult> => {
+      // Codex names the Session in the call; on Claude Code the Mod passes it.
+      const session = given ?? (host === 'codex' ? meta?.threadId : undefined)
       if (
         !Number.isInteger(task) ||
         task < 1 ||
@@ -450,7 +452,7 @@ const tools = {
           content: [
             {
               type: 'text',
-              text: 'deck_report takes the number of a Task, its result as text, and its Acceptance Evidence as a list of { text, source }, each saying where it comes from; and the id of the Session reporting, which the Matt Deck Pane fills in',
+              text: 'deck_report takes the number of a Task, its result as text, and its Acceptance Evidence as a list of { text, source }, each saying where it comes from; and the id of the Session reporting, which Matt Deck fills in',
             },
           ],
           isError: true,
@@ -671,7 +673,15 @@ const claudeCodeTools = {
 // Host opens from the tab menu of a Session through a tool with a tab entry.
 const PANE = { uri: 'ui://matt-deck/pane.html', name: 'pane', mimeType: 'text/html;profile=mcp-app' }
 
-const tabTools = {
+// The skill an Execute Prompt runs.
+const IMPLEMENT = 'implement'
+
+// What the hook's tool answers to any prompt: no text, so there is none for
+// Codex to put in the conversation.
+const SILENT: ToolResult = { content: [], isError: false }
+
+// The tools only Codex is served: the Pane in a tab's, and the hook's.
+const codexTools = {
   deck_pane: {
     title: 'Matt Deck',
     description:
@@ -703,6 +713,71 @@ const tabTools = {
       return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
     },
   },
+  deck_execute: {
+    description:
+      'For the Pane in a tab: the Execute Prompt of a Task, which the Pane prefills: implement called on the Task, and the ask to report through deck_report. The Occupancy is recorded as it is sent.',
+    inputSchema: {
+      type: 'object',
+      properties: { task: { type: 'integer', minimum: 1, description: 'The Task\'s number.' } },
+      required: ['task'],
+      additionalProperties: false,
+    },
+    _meta: { ui: { visibility: ['app'] } },
+    run: async ({ task }: any): Promise<ToolResult> => {
+      if (!Number.isInteger(task) || task < 1) {
+        return { content: [{ type: 'text', text: 'deck_execute takes the number of a Task, a whole number from 1' }], isError: true }
+      }
+      const result = {
+        prompt:
+          `${callOf(host)(IMPLEMENT, undefined)} #${task}\n\n` +
+          `When you finish, call the tool deck_report for Task #${task}: what you did, ` +
+          'and the Acceptance Evidence for each acceptance criterion with where it comes from.',
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
+    },
+  },
+  [CODEX_HOOK_TOOL]: {
+    description:
+      'For the Matt Deck hook on UserPromptSubmit, with the prompt sent; not for the agent to call. Records the Occupancy of each open Task a line of the prompt begins calling implement on, for the Session the call comes from. Answers nothing.',
+    inputSchema: {
+      type: 'object',
+      properties: { prompt: { type: 'string', description: 'The prompt sent, as written.' } },
+      required: ['prompt'],
+      additionalProperties: false,
+    },
+    run: async ({ prompt }: any, meta: any): Promise<ToolResult> => {
+      const session = meta?.threadId
+      try {
+        // Outside a Configured Project, Codex's own Sessions included, at once.
+        if (typeof prompt !== 'string' || typeof session !== 'string' || session === '' || !(await readProjectConfig(workspace)).configured) {
+          return SILENT
+        }
+        const called = implementedTasks(prompt, callOf(host)(IMPLEMENT, undefined))
+        if (called.length === 0) {
+          return SILENT
+        }
+        // The read cached last, by whichever call made it, will do while it
+        // is under 15 seconds old; an older one is read again. A Task closed
+        // since is released by the next read past it.
+        const { source } = await readSource(false)
+        for (const { task, repository } of called) {
+          // GitHub takes a repository's owner and name in any case.
+          const isOurs = repository === undefined || repository.toLowerCase() === source.identity.toLowerCase()
+          if (isOurs && source.tasks.some(each => each.number === task && each.isOpen)) {
+            // One that fails to be written stops none after it.
+            try {
+              occupy(homedir(), source.identity, task, session, Date.now(), undefined)
+            } catch {}
+          }
+        }
+      } catch {
+        // A failure is shown nowhere: the hook's answer is no text.
+      }
+
+      return SILENT
+    },
+  },
   deck_configure: {
     description: 'For the Pane in a tab: the call of the configure skill, which the Pane prefills.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -723,11 +798,11 @@ type Tool = {
   run: (args: any, meta: unknown) => Promise<ToolResult>
 }
 
-// Only Codex opens the Pane in a tab; Claude Code's Pane is the Mod, and
-// only Claude Code has permission rules to write.
+// Only Codex opens the Pane in a tab and runs Deck's hook; Claude Code's
+// Pane is the Mod, and only Claude Code has permission rules to write.
 const served: { tools: Record<string, Tool>; resources: (typeof PANE)[] } =
   host === 'codex'
-    ? { tools: { ...tools, ...tabTools }, resources: [PANE] }
+    ? { tools: { ...tools, ...codexTools }, resources: [PANE] }
     : { tools: { ...tools, ...claudeCodeTools }, resources: [] }
 
 const handle = async (method: string, params: any): Promise<object> => {

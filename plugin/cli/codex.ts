@@ -2,20 +2,23 @@
 // app, or uninstalls it. Codex loads its MCP services from the user's own
 // config, never a project's (ADR-0006), so the Deck service is registered
 // there, started for Codex. Install also generates the configure skill as
-// Codex names it, in the user's own Codex skills.
-import { lstat, mkdir, readdir, readFile, realpath, rm, rmdir, writeFile } from 'node:fs/promises'
+// Codex names it, in the user's own Codex skills, and adds Deck's hook to the
+// user's own Codex hooks.
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises'
+import { isUtf8 } from 'node:buffer'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 
-import { CODEX_CONFIGURE_SKILL } from '../server/hosts.ts'
+import { CODEX_CONFIGURE_SKILL, CODEX_HOOK_TOOL } from '../server/hosts.ts'
 
 const USAGE = `Usage: node <matt-deck>/cli/codex.ts <install|uninstall>
 
-install：把 Deck 服务注册进 Codex 的用户全局配置 ~/.codex/config.toml，原有内容保留；在 ~/.agents/skills 里生成配置技能 ${CODEX_CONFIGURE_SKILL}。装完要重启 Codex 桌面应用。注册和配置技能指向运行 install 的这一份插件，它挪了位置或更新之后要重新运行一次 install。
-uninstall：从 ~/.codex/config.toml 移除 Deck 服务的注册，别的内容不动；移除 Deck 生成的 ${CODEX_CONFIGURE_SKILL}。
-退出码：0 成功，1 读写失败或那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}，2 参数错误。
+install：把 Deck 服务注册进 Codex 的用户全局配置 ~/.codex/config.toml，原有内容保留；在 ~/.agents/skills 里生成配置技能 ${CODEX_CONFIGURE_SKILL}；在 ~/.codex/hooks.json 里加上 Deck 的钩子，原有的钩子保留，改之前先备份。装完要在终端里运行一次 codex 信任这个钩子，再重启 Codex 桌面应用。注册和配置技能指向运行 install 的这一份插件，它挪了位置或更新之后要重新运行一次 install。
+uninstall：从 ~/.codex/config.toml 移除 Deck 服务的注册，别的内容不动；移除 Deck 生成的 ${CODEX_CONFIGURE_SKILL}；从 ~/.codex/hooks.json 移除 Deck 的钩子。
+退出码：0 成功，1 读写失败、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
 `
-const TABLE = 'mcp_servers.matt_deck'
+const SERVER = 'matt_deck'
+const TABLE = `mcp_servers.${SERVER}`
 // The copy of the plugin running install, which the registration and the
 // generated skill point at.
 const PLUGIN = join(import.meta.dirname, '..')
@@ -37,7 +40,7 @@ ${GENERATED}
 // What a file holds, or undefined when it is not there.
 const readIfThere = async (path: string) => {
   try {
-    return await readFile(path, 'utf8')
+    return await readFile(path)
   } catch (error: any) {
     if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') {
       throw error
@@ -79,6 +82,84 @@ const unregistered = (text: string) => {
   return kept.join('')
 }
 
+// Deck's hook: each prompt sent goes to the Deck service's tool as written.
+// Codex trusts a hook by its place in the file and the hash of what it says,
+// so it is always written the same, and never moved once there.
+const HOOK = { type: 'mcp_tool', server: SERVER, tool: CODEX_HOOK_TOOL, input: { prompt: '${prompt}' }, timeout: 10 }
+
+const isObject = (value: unknown): value is Record<string, any> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+// Why Deck leaves a hooks file alone: it holds no hooks Deck's hook can be
+// added to, or it holds what Deck, writing it anew, would change.
+type Refused = 'unreadable' | 'rewritten'
+
+// The user's Codex hooks as a file holds them, {} for no file, or why Deck
+// leaves them alone. Deck writes anew a file it parsed, so it handles only
+// one that, written anew, differs from the text in whitespace alone: no
+// number past a double, 1e400 or 1.0, no key given twice, no escape a
+// string loses, no key that looks like an index and moves first. UTF-8 text
+// alone, for the same reason: other bytes, decoded and written anew, change.
+const hooksIn = (bytes: Buffer | undefined): Record<string, any> | Refused => {
+  if (bytes === undefined) {
+    return {}
+  }
+  if (!isUtf8(bytes)) {
+    return 'unreadable'
+  }
+  const text = bytes.toString('utf8')
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return 'unreadable'
+  }
+  if (!isObject(value)) {
+    return 'unreadable'
+  }
+  const { hooks } = value
+  const isAddable =
+    hooks === undefined || (isObject(hooks) && (hooks.UserPromptSubmit === undefined || Array.isArray(hooks.UserPromptSubmit)))
+  if (!isAddable) {
+    return 'unreadable'
+  }
+  // The text without the whitespace between its tokens, strings kept whole.
+  const tokens = text.replace(/"(?:[^"\\]|\\.)*"|[ \t\n\r]+/g, token => (token.startsWith('"') ? token : ''))
+
+  return JSON.stringify(value) === tokens ? value : 'rewritten'
+}
+
+const isDeckHook = (handler: any) => handler?.type === 'mcp_tool' && handler?.server === SERVER && handler?.tool === CODEX_HOOK_TOOL
+const holdsDeckHook = (group: any) => Array.isArray(group?.hooks) && group.hooks.some(isDeckHook)
+
+// The hooks as install writes them: Deck's group after the others on
+// UserPromptSubmit.
+const withDeckHook = (config: Record<string, any>) => ({
+  ...config,
+  hooks: { ...config.hooks, UserPromptSubmit: [...(config.hooks?.UserPromptSubmit ?? []), { hooks: [HOOK] }] },
+})
+
+// The hooks without Deck's: its handler taken out of its group, and the
+// group it leaves with no handler; then the event and the hooks it leaves
+// empty, unless the hooks before install, `before`, had them.
+const withoutDeckHook = (config: Record<string, any>, before: Record<string, any>) => {
+  const groups = config.hooks.UserPromptSubmit.flatMap((group: any) =>
+    !holdsDeckHook(group)
+      ? [group]
+      : group.hooks.length === 1
+        ? []
+        : [{ ...group, hooks: group.hooks.filter((each: any) => !isDeckHook(each)) }],
+  )
+  const { UserPromptSubmit: _, ...others } = config.hooks
+  const hooks =
+    groups.length > 0 || before.hooks?.UserPromptSubmit !== undefined ? { ...config.hooks, UserPromptSubmit: groups } : others
+  const { hooks: __, ...rest } = config
+
+  return Object.keys(hooks).length > 0 || before.hooks !== undefined ? { ...config, hooks } : rest
+}
+
+const writeJson = (path: string, value: object) => writeFile(path, `${JSON.stringify(value, null, 2)}\n`)
+
 const args = process.argv.slice(2)
 
 if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
@@ -87,13 +168,24 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
 } else {
   try {
     const config = join(homedir(), '.codex', 'config.toml')
-    const before = await readIfThere(config)
+    const before = (await readIfThere(config))?.toString('utf8')
     const kept = unregistered(before ?? '')
     const skillDir = join(homedir(), '.agents', 'skills', CODEX_CONFIGURE_SKILL)
-    const skill = await readIfThere(join(skillDir, 'SKILL.md'))
+    const skill = (await readIfThere(join(skillDir, 'SKILL.md')))?.toString('utf8')
     const isOurs = skill?.includes(GENERATED) === true
+    const hooksFile = join(homedir(), '.codex', 'hooks.json')
+    const backup = `${hooksFile}.before-matt-deck`
+    const hooksBytes = await readIfThere(hooksFile)
+    const hooks = hooksIn(hooksBytes)
+    const isHooked = typeof hooks !== 'string' && hooks.hooks?.UserPromptSubmit?.some(holdsDeckHook) === true
 
-    if (args[0] === 'install' && skill !== undefined && !isOurs) {
+    if (typeof hooks === 'string') {
+      const problem = hooks === 'unreadable' ? '不是 Deck 能读懂的钩子文件' : '里有 Deck 改写时会变样的写法（超出双精度的数、1.0 或 1e400 这样的数、重复的键、\\u、\\/ 这样的转义，或像序号的键）'
+      process.stderr.write(
+        `${hooksFile} ${problem}，没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。改好它之后再运行一次 ${args[0]}。\n`,
+      )
+      process.exitCode = 1
+    } else if (args[0] === 'install' && skill !== undefined && !isOurs) {
       process.stderr.write(
         `${skillDir} 里已有一份不是 Deck 生成的技能 ${CODEX_CONFIGURE_SKILL}，没有安装，什么都没改。移走它之后再运行一次 install。\n`,
       )
@@ -119,8 +211,31 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
       await writeFile(config, `${kept}${gap}${table}`)
       await mkdir(skillDir, { recursive: true })
       await writeFile(join(skillDir, 'SKILL.md'), configureSkill)
+      let moved: string | undefined
+      if (!isHooked) {
+        // The backup is the hooks before this install. One already there, an
+        // earlier uninstall's or left when Deck's hook was taken out by hand,
+        // may hold the only copy of the person's hooks: it moves first to the
+        // first numbered name no file has.
+        if ((await lstat(backup).catch(() => undefined)) !== undefined) {
+          let n = 1
+          while ((await lstat(`${backup}.${n}`).catch(() => undefined)) !== undefined) {
+            n++
+          }
+          moved = `${backup}.${n}`
+          await rename(backup, moved)
+        }
+        // The backup is open to whom the hooks are, and to no one more.
+        if (hooksBytes !== undefined) {
+          await writeFile(backup, hooksBytes, { mode: (await stat(hooksFile)).mode & 0o777 })
+        }
+        await writeJson(hooksFile, withDeckHook(hooks))
+      }
+      const hooked = isHooked
+        ? `Deck 的钩子已经在 ${hooksFile} 里，没有改动。`
+        : `${moved === undefined ? '' : `之前留下的备份 ${backup} 已挪到 ${moved}。`}已在 ${hooksFile} 里加上 Deck 的钩子${hooksBytes === undefined ? '' : `，原来的文件备份在 ${backup}`}。`
       process.stdout.write(
-        `已把 Deck 服务注册进 ${config}。\n已生成配置技能 ${join(skillDir, 'SKILL.md')}，在 Codex 里用 $${CODEX_CONFIGURE_SKILL} 调用。\n重启 Codex 桌面应用之后，每个 Session 的标签页菜单里出现 Matt Deck。\n注册和配置技能指向的是 ${PLUGIN} 这一份插件，它挪了位置或更新之后要重新运行一次 install。\n`,
+        `已把 Deck 服务注册进 ${config}。\n已生成配置技能 ${join(skillDir, 'SKILL.md')}，在 Codex 里用 $${CODEX_CONFIGURE_SKILL} 调用。\n${hooked}\n接下来两步：在终端里运行一次 codex，在钩子审查里信任 Deck 的钩子；再重启 Codex 桌面应用。之后每个 Session 的标签页菜单里出现 Matt Deck，发出的 $implement 会登记占用。\n注册和配置技能指向的是 ${PLUGIN} 这一份插件，它挪了位置或更新之后要重新运行一次 install。\n`,
       )
     } else {
       if (before === undefined || kept === before) {
@@ -140,6 +255,33 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
         process.stdout.write(`已移除 Deck 生成的配置技能 ${join(skillDir, 'SKILL.md')}。\n`)
       } else if (skill !== undefined) {
         process.stdout.write(`${skillDir} 不是 Deck 生成的，没有动它。\n`)
+      }
+      if (isHooked) {
+        // Unchanged since install, the hooks are as they were before it: the
+        // backup, as written, or no file where there was none. Changed, they
+        // lose Deck's hook alone, and the backup stays. A backup that holds
+        // no hooks Deck handles, or cannot be read at all, a link reaching no
+        // file among them, is not what install wrote: the hooks are taken for
+        // changed, and it stays as it is.
+        const isBackedUp = (await lstat(backup).catch(() => undefined)) !== undefined
+        const beforeBytes = isBackedUp ? await readFile(backup).catch(() => Buffer.alloc(0)) : undefined
+        const beforeHooks = hooksIn(beforeBytes)
+        let said = `已从 ${hooksFile} 移除 Deck 的钩子。`
+        if (typeof beforeHooks === 'string' || JSON.stringify(withDeckHook(beforeHooks)) !== JSON.stringify(hooks)) {
+          await writeJson(hooksFile, withoutDeckHook(hooks, typeof beforeHooks === 'string' ? {} : beforeHooks))
+        } else if (beforeBytes === undefined) {
+          await rm(hooksFile)
+          said = `已删掉 Deck 加的 ${hooksFile}，安装前没有这个文件。`
+        } else {
+          await writeFile(hooksFile, beforeBytes)
+          await rm(backup)
+        }
+        process.stdout.write(`${said}\n`)
+      }
+      // A backup uninstall leaves, the hooks changed since install or gone,
+      // is said, so the person can give back the hooks before install.
+      if ((await lstat(backup).catch(() => undefined)) !== undefined) {
+        process.stdout.write(`安装前的钩子文件备份留在 ${backup}，没有删。\n`)
       }
     }
   } catch (error) {

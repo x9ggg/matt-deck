@@ -41,6 +41,11 @@ export const skillDirectories = (host: Host) => HOSTS[host].skillDirectories
 // that name, and renaming it would rename `/matt-deck:configure`.
 export const CODEX_CONFIGURE_SKILL = 'matt-deck-configure'
 
+// The tool Deck's Codex hook on UserPromptSubmit calls with the prompt sent.
+// Codex trusts a hook by the hash of what it says, so install writes it the
+// same, and this name stays.
+export const CODEX_HOOK_TOOL = 'deck_prompt_submitted'
+
 // A Session as an answer names it, from the host its heartbeat recorded: a
 // Session recorded before hosts were, or never recorded, is Claude Code's.
 export const nameSession = (session: string, recorded: string | null) => {

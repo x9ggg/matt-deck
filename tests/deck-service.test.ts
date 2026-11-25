@@ -3432,3 +3432,315 @@ test('started for Codex, the Deck service writes no local state before its first
 
   assert.deepEqual(await readdir(user), [])
 })
+
+// A tool call as Codex sends it, naming the Session in _meta.threadId: the
+// page's, the agent's and a hook's alike.
+const callFrom = (deck: ReturnType<typeof startDeck>, session: string | undefined, name: string, args: object) =>
+  deck
+    .request('tools/call', { name, arguments: args, ...(session === undefined ? {} : { _meta: { threadId: session, progressToken: 1 } }) })
+    .then(reply => reply.result)
+
+test('started for Codex, deck_execute answers the Execute Prompt of a Task, $implement on it and the ask to report through deck_report, for the page only', async t => {
+  const user = await home()
+  const deck = startDeck(await configured(), { HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  const { result: listed } = await deck.request('tools/list')
+  const result = await callFrom(deck, CODEX_SESSION, 'deck_execute', { task: 74 })
+  const first = await callFrom(deck, CODEX_SESSION, 'deck_execute', { task: 1 })
+  const malformed = await Promise.all([{}, { task: 0 }, { task: 1.5 }, { task: '#74' }].map(args => deck.callTool('deck_execute', args)))
+
+  assert.deepEqual(listed.tools.find((tool: any) => tool.name === 'deck_execute')._meta, { ui: { visibility: ['app'] } })
+  assert.equal(result.isError, false)
+  assert.deepEqual(result.structuredContent, {
+    prompt:
+      '$implement #74\n\nWhen you finish, call the tool deck_report for Task #74: what you did, and the Acceptance Evidence for each acceptance criterion with where it comes from.',
+  })
+  assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent)
+  assert.equal(
+    first.structuredContent.prompt,
+    '$implement #1\n\nWhen you finish, call the tool deck_report for Task #1: what you did, and the Acceptance Evidence for each acceptance criterion with where it comes from.',
+  )
+  assert.deepEqual(malformed.map(each => each.isError), [true, true, true, true])
+  // Only filled in, the prompt occupies nothing.
+  assert.deepEqual(await readdir(user), [])
+})
+
+// The Codex hook on UserPromptSubmit calls this tool with the prompt sent.
+const HOOK_TOOL = 'deck_prompt_submitted'
+
+test('started for Codex, the hook\'s tool records the Session\'s Occupancy of each Task a line of the prompt runs $implement on, by #12, 12 or a link to this repository\'s issue, and answers no text', async t => {
+  const dir = await configured()
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([3, 5, 7, 9, 11, 13, 15, 21, 23, 25, 27].map(number => issue({ number })))
+  const codex = startDeck(dir, { ...gh.env, HOME: user }, 'codex')
+  t.after(codex.stop)
+  const claude = startDeck(dir, { ...gh.env, HOME: user })
+  t.after(claude.stop)
+
+  // A draft the Execute Prompt was appended to, and a call typed by hand.
+  const sent = await callFrom(codex, CODEX_SESSION, HOOK_TOOL, {
+    prompt: [
+      'a draft that says $implement #9 in passing',
+      'try first: #9 then $implement',
+      ' #9',
+      ' $implement #11',
+      // Before the Tasks it records: one it records none for stops nothing.
+      '$implement https://github.com/acme/other/issues/13',
+      '$implement https://github.com/acme/shop/pull/9',
+      '$implement #9x',
+      '$implement #9.',
+      '$implement 顺便看 #9',
+      '',
+      '$implement #3',
+      '',
+      'When you finish, call the tool deck_report for Task #3.',
+      '$implement 5 and then some',
+      '$implement https://github.com/acme/shop/issues/7',
+      '$implementation #15',
+      '$implement15',
+      '$implement9 now',
+      '/implement #15',
+      '$implement',
+      '$implement #21\tand more',
+      '$implement\t#27',
+      '$implement 23',
+      '$implement https://github.com/acme/shop/issues/25',
+    ].join('\n'),
+  })
+
+  assert.deepEqual(sent, { content: [], isError: false })
+  // In progress for every host's Pane, with this Session.
+  for (const deck of [codex, claude]) {
+    const { groups } = (await deck.callTool('deck_tasks', { refresh: true })).structuredContent
+    assert.deepEqual(occupants(groups.inProgress), {
+      3: CODEX_SESSION,
+      5: CODEX_SESSION,
+      7: CODEX_SESSION,
+      21: CODEX_SESSION,
+      23: CODEX_SESSION,
+      25: CODEX_SESSION,
+      27: CODEX_SESSION,
+    })
+    assert.deepEqual(numbers(groups.ready), [9, 11, 13, 15])
+  }
+})
+
+test('the hook\'s tool records nothing for a prompt with no $implement on a Task, reading no Task Source, nor without a Session, nor for a closed or unknown Task', async t => {
+  const dir = await configured()
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 4, state: 'CLOSED', closedAt: '2026-11-11T14:07:00Z' })])
+  const deck = startDeck(dir, { ...gh.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  const quiet = [
+    await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '帮我看看 #3 和 $tdd 3' }),
+    await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '' }),
+    await callFrom(deck, undefined, HOOK_TOOL, { prompt: '$implement #3' }),
+    await callFrom(deck, '', HOOK_TOOL, { prompt: '$implement #3' }),
+    await callFrom(deck, 7 as unknown as string, HOOK_TOOL, { prompt: '$implement #3' }),
+  ]
+  assert.deepEqual(await gh.calls(), [])
+  assert.deepEqual(await readdir(user), [])
+  quiet.push(await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #4\n$implement #8' }))
+  // Not even in the local state, for the next read to release.
+  assert.deepEqual(await readdir(user), [])
+
+  for (const each of quiet) {
+    assert.deepEqual(each, { content: [], isError: false })
+  }
+  const { groups } = (await deck.callTool('deck_tasks', { refresh: true })).structuredContent
+  assert.deepEqual(groups.inProgress, [])
+})
+
+test('the hook\'s tool returns at once in a project that is not configured, as in Codex\'s own Sessions: no Task Source read, no state written, no text', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await workspace(), { ...gh.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  const sent = await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' })
+
+  assert.deepEqual(sent, { content: [], isError: false })
+  assert.deepEqual(await gh.calls(), [])
+  assert.deepEqual(await readdir(user), [])
+})
+
+test('the hook\'s tool answers no text even when the Task Source cannot be read', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.answer({ exitCode: 1, stderr: 'error connecting to api.github.com\n' })
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  assert.deepEqual(await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' }), { content: [], isError: false })
+})
+
+test('the hook\'s tool reads the Task Source from the Deck service\'s cache, as deck_tasks does', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+  await deck.callTool('deck_tasks', { refresh: true })
+  const read = (await gh.calls()).length
+
+  await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' })
+
+  assert.equal((await gh.calls()).length, read)
+  const { occupancies } = (await deck.callTool('deck_inspect')).structuredContent
+  assert.deepEqual(occupancies.map((each: any) => [each.task, each.session]), [[3, CODEX_SESSION]])
+})
+
+test('the hook\'s tool records every Task of the prompt while another writer holds the local state a moment', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 })])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+  // Read before, the Task Source is read from the cache: the hook's tool
+  // comes to its write at once.
+  await deck.callTool('deck_tasks', { refresh: true })
+  await mkdir(join(user, '.matt-deck'), { recursive: true })
+  const writer = new DatabaseSync(join(user, '.matt-deck', 'deck.sqlite'))
+  writer.exec('BEGIN IMMEDIATE')
+
+  const sent = callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3\n$implement #5' })
+  // Short of the 2 seconds a write waits.
+  await new Promise(resolve => setTimeout(resolve, 1_500))
+  writer.exec('COMMIT')
+  writer.close()
+
+  assert.deepEqual(await sent, { content: [], isError: false })
+  const { groups } = (await deck.callTool('deck_tasks', { refresh: true })).structuredContent
+  assert.deepEqual(occupants(groups.inProgress), { 3: CODEX_SESSION, 5: CODEX_SESSION })
+})
+
+test('the hook\'s tools of Deck services called at once record each one\'s Task', async t => {
+  const dir = await configured()
+  const user = await home()
+  const gh = await fakeGh()
+  const tasks = [3, 5, 7, 9, 11, 13, 15, 17]
+  await gh.issues(tasks.map(number => issue({ number })))
+  const decks = tasks.map(() => startDeck(dir, { ...gh.env, HOME: user }, 'codex'))
+  for (const deck of decks) t.after(deck.stop)
+
+  await Promise.all(decks.map((deck, at) => callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: `$implement #${tasks[at]}` })))
+
+  const { groups } = (await decks[0]!.callTool('deck_tasks', { refresh: true })).structuredContent
+  assert.deepEqual(numbers(groups.inProgress), tasks)
+})
+
+test('the hook\'s tool records the Tasks after one whose Occupancy fails to be written', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 })])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+  // A local state that refuses the Occupancy of #3 alone.
+  await mkdir(join(user, '.matt-deck'))
+  const db = new DatabaseSync(join(user, '.matt-deck', 'deck.sqlite'))
+  db.exec(
+    'CREATE TABLE occupancies (source TEXT NOT NULL, task INTEGER NOT NULL, session TEXT NOT NULL, occupied_at INTEGER NOT NULL, PRIMARY KEY (source, task))',
+  )
+  db.exec("CREATE TRIGGER refuse_3 BEFORE INSERT ON occupancies WHEN NEW.task = 3 BEGIN SELECT RAISE(ABORT, 'refused 3'); END")
+  db.close()
+
+  const sent = await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3\n$implement #5' })
+
+  assert.deepEqual(sent, { content: [], isError: false })
+  const { groups } = (await deck.callTool('deck_tasks', { refresh: true })).structuredContent
+  assert.deepEqual(occupants(groups.inProgress), { 5: CODEX_SESSION })
+})
+
+test('$implement typed on a Task another Session holds leaves it with that Session', async t => {
+  const dir = await configured()
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(dir, { ...gh.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+  await callFrom(deck, CODEX_NEIGHBOUR, HOOK_TOOL, { prompt: '$implement #3' })
+
+  await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' })
+
+  const { groups } = (await deck.callTool('deck_tasks', { refresh: true })).structuredContent
+  assert.deepEqual(occupants(groups.inProgress), { 3: CODEX_NEIGHBOUR })
+})
+
+test('started for Codex, deck_report keeps a report sent with no Session under the Session the call comes from', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const codex = startDeck(await configured(), { ...gh.env, HOME: user }, 'codex')
+  t.after(codex.stop)
+  const claude = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(claude.stop)
+
+  const reported = await callFrom(codex, CODEX_SESSION, 'deck_report', { task: 3, result: '做完了。', evidence: [] })
+  // A Session the agent names stays the one named.
+  await callFrom(codex, CODEX_SESSION, 'deck_report', { task: 3, session: CODEX_NEIGHBOUR, result: '旁边的。', evidence: [] })
+  // Claude Code names no Session in the call: the Mod passes it.
+  const unnamed = await callFrom(claude, CLAUDE_SESSION, 'deck_report', { task: 3, result: '也做完了。', evidence: [] })
+
+  assert.deepEqual(reported.structuredContent, { ok: true })
+  assert.equal(unnamed.isError, true)
+  await gh.answer({ stdout: viewed({ number: 3 }) })
+  const { reports } = (await codex.callTool('deck_task', { number: 3 })).structuredContent
+  assert.deepEqual(reports.map((report: any) => [report.session, report.result]), [[CODEX_SESSION, '做完了。'], [CODEX_NEIGHBOUR, '旁边的。']])
+})
+
+test('only started for Codex does the Deck service offer the hook\'s tool, which the model sees too, and deck_execute, for the page only', async t => {
+  const claude = startDeck(await configured())
+  t.after(claude.stop)
+  const codex = startDeck(await configured(), {}, 'codex')
+  t.after(codex.stop)
+
+  const named = (listed: any, name: string) => listed.tools.find((tool: any) => tool.name === name)
+  const { result: forClaude } = await claude.request('tools/list')
+  const { result: forCodex } = await codex.request('tools/list')
+  const refused = await Promise.all(
+    [
+      [HOOK_TOOL, { prompt: '$implement #3' }],
+      ['deck_execute', { task: 3 }],
+    ].map(([name, args]) => claude.request('tools/call', { name, arguments: args, _meta: { threadId: CODEX_SESSION } })),
+  )
+
+  assert.deepEqual([named(forClaude, HOOK_TOOL), named(forClaude, 'deck_execute')], [undefined, undefined])
+  assert.deepEqual(refused.map(reply => reply.error?.code), [-32602, -32602])
+  assert.equal(named(forCodex, HOOK_TOOL)._meta, undefined)
+  assert.deepEqual(named(forCodex, 'deck_execute')._meta, { ui: { visibility: ['app'] } })
+})
+
+test('the hook\'s tool reads a prompt written with CRLF, a link to the repository in another case, and a Task called twice as one Occupancy', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  // GitHub names the repository in its own case, not always lower.
+  await gh.issues([issue({ number: 3 }), issue({ number: 5 }), issue({ number: 7 })], 'ACME/Shop')
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  await callFrom(deck, CODEX_SESSION, HOOK_TOOL, {
+    prompt: 'a draft\r\n\r\n$implement #3\r\n$implement 3\r\n$implement 5\r\n$implement https://github.com/Acme/Shop/issues/7\r\n',
+  })
+
+  const { occupancies } = (await deck.callTool('deck_inspect')).structuredContent
+  assert.deepEqual(occupancies.map((each: any) => [each.task, each.session]), [[3, CODEX_SESSION], [5, CODEX_SESSION], [7, CODEX_SESSION]])
+})
+
+test('started for Codex, deck_report with no Session, in the call or in its _meta, keeps nothing and says it needs one', async t => {
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await configured(), gh.env, 'codex')
+  t.after(deck.stop)
+
+  const unnamed = await callFrom(deck, undefined, 'deck_report', { task: 3, result: '做完了。', evidence: [] })
+
+  assert.equal(unnamed.isError, true)
+  assert.match(unnamed.content[0].text, /the id of the Session reporting/)
+  await gh.answer({ stdout: viewed({ number: 3 }) })
+  assert.deepEqual((await deck.callTool('deck_task', { number: 3 })).structuredContent.reports, [])
+})

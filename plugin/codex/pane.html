@@ -343,6 +343,12 @@ body{margin:0;background:var(--ground)}
   </div>
   <div data-panel="next" id="next" hidden></div>
   <div data-panel="tasks" id="tasks" hidden>
+    <div class="dk-notice is-warn" role="status" id="tasks-noexec" hidden>
+      <div class="dk-notice__body">
+        <div class="dk-notice__line"><span class="dk-notice__title heading"></span></div>
+        <span class="dk-notice__text"></span>
+      </div>
+    </div>
     <p class="dk-why" id="tasks-loading">正在读取 Task…</p>
     <div class="dk-notice is-danger" role="status" id="tasks-failed" hidden>
       <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
@@ -366,6 +372,12 @@ body{margin:0;background:var(--ground)}
     </div>
   </div>
   <div data-panel="map" id="map" hidden>
+    <div class="dk-notice is-warn" role="status" id="map-noexec" hidden>
+      <div class="dk-notice__body">
+        <div class="dk-notice__line"><span class="dk-notice__title heading"></span></div>
+        <span class="dk-notice__text"></span>
+      </div>
+    </div>
     <p class="dk-why" id="map-loading">正在读取 Task…</p>
     <div class="dk-notice is-danger" role="status" id="map-failed" hidden>
       <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
@@ -565,7 +577,10 @@ body{margin:0;background:var(--ground)}
     if (state === 'closed' && task.hasEvidence) status.push(glyphed(el('span', 'is-pass', '验收证据'), CHECK))
     const label = labelOf(task, state)
     const meta = [...status, ...(label === undefined ? [] : [el('span', 'dk-tag', label)])]
-    const aside = state === 'closed' && task.closedAt !== null ? [el('span', 'dk-row__aside caption', shortTime(task.closedAt))] : []
+    const aside =
+      state === 'closed' && task.closedAt !== null ? [el('span', 'dk-row__aside caption', shortTime(task.closedAt))]
+      : state === 'ready' ? [el('span', 'dk-row__actions', executeButton(task.number, '执行', 'dk-btn dk-btn--sm dk-btn--go'))]
+      : []
     const element = row(task, state, '', [], [], meta, aside)
     element.addEventListener('click', () => openTask(task.number))
     return element
@@ -713,6 +728,9 @@ body{margin:0;background:var(--ground)}
     const show = ({ end, body }) => {
       $('into-end').replaceChildren(...end)
       $('into-body').replaceChildren(...body)
+      // Drawn while another step was shown, its "执行" goes by the skills
+      // read since.
+      showExecutable()
     }
     const way = [tabs.find(tab => tab.dataset.tab === into.tab).textContent, ...into.steps.slice(0, -1).map(each => each.crumb)]
     $('crumbs').replaceChildren(`${way.join(' / ')} / `, el('b', '', step.crumb))
@@ -778,7 +796,9 @@ body{margin:0;background:var(--ground)}
     const closeout = entry?.isPendingCloseout ? [closeoutButton(closeoutOf(number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
 
     return {
-      end: [...closeout, open],
+      // The action its row has, then the link: a ready Task is executed; a
+      // Spec or Map is not, a Pending Closeout one has its closeout.
+      end: [...(state === 'ready' && entry.kind === undefined ? [executeButton(number, '执行', 'dk-btn dk-btn--sm dk-btn--go')] : []), ...closeout, open],
       body: [el('div', 'dk-detail',
         el('div', 'dk-detail__title title', el('span', `dk-id${state === undefined ? '' : ` is-${state}`}`, `#${task.number}`), el('span', '', task.title)),
         meta,
@@ -888,7 +908,9 @@ body{margin:0;background:var(--ground)}
       el('div', 'dk-card__head', glyph, el('span', `dk-id is-${state}`, `#${card.number}`), el('span', 'dk-card__state caption', CARD_STATE[state])),
       el('span', 'dk-card__title heading', card.title),
       el('span', 'dk-card__meta caption', ...relation),
-      el('div', 'dk-card__foot caption', el('span', '', state === 'closed' ? shortTime(card.closedAt) : `更新 ${shortTime(card.updatedAt).slice(0, 5)}`)))
+      el('div', 'dk-card__foot caption', el('span', '', state === 'closed' ? shortTime(card.closedAt) : `更新 ${shortTime(card.updatedAt).slice(0, 5)}`),
+        // The action its row in "任务" has: none for a Spec or Map.
+        ...(state === 'ready' && card.kind === undefined ? [executeButton(card.number, '执行', 'dk-btn dk-btn--sm dk-btn--go')] : [])))
   }
 
   // The "地图" tab: the Map View shown, its blocked Child Tasks past three
@@ -975,18 +997,33 @@ body{margin:0;background:var(--ground)}
   // the config of a project that is not configured, and with the skills.
   let configureCall
 
-  // Whether the 技能 tab has read the skills since "刷新" was last clicked.
-  // Only "刷新" reads them again; the reads while the tab is shown do not.
+  // Whether the skills were read since the page opened, or since a read found
+  // the project not configured. A timed read, or the read as the tab is shown
+  // again, reads them only while it is false; "刷新" reads them again whatever
+  // it is.
   let skillsRead = false
   // The skills the last read of the Skill Source listed.
   let skillsListed = []
+  // The read of the skills asked for last: only its answer is shown, and an
+  // earlier one answering after it is dropped.
+  let skillsAsked
 
   const read = async (refresh = false) => {
     $('refresh').disabled = true
     try {
       const [config, named] = await Promise.all([callTool('deck_config'), callTool('deck_session')])
       session = named
-      if (!config.configured) configureCall = (await callTool('deck_configure')).call
+      // Configured again, the project's skills are read again; until that
+      // read answers, what an earlier one said of implement no longer holds,
+      // a read still out included, and every "执行" is off, whether or not
+      // the Deck service gives the configure skill's call.
+      if (!config.configured) {
+        skillsRead = false
+        skillsAsked = undefined
+        implement = undefined
+        showExecutable()
+        configureCall = (await callTool('deck_configure')).call
+      }
       $('project').firstElementChild.textContent = config.workspace.slice(config.workspace.lastIndexOf('/') + 1)
       $('session').querySelector('b').textContent = session.sessionShort
       $('project').hidden = $('session').hidden = false
@@ -1001,13 +1038,11 @@ body{margin:0;background:var(--ground)}
       }
       if (config.configured) {
         await readTasks(refresh)
-        if (refresh) {
-          // Read again, the page no longer says a request was not made.
-          asking = { ...asking, failure: undefined }
-          skillsRead = false
-          if (chosenTab() === 'skills') await showSkillsTab()
-          if (!$('next').hidden) await readSkills()
-        }
+        // Read again, the page no longer says a request was not made.
+        if (refresh) asking = { ...asking, failure: undefined }
+        // Every tab's "执行" goes by the skills: they are read with the first
+        // read of the Tasks, and again with "刷新".
+        if (refresh || !skillsRead) await readSkills()
         // A step drawn from the Tasks draws again with each read of them;
         // every step with "刷新", after what it is drawn from is read again.
         if (refresh || into?.steps.at(-1).withTasks) await drawStep()
@@ -1023,25 +1058,104 @@ body{margin:0;background:var(--ground)}
     }
   }
 
-  // Puts the text in the Session's prompt for the person to send (ADR-0006),
-  // then the button stays off for 5 seconds, so a second click fills in no
-  // second copy. The page never sends a message itself: the Host hands what
-  // a page sends to the agent as untrusted input, and no skill runs.
+  // Puts the text in the Session's prompt for the person to send (ADR-0006).
+  // The page never sends a message itself: the Host hands what a page sends
+  // to the agent as untrusted input, and no skill runs.
+  const fill = text =>
+    request('ui/message', {
+      role: 'user',
+      content: [{ type: 'text', text }],
+      _meta: { 'openai/message': { target: 'active', send: false } },
+    })
+  // Fills in the text from the button, which is off from the click and stays
+  // off for 5 seconds once it is filled in, so a second click fills in no
+  // second copy.
   const prefill = async (button, text) => {
     const label = button.textContent
     button.disabled = true
     try {
-      await request('ui/message', {
-        role: 'user',
-        content: [{ type: 'text', text }],
-        _meta: { 'openai/message': { target: 'active', send: false } },
-      })
+      await fill(text)
       button.textContent = '已填入'
       await new Promise(resolve => setTimeout(resolve, 5_000))
     } finally {
       button.textContent = label
       button.disabled = false
     }
+  }
+
+  // implement as the last read of the skills lists it: undefined before the
+  // first, or since a read found the project not configured, null where it
+  // listed none, { failure } where the read failed.
+  // "执行" is on only where Codex finds the Skill Source's own file.
+  let implement
+  // The Tasks whose Execute Prompt is being filled in, false, or was in the
+  // last 5 seconds, true, by number. Every "执行" of theirs, drawn before or
+  // since, is off meanwhile, so no second copy goes in the prompt.
+  const filling = new Map()
+
+  // A "执行" of the Task `number`, which the page draws again as "执行"
+  // stands: it fills in the Execute Prompt the Deck service gives, never
+  // sends it, and occupies nothing; the hook does, once the person sends it.
+  const executeButton = (number, label, className) => {
+    const button = el('button', className, label)
+    button.type = 'button'
+    button.dataset.execute = String(number)
+    button.dataset.label = label
+    drawExecute(button)
+    // Not a click on the row it is in.
+    button.addEventListener('click', event => {
+      event.stopPropagation()
+      execute(number)
+    })
+    return button
+  }
+  const drawExecute = button => {
+    const filled = filling.get(Number(button.dataset.execute))
+    button.disabled = filled !== undefined || implement?.copy !== 'same'
+    button.textContent = filled === true ? '已填入' : button.dataset.label
+  }
+  const execute = async number => {
+    filling.set(number, false)
+    showExecutable()
+    try {
+      await fill((await callTool('deck_execute', { task: number })).prompt)
+      filling.set(number, true)
+      showExecutable()
+      await new Promise(resolve => setTimeout(resolve, 5_000))
+    } catch {
+      // Not given or not filled in, nothing is in the prompt: "执行" is on
+      // again to be clicked once more.
+    } finally {
+      filling.delete(number)
+      showExecutable()
+    }
+  }
+
+  // Why "执行" is off, said once at the top of the 任务 and 地图 tabs, and
+  // every "执行" as it stands.
+  const UNEXECUTABLE = { different: 'Codex 里的 implement 不是同一份，不能预填执行。', missing: 'Codex 里找不到 implement，不能预填执行。' }
+  const UNTIL_RERUN = '所有 Task 的“执行”先停用，重跑配置之后恢复。'
+  const showExecutable = () => {
+    const why =
+      implement === undefined || implement?.copy === 'same' ? undefined
+      : implement === null ? ['Skill Source 里没有 implement，不能预填执行。', UNTIL_RERUN]
+      : implement.failure !== undefined ? ['读取 Skill Source 失败，不能预填执行。', skillFailure(implement.failure)]
+      : [UNEXECUTABLE[implement.copy], UNTIL_RERUN]
+    for (const notice of [$('tasks-noexec'), $('map-noexec')]) {
+      notice.hidden = why === undefined
+      if (why !== undefined) {
+        notice.querySelector('.dk-notice__title').textContent = why[0]
+        notice.querySelector('.dk-notice__text').textContent = why[1]
+        // Drawn anew, as the 技能 tab's: off while the Deck service has given
+        // no call of the configure skill.
+        const rerun = smallButton('重跑配置')
+        rerun.disabled = configureCall === undefined
+        rerun.addEventListener('click', () => prefill(rerun, configureCall))
+        const line = notice.querySelector('.dk-notice__line')
+        line.replaceChildren(line.firstElementChild, rerun)
+      }
+    }
+    for (const button of document.querySelectorAll('[data-execute]')) drawExecute(button)
   }
 
   const smallButton = (label, className = '') => {
@@ -1162,6 +1276,7 @@ body{margin:0;background:var(--ground)}
     const unprefillable = skills.filter(skill => skill.copy !== 'same').length
     if (unprefillable > 0) {
       const rerun = smallButton('重跑配置')
+      rerun.disabled = configureCall === undefined
       rerun.addEventListener('click', () => prefill(rerun, configureCall))
       const notice = el(
         'div',
@@ -1185,20 +1300,29 @@ body{margin:0;background:var(--ground)}
 
   const readSkills = async () => {
     skillsRead = true
-    try {
-      const [answer, configure] = await Promise.all([callTool('deck_skills'), callTool('deck_configure')])
-      configureCall = configure.call
+    const asked = (skillsAsked = {})
+    const [read, configure] = await Promise.allSettled([callTool('deck_skills'), callTool('deck_configure')])
+    if (asked !== skillsAsked) return
+    // The call every "重跑配置" fills in; one not given leaves the one given
+    // before, if any, and with none they are off.
+    if (configure.status === 'fulfilled') configureCall = configure.value.call
+    if (read.status === 'fulfilled') {
+      const answer = read.value
       showSkills(answer)
       askMatt = answer.ok ? (answer.skills.find(skill => skill.name === 'ask-matt') ?? null) : null
-    } catch (error) {
+      implement = answer.ok ? (answer.skills.find(skill => skill.name === 'implement') ?? null) : { failure: answer.failure }
+    } else {
       skillsListed = []
-      $('skill-list').replaceChildren(failedNotice('读取 Skill Source 失败', skillFailure({ message: error.message })))
+      $('skill-list').replaceChildren(failedNotice('读取 Skill Source 失败', skillFailure({ message: read.reason.message })))
       askMatt = null
+      implement = { failure: { message: read.reason.message } }
     }
     showNext()
+    showExecutable()
   }
 
-  // The 技能 tab shows its list, read once since "刷新" was last clicked.
+  // The 技能 tab shows the list the skills were last read into: opened before
+  // the read of the Pane has read them, it reads them.
   const showSkillsTab = async () => {
     if (!skillsRead) await readSkills()
   }
@@ -1263,7 +1387,8 @@ body{margin:0;background:var(--ground)}
   // nothing in it.
   const recommendationCard = ({ task, nextStep, skill, reason, blockers }) => {
     const found = list === undefined ? undefined : entries().find(([each]) => each.number === task)
-    const glyph = found === undefined ? [] : [plate(stateOf(...found))]
+    const state = found === undefined ? undefined : stateOf(...found)
+    const glyph = found === undefined ? [] : [plate(state)]
     glyph.forEach(each => each.classList.add('dk-plate--lg'))
     const title = found !== undefined ? found[0].title : task === null ? '无' : '任务列表里没有这个 Task'
     const field = (name, value) => [el('dt', 'caption', name), el('dd', '', value === '' ? '无' : value)]
@@ -1285,6 +1410,11 @@ body{margin:0;background:var(--ground)}
         ...field('理由', reason),
         ...field('阻塞', blockers),
       ),
+      // Executed unless there is no Task, or it is closed, held by another
+      // Session or Orphaned, this Session's own Orphaned Task included.
+      ...(task === null || ['closed', 'other', 'orphaned'].includes(state)
+        ? []
+        : [executeButton(task, '执行这个 Task', 'dk-btn dk-btn--primary dk-btn--block')]),
     )
   }
 
@@ -1330,6 +1460,7 @@ body{margin:0;background:var(--ground)}
     if (why !== undefined) {
       const rerun = el('button', 'dk-btn', '重跑配置')
       rerun.type = 'button'
+      rerun.disabled = configureCall === undefined
       rerun.addEventListener('click', () => prefill(rerun, configureCall))
       shown.push(el('div', 'dk-next__line', el('span', 'dk-why caption', why), rerun))
     }
@@ -1340,8 +1471,8 @@ body{margin:0;background:var(--ground)}
     $('next').querySelector('.dk-rec')?.replaceWith(recommendationCard(asking.recommendation))
   }
 
-  // The 下一步 tab, and the skills once since "刷新" was last clicked, to
-  // know whether Codex runs this ask-matt.
+  // The 下一步 tab. It goes by the skills, to know whether Codex runs this
+  // ask-matt: opened before the read of the Pane has read them, it reads them.
   const showNextTab = async () => {
     showNext()
     if (!skillsRead) await readSkills()

@@ -231,8 +231,18 @@ const deckAt =
     if (name === 'deck_map') {
       return answered(maps)
     }
+    if (name === 'deck_skills') {
+      return answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS })
+    }
+    if (name === 'deck_execute') {
+      return answered({ prompt: executePromptOf(args.task) })
+    }
     throw new Error(`unexpected call of ${name}`)
   }
+
+// The Execute Prompt of a Task as this fake Deck service writes it: no text
+// the page could write itself.
+const executePromptOf = (task: number) => `$implement #${task} as the Deck service writes it 7e1d`
 
 const text = (element: Element | null) => element?.textContent?.replace(/\s+/g, ' ').trim()
 
@@ -448,7 +458,7 @@ test('the Pane asks for no resource outside itself', async t => {
 // What the "任务" tab shows: each group's title and count, then its rows, as
 // the person reads them.
 const groupsShown = (document: Document) =>
-  [...document.querySelectorAll('.dk-group')].map(group => [
+  [...document.querySelectorAll('#groups .dk-group')].map(group => [
     text(group.querySelector('.dk-group__head')),
     ...[...group.querySelectorAll('.dk-row')].map(text),
   ])
@@ -459,7 +469,7 @@ test('the "任务" tab shows the Tasks in the four groups the Deck service puts 
   const { document } = page
 
   assert.deepEqual(groupsShown(document), [
-    ['可执行 1', '#70 Task 详情 可执行 ready-for-agent'],
+    ['可执行 1', '#70 Task 详情 可执行 ready-for-agent 执行'],
     [
       '进行中 4',
       '#74 执行与 Occupancy 登记 进行中 · 本 Session ready-for-agent',
@@ -632,7 +642,7 @@ test('until the first read of the Tasks comes back, the "任务" tab says it is 
 
   assert.deepEqual(whileReading, [['正在读取 Task…'], true])
   assert.deepEqual([...page.document.querySelectorAll('.dk-why')].filter(each => shown(page, each)).map(text), [])
-  assert.deepEqual(groupsShown(page.document)[0], ['可执行 1', '#70 Task 详情 可执行 ready-for-agent'])
+  assert.deepEqual(groupsShown(page.document)[0], ['可执行 1', '#70 Task 详情 可执行 ready-for-agent 执行'])
 })
 
 test('when the Task Source cannot be read the Pane says why, over the list it read before', async t => {
@@ -666,7 +676,7 @@ test('when the Task Source cannot be read the Pane says why, over the list it re
   await page.click(document.querySelector('.dk-head button'))
   assert.deepEqual(notice(), ['读取 Task 失败', '这个 Workspace 没有指向 GitHub 的 remote，读不到 Issues。', []])
   assert.equal(text(document.querySelector('.dk-head__fresh')), '读取失败')
-  assert.deepEqual(groupsShown(document)[0], ['可执行 1', '#70 Task 详情 可执行 ready-for-agent'])
+  assert.deepEqual(groupsShown(document)[0], ['可执行 1', '#70 Task 详情 可执行 ready-for-agent 执行'])
 
   failure = { kind: 'failed', message: 'HTTP 502' }
   await page.click(document.querySelector('.dk-head button'))
@@ -917,7 +927,7 @@ const deckWithSkills =
       const { copy, ...read } = skill
       return answered({ ok: true, skill: { ...read, text: TEXT } })
     }
-    return deckAt('/work/matt-deck')(name)
+    return deckAt('/work/matt-deck')(name, args)
   }
 
 // The texts of an element's parts: its children, or what `parts` selects.
@@ -1165,7 +1175,7 @@ test('the reads every 60 seconds and as the tab is shown again leave a skill\'s 
   assert.deepEqual([called('deck_skills'), called('deck_skill')], [1, 1])
 })
 
-test('"刷新" reads the skills again, on the 技能 tab at once and on another tab once 技能 is opened again', async t => {
+test('"刷新" reads the skills again, on whichever tab it is clicked, and opening 技能 reads none', async t => {
   // The first read finds tdd and wayfinder not the same, the second only
   // wayfinder, the third none.
   let reads = 0
@@ -1186,10 +1196,10 @@ test('"刷新" reads the skills again, on the 技能 tab at once and on another 
   assert.equal(reads, 2)
   assert.deepEqual(warned(), ['1 个技能在 Codex 里不能预填。'])
 
-  // Away from 技能, "刷新" leaves the skills for when the tab opens again.
+  // Away from 技能 too: the "执行" of the 任务 tab goes by them.
   await page.click(tabs[1]!)
   await page.click(refresh)
-  assert.equal(reads, 2)
+  assert.equal(reads, 3)
   await page.click(tabs[3]!)
   assert.equal(reads, 3)
   assert.deepEqual(warned(), [])
@@ -1367,7 +1377,7 @@ test('the Pane reads the request\'s Recommendation every 2 seconds and shows it 
     '无',
   ])
   assert.equal(document.querySelector('.dk-rec__fields .mono')!.textContent, RECOMMENDATION.skill)
-  assert.deepEqual(nextTab(page).buttons, ['再问一次'])
+  assert.deepEqual(nextTab(page).buttons, ['执行这个 Task', '再问一次'])
   // Once answered it reads no more.
   await page.advance(60_000)
   assert.equal(deck.reads.length, 4)
@@ -1603,25 +1613,27 @@ test('when Codex does not run this ask-matt, "我现在该做什么" is off and 
 })
 
 test('"我现在该做什么" is off until the skills are read, and on again once a read finds ask-matt the same file', async t => {
-  let release: () => void = () => {}
   let reads = 0
+  // The 下一步 tab as the page shows it while the first read of the skills
+  // is not answered: the person opens the tab then.
+  let whileReading: ReturnType<typeof nextTab> | undefined
   const deck = deckThatRecommends()
   const page = await openPage({
-    answer: (name: string, args: any) => {
+    answer: async (name: string, args: any, document: Document) => {
       if (name !== 'deck_skills') return deck.answer(name, args)
       reads++
-      const answer = deckWithSkills(SKILLS.map(skill => (skill.name === 'ask-matt' && reads === 2 ? { ...skill, copy: 'missing' } : skill)))(name, args)
-      return reads === 1 ? new Promise(resolve => (release = () => resolve(answer))) : answer
+      if (reads === 1) {
+        ;([...document.querySelectorAll('[role="tab"]')].find(tab => text(tab) === '下一步') as HTMLElement).click()
+        await new Promise(resolve => setTimeout(resolve, 20))
+        whileReading = nextTab({ document, window: document.defaultView })
+      }
+      return deckWithSkills(SKILLS.map(skill => (skill.name === 'ask-matt' && reads === 2 ? { ...skill, copy: 'missing' } : skill)))(name, args)
     },
   })
   t.after(page.close)
-  // While the skills are held, the page is never settled: wait a moment.
-  ;([...page.document.querySelectorAll('[role="tab"]')].find(tab => text(tab) === '下一步') as HTMLElement).click()
-  await new Promise(resolve => setTimeout(resolve, 20))
 
-  assert.deepEqual(nextTab(page).buttons, ['我现在该做什么（停用）'])
-  release()
-  await page.settled()
+  assert.deepEqual(whileReading?.buttons, ['我现在该做什么（停用）'])
+  assert.equal(reads, 1)
   assert.deepEqual(nextTab(page).buttons, ['我现在该做什么'])
   // "刷新" on this tab reads the skills again.
   await page.click(page.document.querySelector('.dk-head button'))
@@ -1672,6 +1684,11 @@ test('when the Deck service cannot make the request the 下一步 tab says why i
     'Deck 服务出错：the state is locked 6w1p。再点“我现在该做什么”重试。',
   )
   assert.deepEqual(prefills(page), [])
+  // The timed read leaves the notice as it is, drawn again as the tab is.
+  await page.advance(60_000)
+  await page.click(page.document.querySelectorAll('[role="tab"]')[1]!)
+  await page.click(page.document.querySelectorAll('[role="tab"]')[0]!)
+  assert.equal(nextTab(page).said[0], '没有填入推荐请求')
   // "刷新" reads the page again, and the notice of a request that was not
   // made goes; it makes no request.
   assert.equal(asks, 8)
@@ -1751,7 +1768,7 @@ test('"再问一次" that cannot make a request says why and keeps waiting for t
   assert.notEqual(page.document.querySelector('.dk-rec'), null)
 })
 
-test('a Recommendation shown follows the list as the timed reads find it, its buttons left as they are', async t => {
+test('a Recommendation shown follows the list as the timed reads find it: "执行这个 Task" goes with its Task, and "再问一次" stays', async t => {
   let tasks: any = TASKS
   const deck = deckThatRecommends()
   const page = await openNext({ answer: (name: string, args: any) => (name === 'deck_tasks' ? answered(tasks) : deck.answer(name, args)) })
@@ -1766,6 +1783,10 @@ test('a Recommendation shown follows the list as the timed reads find it, its bu
   assert.deepEqual(card(), ['可执行', 'Task 详情'])
   const again = button(page, '再问一次')
   const before = nextTab(page)
+  assert.deepEqual(before.buttons, ['执行这个 Task', '再问一次'])
+  // The card's "执行这个 Task" goes with the Task: none for a Task another
+  // Session holds, or a closed one.
+  const after = { ...before, buttons: ['再问一次'] }
 
   // #70, renamed, taken by another Session.
   const taken = task(70, 'Task 详情 9h2c', { occupant: OTHER_CODEX, occupantHost: 'codex', occupantShort: '77e0aa15' })
@@ -1773,7 +1794,7 @@ test('a Recommendation shown follows the list as the timed reads find it, its bu
   await page.advance(58_000)
   assert.deepEqual(card(), ['进行中 · 其他 Session', 'Task 详情 9h2c'])
   assert.equal(again.isConnected, true)
-  assert.deepEqual(nextTab(page), before)
+  assert.deepEqual(nextTab(page), after)
 
   // Closed, as the tab is shown again.
   tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [], done: [task(70, 'Task 详情 5r7w', { isOpen: false, closedAt: '2026-11-22T09:01:00Z' }), ...TASKS.groups.done] } }
@@ -1781,7 +1802,7 @@ test('a Recommendation shown follows the list as the timed reads find it, its bu
   await page.show(true)
   assert.deepEqual(card(), ['已解锁', 'Task 详情 5r7w'])
   assert.equal(again.isConnected, true)
-  assert.deepEqual(nextTab(page), before)
+  assert.deepEqual(nextTab(page), after)
   assert.equal(deck.reads.length, 1)
 })
 
@@ -1840,7 +1861,7 @@ test('the detail shows the Task\'s state, triage label, assignees and time, its 
   await page.click(rowOf(document, 70))
   assert.deepEqual(detailShown(page), {
     crumbs: '任务 / #70',
-    bar: ['返回', '在 GitHub 打开'],
+    bar: ['返回', '执行', '在 GitHub 打开'],
     title: '#70 Task 详情',
     meta: ['可执行', 'ready-for-human', 'x9ggg, someone', '更新 11-21'],
     sections: [
@@ -2316,7 +2337,7 @@ test('the "地图" tab shows the Map View of a Spec: its card, then its Child Ta
   assert.deepEqual(mapShown(page), {
     card: ['Spec #64 切换 规格：里程碑二 在 Codex 桌面应用的标签页里放一个 Pane。 可执行 1 进行中 6 阻塞 2 已解锁 2 解锁进度 2 / 9 22%'],
     wall: [
-      '#70 可执行 Task 详情 挡着 #73 更新 11-22',
+      '#70 可执行 Task 详情 挡着 #73 更新 11-22 执行',
       '#74 进行中 执行与 Occupancy 登记 更新 11-22',
       '#69 进行中 任务列表 Claude Code 3f9c21d0 更新 11-22',
       '#72 进行中 Matt 技能 77e0aa15 更新 11-22',
@@ -2364,7 +2385,7 @@ test('a Map View with no Blocking Edge says nothing of blocking, and shows what 
   // One Map only: nothing to switch to. No goal: none is drawn.
   assert.deepEqual(mapShown(page), {
     card: ['Map #90 <i>示例</i> 可执行 1 进行中 0 阻塞 0 已解锁 1 解锁进度 1 / 2 50%'],
-    wall: ['#91 可执行 <b>一个</b> 更新 11-21', '#92 已解锁 关了 没有验收证据 11-20 10:00'],
+    wall: ['#91 可执行 <b>一个</b> 更新 11-21 执行', '#92 已解锁 关了 没有验收证据 11-20 10:00'],
     more: [],
   })
   assert.equal(page.document.querySelector('#map .dk-spec__goal'), null)
@@ -3063,4 +3084,662 @@ test('"待收尾核对" and the gold "收尾核对" are drawn in the closeout\'s
     await page.click(rowOf(document, 64))
     assert.deepEqual(pair([...document.querySelectorAll('#into-end button')].find(each => text(each) === '收尾核对')!), PAIRS[theme].button, theme)
   }
+})
+
+// "执行" as the person sees it: its words, and whether it is on.
+const executeShown = (element: Element | null | undefined) =>
+  element === null || element === undefined ? undefined : [text(element), !(element as HTMLButtonElement).disabled]
+const rowExecute = (document: Document, number: number) => rowOf(document, number).querySelector('[data-execute]')
+const barExecute = (document: Document) => [...document.querySelectorAll('.dk-bar button')].find(each => ['执行', '已填入'].includes(text(each)!))
+const calledWith = (page: { sent: any[] }, name: string) =>
+  page.sent.filter(message => message.method === 'tools/call' && message.params.name === name).map(({ params }) => params.arguments)
+
+test('a ready Task\'s "执行" puts the Execute Prompt the Deck service gives in the prompt, unsent, and occupies nothing; it says 已填入 for 5 seconds, the reads in between too', async t => {
+  const answer = deckAt('/work/matt-deck')
+  // "执行" while the Deck service has not given the prompt yet.
+  let whileAsking: unknown
+  const page = await openPage({
+    answer: (name, args, document) => {
+      if (name === 'deck_execute') whileAsking = executeShown(rowExecute(document, 70))
+      return answer(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+
+  // Only the ready Task has it, as a "go" button.
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', true])
+  assert.deepEqual([...rowExecute(document, 70)!.classList], ['dk-btn', 'dk-btn--sm', 'dk-btn--go'])
+  assert.deepEqual([74, 72, 69, 75, 73, 19, 66, 65, 64].map(number => rowExecute(document, number)), Array(9).fill(null))
+
+  await page.click(rowExecute(document, 70))
+
+  // Off at once, and 已填入 once the Host has taken it.
+  assert.deepEqual(whileAsking, ['执行', false])
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(70))])
+  assert.deepEqual(calledWith(page, 'deck_execute'), [{ task: 70 }])
+  assert.deepEqual(calledWith(page, 'deck_occupy'), [])
+  // A click on the button is not one on its row.
+  assert.equal(detailShown(page), undefined)
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['已填入', false])
+  // "刷新" and the timed read draw the row again, its "执行" as it stands.
+  await page.click(document.querySelector('.dk-head button'))
+  await page.show(false)
+  await page.show(true)
+  await page.advance(4_999)
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['已填入', false])
+  await page.advance(1)
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', true])
+  assert.equal(prefills(page).length, 1)
+})
+
+test('a ready Task\'s detail has "执行" in its bar before "在 GitHub 打开", which is off with its row\'s; another Task\'s has none', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+  const back = () => page.click([...document.querySelectorAll('.dk-bar button')].find(each => text(each) === '返回')!)
+
+  await page.click(rowOf(document, 73))
+  assert.deepEqual(detailShown(page)?.bar, ['返回', '在 GitHub 打开'])
+  await back()
+
+  await page.click(rowOf(document, 70))
+  assert.deepEqual(detailShown(page)?.bar, ['返回', '执行', '在 GitHub 打开'])
+  assert.deepEqual([...barExecute(document)!.classList], ['dk-btn', 'dk-btn--sm', 'dk-btn--go'])
+  await page.click(barExecute(document)!)
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(70))])
+  assert.deepEqual(executeShown(barExecute(document)), ['已填入', false])
+  // The detail read again within the 5 seconds says so too, and so does the row.
+  await page.advance(60_000 - 55_001)
+  await page.click(document.querySelector('.dk-head button'))
+  assert.deepEqual(executeShown(barExecute(document)), ['已填入', false])
+  await back()
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['已填入', false])
+  await page.advance(5_000)
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', true])
+})
+
+test('"执行" clicked on one Task leaves another Task\'s "执行" on, which fills in that Task\'s Execute Prompt', async t => {
+  const tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [READY, task(71, '另一个就绪的')] } }
+  const page = await openPage({ answer: deckAt('/work/matt-deck', true, tasks) })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowExecute(document, 70))
+
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['已填入', false])
+  assert.deepEqual(executeShown(rowExecute(document, 71)), ['执行', true])
+  await page.click(rowExecute(document, 71))
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(70)), prefilled(executePromptOf(71))])
+  assert.deepEqual(executeShown(rowExecute(document, 71)), ['已填入', false])
+})
+
+test('each Task\'s "执行" is on again at its own 5 seconds: one clicked later stays off when the earlier one\'s ends', async t => {
+  const tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [READY, task(71, '另一个就绪的')] } }
+  const page = await openPage({ answer: deckAt('/work/matt-deck', true, tasks) })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowExecute(document, 70))
+  await page.advance(2_000)
+  await page.click(rowExecute(document, 71))
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['已填入', false])
+  await page.advance(3_000)
+
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', true])
+  assert.deepEqual(executeShown(rowExecute(document, 71)), ['已填入', false])
+  await page.advance(2_000)
+  assert.deepEqual(executeShown(rowExecute(document, 71)), ['执行', true])
+})
+
+test('"执行" fills in nothing when the Deck service fails to give the Execute Prompt, and is on again', async t => {
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({
+    answer: (name, args) => (name === 'deck_execute' ? { content: [{ type: 'text', text: 'no prompt' }], isError: true } : answer(name, args)),
+  })
+  t.after(page.close)
+
+  await page.click(rowExecute(page.document, 70))
+
+  assert.deepEqual(prefills(page), [])
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', true])
+})
+
+test('the Recommendation\'s "执行这个 Task" puts the Execute Prompt of its Task in the prompt; none for a Task closed, held by another Session, Orphaned, or for no Task', async t => {
+  const deck = deckThatRecommends()
+  const page = await openNext(deck)
+  t.after(page.close)
+  const recommended = async (task: number | null, request: number) => {
+    await page.click(button(page, request === 1 ? '我现在该做什么' : '再问一次'))
+    deck.reported.set(`request-${request}`, { ...RECOMMENDATION, task })
+    await page.advance(2_000)
+    return executeShown(page.document.querySelector('.dk-rec [data-execute]'))
+  }
+
+  assert.deepEqual(
+    [await recommended(66, 1), await recommended(72, 2), await recommended(75, 3), await recommended(null, 4)],
+    [undefined, undefined, undefined, undefined],
+  )
+  // This Session's, a blocked one, and one the list does not hold have it.
+  assert.deepEqual([await recommended(74, 5), await recommended(73, 6), await recommended(999, 7)], Array(3).fill(['执行这个 Task', true]))
+  assert.deepEqual(await recommended(70, 8), ['执行这个 Task', true])
+  // The card's primary button, across it.
+  assert.deepEqual([...page.document.querySelector('.dk-rec [data-execute]')!.classList], ['dk-btn', 'dk-btn--primary', 'dk-btn--block'])
+
+  await page.click(page.document.querySelector('.dk-rec [data-execute]'))
+
+  assert.deepEqual(prefills(page).at(-1), prefilled(executePromptOf(70)))
+  assert.deepEqual(calledWith(page, 'deck_execute'), [{ task: 70 }])
+  // The timed read draws the card again: its "执行这个 Task" is off still.
+  await page.show(false)
+  await page.show(true)
+  assert.deepEqual(executeShown(page.document.querySelector('.dk-rec [data-execute]')), ['已填入', false])
+  await page.advance(5_000)
+  assert.deepEqual(executeShown(page.document.querySelector('.dk-rec [data-execute]')), ['执行这个 Task', true])
+})
+
+// The notice at the top of the 任务 tab, as the person reads it, if shown.
+const noExecute = (page: { window: any; document: Document }) => {
+  const notice = page.document.querySelector('#tasks .dk-notice.is-warn')
+  return shown(page, notice) ? [text(notice!.querySelector('.dk-notice__title')), text(notice!.querySelector('.dk-notice__text'))] : undefined
+}
+
+test('when Codex does not run this implement, every "执行" is off and the top of the 任务 tab says why once, with "重跑配置"', async t => {
+  for (const [copy, said] of [
+    ['different', 'Codex 里的 implement 不是同一份，不能预填执行。'],
+    ['missing', 'Codex 里找不到 implement，不能预填执行。'],
+  ] as const) {
+    const deck = deckThatRecommends(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)))
+    const page = await openPage({ answer: deck.answer })
+    t.after(page.close)
+    const { document } = page
+
+    assert.deepEqual(noExecute(page), [said, '所有 Task 的“执行”先停用，重跑配置之后恢复。'], copy)
+    // At the top of the tab's content.
+    assert.equal(document.querySelector('#tasks')!.firstElementChild, document.querySelector('#tasks .dk-notice.is-warn'))
+    // Read out as it shows.
+    assert.equal(document.querySelector('#tasks .dk-notice.is-warn')!.getAttribute('role'), 'status')
+    assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', false])
+    assert.equal(document.querySelectorAll('#groups .dk-why').length, 0)
+    const rerun = document.querySelector('#tasks .dk-notice.is-warn button')!
+    assert.equal(text(rerun), '重跑配置')
+    await page.click(rerun)
+    assert.deepEqual(prefills(page), [prefilled(CONFIGURE_CALL)])
+
+    await page.click(rowOf(document, 70))
+    assert.deepEqual(executeShown(barExecute(document)), ['执行', false])
+    assert.equal(noExecute(page), undefined)
+    await page.click([...document.querySelectorAll('[role="tab"]')].find(tab => text(tab) === '下一步')!)
+    await page.click(button(page, '我现在该做什么'))
+    deck.reported.set('request-1', RECOMMENDATION)
+    await page.advance(2_000)
+    assert.deepEqual(executeShown(page.document.querySelector('.dk-rec [data-execute]')), ['执行这个 Task', false])
+    assert.deepEqual(calledWith(page, 'deck_execute'), [])
+  }
+})
+
+test('"执行" is off, and the 任务 tab says why in its own words, when the Skill Source holds no implement or cannot be read; "刷新" turns it on again once implement is read the same', async t => {
+  let skillsAnswer: () => object = () => answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS.filter(skill => skill.name !== 'implement') })
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({ answer: (name, args) => (name === 'deck_skills' ? skillsAnswer() : answer(name, args)) })
+  t.after(page.close)
+  const refresh = () => page.click(page.document.querySelector('.dk-head button'))
+
+  assert.deepEqual(noExecute(page), ['Skill Source 里没有 implement，不能预填执行。', '所有 Task 的“执行”先停用，重跑配置之后恢复。'])
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', false])
+
+  skillsAnswer = () => answered({ ok: false, failure: { kind: 'missing', message: 'no such directory 3k8p' } })
+  await refresh()
+  assert.deepEqual(noExecute(page), ['读取 Skill Source 失败，不能预填执行。', '找不到 Skill Source。重跑配置之后恢复。'])
+
+  skillsAnswer = () => ({ content: [{ type: 'text', text: 'the skills table is locked 6t1w' }], isError: true })
+  await refresh()
+  assert.deepEqual(noExecute(page), ['读取 Skill Source 失败，不能预填执行。', 'Deck 服务出错：the skills table is locked 6t1w。点“刷新”重试。'])
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', false])
+
+  skillsAnswer = () => answer('deck_skills', {})
+  await refresh()
+  assert.equal(noExecute(page), undefined)
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', true])
+})
+
+test('"执行" is off until the skills are read, and neither 任务 nor 地图 shows a notice of why', async t => {
+  let whileReading: unknown
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({
+    answer: async (name, args, document) => {
+      if (name === 'deck_skills' && whileReading === undefined) {
+        const isShown = (selector: string) => shown({ window: document.defaultView }, document.querySelector(selector))
+        const inTasks = isShown('#tasks .dk-notice.is-warn')
+        ;(tabNamed(document, '地图') as HTMLElement).click()
+        whileReading = [executeShown(rowExecute(document, 70)), inTasks, isShown('#map .dk-notice.is-warn')]
+      }
+      return answer(name, args)
+    },
+  })
+  t.after(page.close)
+
+  assert.deepEqual(whileReading, [['执行', false], false, false])
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', true])
+})
+
+test('a project configured again has its skills read again, by the timed reads too', async t => {
+  let configured = true
+  let copy = 'different'
+  const page = await openPage({
+    answer: (name, args) =>
+      name === 'deck_skills'
+        ? answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)) })
+        : deckAt('/work/matt-deck', configured)(name, args),
+  })
+  t.after(page.close)
+  assert.equal(noExecute(page)?.[0], 'Codex 里的 implement 不是同一份，不能预填执行。')
+
+  configured = false
+  copy = 'same'
+  await page.advance(60_000)
+  configured = true
+  await page.advance(60_000)
+
+  assert.equal(noExecute(page), undefined)
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', true])
+})
+
+test('a project configured again has "执行" off until the new read of its skills answers: clicked before, it fills in nothing', async t => {
+  let configured = true
+  let copy = 'same'
+  let clicked = false
+  const page = await openPage({
+    answer: (name, args, document) => {
+      if (name === 'deck_skills' && copy === 'different' && !clicked) {
+        clicked = true
+        ;(rowExecute(document, 70) as HTMLElement).click()
+      }
+      return name === 'deck_skills'
+        ? answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)) })
+        : deckAt('/work/matt-deck', configured)(name, args)
+    },
+  })
+  t.after(page.close)
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', true])
+
+  configured = false
+  await page.advance(60_000)
+  configured = true
+  copy = 'different'
+  await page.advance(60_000)
+
+  assert.equal(clicked, true)
+  assert.deepEqual(calledWith(page, 'deck_execute'), [])
+  assert.deepEqual(prefills(page), [])
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', false])
+  assert.equal(noExecute(page)?.[0], 'Codex 里的 implement 不是同一份，不能预填执行。')
+})
+
+test('a project found not configured has "执行" off and its skills read again once configured, though the Deck service fails to give the configure skill\'s call', async t => {
+  let configured = true
+  let copy = 'same'
+  const page = await openPage({
+    answer: (name, args) =>
+      name === 'deck_configure' && !configured
+        ? { content: [{ type: 'text', text: 'the configure skill is locked 2h7q' }], isError: true }
+        : name === 'deck_skills'
+          ? answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)) })
+          : deckAt('/work/matt-deck', configured)(name, args),
+  })
+  t.after(page.close)
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', true])
+
+  configured = false
+  await page.advance(60_000)
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', false])
+
+  configured = true
+  copy = 'different'
+  await page.advance(60_000)
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', false])
+  assert.equal(noExecute(page)?.[0], 'Codex 里的 implement 不是同一份，不能预填执行。')
+  assert.equal(calledWith(page, 'deck_skills').length, 2)
+})
+
+test('"执行" whose 5 seconds end after the project is configured again, before its skills are read, says 执行 again and stays off', async t => {
+  let configured = true
+  let hold: Promise<void> | undefined
+  let release!: () => void
+  const page = await openPage({
+    answer: async (name, args) => {
+      if (name === 'deck_skills') await hold
+      return deckAt('/work/matt-deck', configured)(name, args)
+    },
+  })
+  t.after(page.close)
+  await page.click(rowExecute(page.document, 70))
+  configured = false
+  await page.show(false)
+  await page.show(true)
+
+  configured = true
+  hold = new Promise(resolve => (release = resolve))
+  const shownAgain = page.show(false).then(() => page.show(true))
+  while (calledWith(page, 'deck_skills').length < 2) await new Promise(resolve => setTimeout(resolve, 5))
+  const advanced = page.advance(5_000)
+  await new Promise(resolve => setTimeout(resolve, 20))
+
+  const whileReading = executeShown(rowExecute(page.document, 70))
+  release()
+  await Promise.all([shownAgain, advanced])
+
+  assert.deepEqual(whileReading, ['执行', false])
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', true])
+})
+
+test('configured again, the detail\'s "执行" and the rows\' drawn before are off while the Tasks are read, and clicked fill in nothing', async t => {
+  let configured = true
+  let copy = 'same'
+  let hold = false
+  let whileReading: unknown
+  const page = await openPage({
+    answer: async (name, args, document) => {
+      if (name === 'deck_tasks' && hold) {
+        hold = false
+        const bar = [...document.querySelectorAll('#into-end button')].find(each => text(each) === '执行')
+        whileReading = [executeShown(bar), executeShown(rowExecute(document, 70))]
+        ;(bar as HTMLElement | undefined)?.click()
+        await new Promise(resolve => setTimeout(resolve, 20))
+      }
+      return name === 'deck_skills'
+        ? answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)) })
+        : deckAt('/work/matt-deck', configured)(name, args)
+    },
+  })
+  t.after(page.close)
+  await page.click(rowOf(page.document, 70))
+  assert.deepEqual(executeShown(barExecute(page.document)), ['执行', true])
+
+  configured = false
+  await page.advance(60_000)
+  configured = true
+  copy = 'different'
+  hold = true
+  await page.advance(60_000)
+
+  assert.deepEqual(whileReading, [['执行', false], ['执行', false]])
+  assert.deepEqual(calledWith(page, 'deck_execute'), [])
+  assert.deepEqual(prefills(page), [])
+})
+
+test('a detail drawn again while another step is shown over it has its "执行" drawn by the skills read since as the way goes back to it: off, it fills in nothing', async t => {
+  const withBlocked = (blocked: object) => ({ ...TASKS, groups: { ...TASKS.groups, blocked: [blocked, WAITING] } })
+  const blockedBy70 = withBlocked(task(73, '推荐：我现在该做什么', { blockers: [70], blockedBy: [70] }))
+  const ready73 = { ...TASKS, groups: { ...TASKS.groups, ready: [READY, task(73, '推荐：我现在该做什么')], blocked: [WAITING] } }
+  let tasks: object = blockedBy70
+  let copy = 'same'
+  let hold: Promise<void> | undefined
+  let goingBack = false
+  let whileBack: unknown
+  const page = await openPage({
+    answer: async (name, args: any, document) => {
+      if (name === 'deck_task' && args.number === 73) {
+        await hold
+        if (goingBack) {
+          goingBack = false
+          const bar = [...document.querySelectorAll('#into-end button')].find(each => text(each) === '执行')
+          whileBack = executeShown(bar)
+          ;(bar as HTMLElement | undefined)?.click()
+          await new Promise(resolve => setTimeout(resolve, 20))
+        }
+      }
+      return name === 'deck_skills'
+        ? answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)) })
+        : deckAt('/work/matt-deck', true, tasks)(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowOf(document, 73))
+  assert.deepEqual(detailShown(page)?.bar, ['返回', '在 GitHub 打开'])
+
+  // The timed read finds #73 ready and draws its detail again; while that
+  // drawing waits, the person goes on to #70 from what is shown.
+  tasks = ready73
+  let release!: () => void
+  hold = new Promise(resolve => (release = resolve))
+  const timed = page.advance(60_000)
+  while (calledWith(page, 'deck_task').filter(each => each.number === 73).length < 2) await new Promise(resolve => setTimeout(resolve, 5))
+  ;([...document.querySelectorAll('.dk-detail .dk-edge')].find(edge => text(edge)!.includes('#70')) as HTMLElement).click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(detailShown(page)?.crumbs, '任务 / #73 / #70')
+  release()
+  await timed
+
+  copy = 'different'
+  await page.click(document.querySelector('.dk-head button'))
+  assert.deepEqual(executeShown(barExecute(document)), ['执行', false])
+
+  goingBack = true
+  await page.click([...document.querySelectorAll('.dk-bar button')].find(each => text(each) === '返回')!)
+
+  assert.deepEqual(whileBack, ['执行', false])
+  assert.deepEqual(calledWith(page, 'deck_execute'), [])
+  assert.deepEqual(prefills(page), [])
+})
+
+test('a read of the skills asked before a read finds the project not configured, answering after it, is dropped: configured again, "执行" is off with no notice in 任务 or 地图 until the next read of the skills answers', async t => {
+  let configured = true
+  let copy = 'same'
+  let reads = 0
+  let release!: () => void
+  const wait = () => new Promise(resolve => setTimeout(resolve, 5))
+  const page = await openPage({
+    answer: async (name, args, document) => {
+      // 下一步 opened while the first read of the Tasks is out reads the
+      // skills itself.
+      if (name === 'deck_tasks' && reads === 0) (tabNamed(document, '下一步') as HTMLElement).click()
+      if (name !== 'deck_skills') return deckAt('/work/matt-deck', configured)(name, args)
+      reads++
+      const at = copy
+      if (reads === 1) {
+        // The first read of the Pane ends, then a read finds the project not
+        // configured, before this read of the skills answers.
+        const refresh = document.querySelector<HTMLButtonElement>('.dk-head button')!
+        while (refresh.disabled) await wait()
+        configured = false
+        document.dispatchEvent(new document.defaultView!.Event('visibilitychange'))
+        await wait()
+        while (refresh.disabled) await wait()
+      } else if (reads === 2) {
+        await new Promise<void>(resolve => (release = resolve))
+      }
+      return answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy: at } : skill)) })
+    },
+  })
+  t.after(page.close)
+  assert.equal(reads, 1)
+
+  // Configured again, with an implement Codex does not run.
+  configured = true
+  copy = 'different'
+  page.document.dispatchEvent(new page.window.Event('visibilitychange'))
+  while (reads < 2) await wait()
+  await new Promise(resolve => setTimeout(resolve, 20))
+
+  // Clicked meanwhile; the read of the skills still out, nothing settles.
+  const click = async (element: Element | null) => {
+    ;(element as HTMLElement).click()
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  await click(tabNamed(page.document, '任务'))
+  const inTasks = noExecute(page)
+  const row = executeShown(rowExecute(page.document, 70))
+  await click(rowExecute(page.document, 70))
+  await click(tabNamed(page.document, '地图'))
+  const inMap = shown(page, page.document.querySelector('#map .dk-notice.is-warn'))
+  release()
+  await page.settled()
+
+  assert.deepEqual([row, inTasks, inMap], [['执行', false], undefined, false])
+  assert.deepEqual(calledWith(page, 'deck_execute'), [])
+  assert.deepEqual(prefills(page), [])
+  await page.click(tabNamed(page.document, '任务'))
+  assert.equal(noExecute(page)?.[0], 'Codex 里的 implement 不是同一份，不能预填执行。')
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', false])
+})
+
+test('a read of the skills answered after a later one is dropped: "执行" goes by the later', async t => {
+  let reads = 0
+  let laterAnswered = false
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({
+    answer: async (name, args, document) => {
+      // The 技能 tab opened while the Tasks are read reads the skills first.
+      if (name === 'deck_tasks' && reads === 0) (tabNamed(document, '技能') as HTMLElement).click()
+      if (name !== 'deck_skills') return answer(name, args)
+      reads++
+      const copy = reads === 1 ? 'same' : 'different'
+      if (reads === 1) {
+        // "刷新" once the read it was off for ends, before this read answers.
+        const refresh = document.querySelector<HTMLButtonElement>('.dk-head button')!
+        while (refresh.disabled) await new Promise(resolve => setTimeout(resolve, 5))
+        refresh.click()
+        while (!laterAnswered) await new Promise(resolve => setTimeout(resolve, 5))
+        await new Promise(resolve => setTimeout(resolve, 20))
+      } else {
+        laterAnswered = true
+      }
+      return answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)) })
+    },
+  })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '任务'))
+
+  assert.equal(reads, 2)
+  assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', false])
+  assert.equal(noExecute(page)?.[0], 'Codex 里的 implement 不是同一份，不能预填执行。')
+})
+
+// A card of the Map View's wall by its Task's number.
+const cardExecute = (document: Document, number: number) =>
+  [...document.querySelectorAll('#map .dk-card')].find(card => text(card.querySelector('.dk-id')) === `#${number}`)!.querySelector('[data-execute]')
+
+test('a ready Child Task\'s card on the wall has "执行", which fills in its Execute Prompt and stays in the Map View; it says 已填入 for 5 seconds, the timed reads in between too', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+
+  assert.deepEqual(executeShown(cardExecute(document, 70)), ['执行', true])
+  assert.deepEqual([...cardExecute(document, 70)!.classList], ['dk-btn', 'dk-btn--sm', 'dk-btn--go'])
+  assert.deepEqual([74, 69, 72, 75, 76, 78, 19, 73, 66, 65].map(number => cardExecute(document, number)), Array(10).fill(null))
+
+  await page.click(cardExecute(document, 70))
+
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(70))])
+  assert.deepEqual(calledWith(page, 'deck_occupy'), [])
+  assert.equal(shown(page, document.querySelector('#map .dk-spec')), true)
+  assert.equal(detailShown(page), undefined)
+  await page.show(false)
+  await page.show(true)
+  assert.deepEqual(executeShown(cardExecute(document, 70)), ['已填入', false])
+  // The row in "任务" says so too.
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['已填入', false])
+  await page.advance(5_000)
+  assert.deepEqual(executeShown(cardExecute(document, 70)), ['执行', true])
+})
+
+test('when Codex does not run this implement, the top of the 地图 tab says why too, with "重跑配置", and the wall\'s "执行" is off', async t => {
+  const deck = deckThatRecommends(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy: 'different' } : skill)))
+  const page = await openPage({ answer: deck.answer })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+  const notice = document.querySelector('#map .dk-notice.is-warn')!
+
+  assert.equal(shown(page, notice), true)
+  assert.equal(document.querySelector('#map')!.firstElementChild, notice)
+  assert.equal(notice.getAttribute('role'), 'status')
+  assert.deepEqual([text(notice.querySelector('.dk-notice__title')), text(notice.querySelector('.dk-notice__text'))], [
+    'Codex 里的 implement 不是同一份，不能预填执行。',
+    '所有 Task 的“执行”先停用，重跑配置之后恢复。',
+  ])
+  // Said once, in the tab shown.
+  assert.equal([...document.querySelectorAll('.dk-notice.is-warn')].filter(each => shown(page, each)).length, 1)
+  assert.deepEqual(executeShown(cardExecute(document, 70)), ['执行', false])
+  await page.click(notice.querySelector('button'))
+  assert.deepEqual(prefills(page), [prefilled(CONFIGURE_CALL)])
+})
+
+test('a Spec or Map, ready as a Task, is not executed: its detail and its card on a wall have no "执行"', async t => {
+  // Spec #81 under #64, ready as a Task, beside the ready #70.
+  const child = { ...task(81, '子规格'), kind: 'spec', isPendingCloseout: false, group: 'ready', children: [], progress: { closed: 0, inProgress: 0, total: 0 } }
+  const tasks = { ...TASKS, containers: [...TASKS.containers, child] }
+  const maps = { ...MAPS, maps: [{ ...MAPS.maps[0], wall: [card(READY, 'ready'), card(child, 'ready')] }, ...MAPS.maps.slice(1)] }
+  const page = await openPage({ answer: deckAt('/work/matt-deck', true, tasks, maps) })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowOf(document, 64))
+  assert.deepEqual(detailShown(page)?.bar, ['返回', '在 GitHub 打开'])
+
+  await page.click(tabNamed(document, '地图'))
+  assert.deepEqual(executeShown(cardExecute(document, 70)), ['执行', true])
+  assert.equal(cardExecute(document, 81), null)
+})
+
+// Every "重跑配置" the page draws, as the person sees it, by where it is.
+const reruns = (page: { window: any; document: Document }) =>
+  Object.fromEntries(
+    [
+      ['tasks', '#tasks .dk-notice.is-warn button'],
+      ['map', '#map .dk-notice.is-warn button'],
+      ['skills', '#skill-list .dk-notice.is-warn button'],
+      ['next', '#next button'],
+    ].map(([where, selector]) => [
+      where,
+      [...page.document.querySelectorAll(selector!)].filter(each => text(each) === '重跑配置').map(each => !(each as HTMLButtonElement).disabled),
+    ]),
+  )
+
+test('when the first read of the skills fails as a tool, "重跑配置" at the top of 任务 and 地图 still fills in the configure skill\'s call the Deck service gives', async t => {
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({
+    answer: (name, args) => (name === 'deck_skills' ? { content: [{ type: 'text', text: 'boom' }], isError: true } : answer(name, args)),
+  })
+  t.after(page.close)
+
+  assert.deepEqual(noExecute(page), ['读取 Skill Source 失败，不能预填执行。', 'Deck 服务出错：boom。点“刷新”重试。'])
+  await page.click(page.document.querySelector('#tasks .dk-notice.is-warn button'))
+  await page.advance(5_000)
+  await page.click(page.document.querySelector('#map .dk-notice.is-warn button'))
+
+  assert.deepEqual(prefills(page), [prefilled(CONFIGURE_CALL), prefilled(CONFIGURE_CALL)])
+})
+
+test('when the Deck service does not give the configure skill\'s call, every "重跑配置" is off and fills in nothing; given on "刷新", each is on, and a later read that gives none keeps the one given', async t => {
+  let isConfigureGiven = false
+  // implement, ask-matt and tdd are not the files Codex finds.
+  const deck = deckThatRecommends(SKILLS.map(skill => (['implement', 'ask-matt'].includes(skill.name) ? { ...skill, copy: 'different' } : skill)))
+  const page = await openPage({
+    answer: (name, args) =>
+      name === 'deck_configure' && !isConfigureGiven ? { content: [{ type: 'text', text: 'no call' }], isError: true } : deck.answer(name, args),
+  })
+  t.after(page.close)
+  // The skills are read all the same.
+  assert.equal(noExecute(page)?.[0], 'Codex 里的 implement 不是同一份，不能预填执行。')
+  await page.click(tabNamed(page.document, '下一步'))
+  assert.deepEqual(reruns(page), { tasks: [false], map: [false], skills: [false], next: [false] })
+  for (const each of page.document.querySelectorAll('button')) {
+    if (text(each) === '重跑配置') await page.click(each)
+  }
+  assert.deepEqual(prefills(page), [])
+
+  isConfigureGiven = true
+  await page.click(page.document.querySelector('.dk-head button'))
+  assert.deepEqual(reruns(page), { tasks: [true], map: [true], skills: [true], next: [true] })
+
+  isConfigureGiven = false
+  await page.click(page.document.querySelector('.dk-head button'))
+  assert.deepEqual(reruns(page), { tasks: [true], map: [true], skills: [true], next: [true] })
+  await page.click(page.document.querySelector('#tasks .dk-notice.is-warn button'))
+  assert.deepEqual(prefills(page), [prefilled(CONFIGURE_CALL)])
 })

@@ -17,10 +17,12 @@ export const readState = (home: string) =>
     : new DatabaseSync(statePath(home), { readOnly: true })
 
 // Opens the local state under `home`, with every table it holds. The caller
-// closes it.
+// closes it. A write waits up to 2 seconds for another Deck service's to
+// end: Codex starts one for each Session. The wait is kept shorter than the
+// `timeout: 10` Deck writes into its hook.
 export const openState = (home: string) => {
   mkdirSync(join(home, '.matt-deck'), { recursive: true })
-  const db = new DatabaseSync(statePath(home))
+  const db = new DatabaseSync(statePath(home), { timeout: 2_000 })
   db.exec(
     'CREATE TABLE IF NOT EXISTS recommendations (request_id TEXT PRIMARY KEY, recommendation TEXT NOT NULL, reported_at INTEGER NOT NULL)',
   )

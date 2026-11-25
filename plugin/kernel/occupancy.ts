@@ -48,6 +48,20 @@ export const readOccupancies = (home: string, source: string, now: number) => {
   }
 }
 
+// A Task reference as the first word after the call: `#12`, `12`, or a link
+// ending in `owner/name/issues/12`, which names its repository.
+const TASK_REFERENCE = /^(?:#?(\d+)|\S*?([^/\s]+\/[^/\s]+)\/issues\/(\d+))$/
+
+// The Tasks a prompt runs `call`, the host's call of implement, on: each line
+// that begins with the call and a Task reference after it. Any line counts:
+// the host appends a prompt filled in to the draft before it.
+export const implementedTasks = (prompt: string, call: string) =>
+  prompt.split('\n').flatMap(line => {
+    const rest = line.startsWith(call) ? line.slice(call.length) : ''
+    const reference = /^\s/.test(rest) ? rest.trim().split(/\s+/)[0]!.match(TASK_REFERENCE) : null
+    return reference === null ? [] : [{ task: Number(reference[1] ?? reference[3]), repository: reference[2] }]
+  })
+
 // Records a heartbeat of `session` at `now`, in the host `host`: the Session
 // runs, and its Occupancies are held, an ended one's again too.
 export const beat = (home: string, session: string, now: number, host: string) => {
