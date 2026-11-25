@@ -45,6 +45,9 @@ export const openState = (home: string) => {
   db.exec(
     'CREATE TABLE IF NOT EXISTS reports (source TEXT NOT NULL, task INTEGER NOT NULL, session TEXT NOT NULL, reported_at INTEGER NOT NULL, result TEXT NOT NULL, evidence TEXT NOT NULL)',
   )
+  // When a Deck service last received a call from Deck's hook, in one row:
+  // the hook runs only once the person trusted it.
+  db.exec('CREATE TABLE IF NOT EXISTS hook_calls (id INTEGER PRIMARY KEY CHECK (id = 0), received_at INTEGER NOT NULL)')
 
   return db
 }

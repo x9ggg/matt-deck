@@ -9,6 +9,7 @@ import { isUtf8 } from 'node:buffer'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 
+import { forgetHookCalls } from '../kernel/hook.ts'
 import { CODEX_CONFIGURE_SKILL, CODEX_HOOK_TOOL } from '../server/hosts.ts'
 
 const USAGE = `Usage: node <matt-deck>/cli/codex.ts <install|uninstall>
@@ -230,6 +231,14 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
           await writeFile(backup, hooksBytes, { mode: (await stat(hooksFile)).mode & 0o777 })
         }
         await writeJson(hooksFile, withDeckHook(hooks))
+        // Codex keeps trust by a hook's place in the file and its content,
+        // and the hook written in may sit where none was trusted: the calls
+        // received before no longer tell that it runs. Failing to forget them
+        // fails no install, the hook written in already: the Pane says why
+        // the local state cannot be read.
+        try {
+          forgetHookCalls(homedir())
+        } catch {}
       }
       const hooked = isHooked
         ? `Deck 的钩子已经在 ${hooksFile} 里，没有改动。`

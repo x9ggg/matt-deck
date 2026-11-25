@@ -222,6 +222,10 @@ const deckAt =
     if (name === 'deck_configure') {
       return answered({ call: CONFIGURE_CALL })
     }
+    // Deck's hook has run: the Pane says nothing of it.
+    if (name === 'deck_hook') {
+      return answered({ receivedAt: Date.UTC(2026, 10, 22, 8, 0) })
+    }
     if (name === 'deck_tasks') {
       return answered(tasks)
     }
@@ -289,6 +293,8 @@ test('in a Configured Project the Pane heads its four tabs with the project and 
   assert.deepEqual(calls(), [
     { name: 'deck_config', arguments: {} },
     { name: 'deck_session', arguments: {} },
+    // Whether Deck's hook ever ran, which Codex runs once it is trusted.
+    { name: 'deck_hook', arguments: {} },
     { name: 'deck_tasks', arguments: {} },
     { name: 'deck_map', arguments: { session: SESSION.session } },
     // 下一步 reads the skills, to know whether Codex runs this ask-matt.
@@ -297,7 +303,7 @@ test('in a Configured Project the Pane heads its four tabs with the project and 
   ])
 
   await page.click(document.querySelector('.dk-head button'))
-  assert.equal(calls().length, 12)
+  assert.equal(calls().length, 14)
   assert.equal(text(document.querySelector('.dk-head__fresh')), '刚刚')
 })
 
@@ -1018,7 +1024,7 @@ test('"预填" puts the skill\'s call in the prompt, unsent, then is off for 5 s
 test('"重跑配置" puts the call of the configure skill the Deck service gives in the prompt, unsent', async t => {
   const page = await openSkills()
   t.after(page.close)
-  const button = page.document.querySelector<HTMLButtonElement>('.dk-notice.is-warn button')!
+  const button = page.document.querySelector<HTMLButtonElement>('#skill-list .dk-notice.is-warn button')!
 
   await page.click(button)
 
@@ -3742,4 +3748,136 @@ test('when the Deck service does not give the configure skill\'s call, every "�
   assert.deepEqual(reruns(page), { tasks: [true], map: [true], skills: [true], next: [true] })
   await page.click(page.document.querySelector('#tasks .dk-notice.is-warn button'))
   assert.deepEqual(prefills(page), [prefilled(CONFIGURE_CALL)])
+})
+
+// The notice that Deck's hook never ran, as the person sees it: its title,
+// its button, and the steps under them, if shown; undefined while it is not.
+const hookNotice = (page: { window: any; document: Document }) => {
+  const notice = [...page.document.querySelectorAll('.dk-notice')].find(each => text(each.querySelector('.dk-notice__title'))?.startsWith('钩子'))
+  if (!shown(page, notice ?? null)) return undefined
+  const steps = [...notice!.querySelectorAll('li')].filter(step => shown(page, step)).map(text)
+  return [text(notice!.querySelector('.dk-notice__title')), text(notice!.querySelector('button')), steps]
+}
+const HOOK_TITLE = '钩子未生效，开始执行不会登记占用。'
+const HOOK_STEPS = ['在终端里运行一次 codex。', '在钩子审查里信任 Deck 的钩子。', '重启桌面应用。']
+
+// A Deck service whose hook's tool has received a call when `receivedAt`
+// says it has.
+const deckWithHook = (hook: { receivedAt: number | null }, answer = deckWithSkills()) => (name: string, args: any) =>
+  name === 'deck_hook' ? answered(hook) : answer(name, args)
+
+test('where Deck\'s hook never ran, the Pane says so in an orange notice between the head and the tabs, in every tab and in a Task\'s detail, one line until "怎么做" shows the three steps and "收起" hides them', async t => {
+  const page = await openPage({ answer: deckWithHook({ receivedAt: null }) })
+  t.after(page.close)
+  const { document } = page
+  const notice = [...document.querySelectorAll('.dk-notice')].find(each => text(each.querySelector('.dk-notice__title')) === HOOK_TITLE)!
+
+  assert.deepEqual(hookNotice(page), [HOOK_TITLE, '怎么做', []])
+  assert.ok(notice.classList.contains('is-warn'))
+  assert.equal(notice.getAttribute('role'), 'status')
+  // Between the head and the tabs, which stay at the top as the page scrolls.
+  assert.equal(notice.previousElementSibling, document.querySelector('.dk-head'))
+  assert.equal(notice.nextElementSibling, document.querySelector('[role="tablist"]'))
+  assert.equal(notice.querySelector('code')?.textContent, 'codex')
+
+  await page.click(notice.querySelector('button'))
+  assert.deepEqual(hookNotice(page), [HOOK_TITLE, '收起', HOOK_STEPS])
+  // Shown in every tab, and in a Task's detail, as the person left it.
+  for (const tab of ['下一步', '地图', '技能', '任务']) {
+    await page.click(tabNamed(document, tab))
+    assert.deepEqual(hookNotice(page), [HOOK_TITLE, '收起', HOOK_STEPS], tab)
+  }
+  await page.click(rowOf(document, 70))
+  assert.equal(text(document.querySelector('#crumbs')), '任务 / #70')
+  assert.deepEqual(hookNotice(page), [HOOK_TITLE, '收起', HOOK_STEPS])
+  // Read again, it is as the person left it.
+  await page.click(document.querySelector('.dk-head button'))
+  assert.deepEqual(hookNotice(page), [HOOK_TITLE, '收起', HOOK_STEPS])
+
+  await page.click(notice.querySelector('button'))
+  assert.deepEqual(hookNotice(page), [HOOK_TITLE, '怎么做', []])
+  // Nothing closes it.
+  assert.equal(notice.querySelectorAll('button').length, 1)
+})
+
+test('the notice that Deck\'s hook never ran goes with the first read that finds a call from it received, and comes back with one that finds none', async t => {
+  const hook: { receivedAt: number | null } = { receivedAt: null }
+  const page = await openPage({ answer: deckWithHook(hook) })
+  t.after(page.close)
+  const hooks = () => page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_hook').length
+
+  assert.equal(hookNotice(page)?.[0], HOOK_TITLE)
+  assert.equal(hooks(), 1)
+  hook.receivedAt = Date.UTC(2026, 10, 26, 9, 0)
+  // The read every 60 seconds while the tab is shown.
+  await page.advance(60_000)
+  assert.equal(hooks(), 2)
+  assert.equal(hookNotice(page), undefined)
+
+  hook.receivedAt = null
+  await page.click(page.document.querySelector('.dk-head button'))
+  assert.equal(hookNotice(page)?.[0], HOOK_TITLE)
+})
+
+test('in a project that is not configured the Pane asks nothing of Deck\'s hook and says nothing of it; configured, it does', async t => {
+  let isConfigured = false
+  const configured = deckWithHook({ receivedAt: null })
+  const unconfigured = deckAt('/work/matt-deck', false)
+  const page = await openPage({ answer: (name, args) => (isConfigured ? configured : unconfigured)(name, args) })
+  t.after(page.close)
+  const hooks = () => page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_hook').length
+
+  assert.equal(text(page.document.querySelector('.dk-empty__title')), '此项目未配置。')
+  assert.equal(hookNotice(page), undefined)
+  assert.equal(hooks(), 0)
+
+  isConfigured = true
+  await page.click(page.document.querySelector('.dk-head button'))
+  assert.equal(hookNotice(page)?.[0], HOOK_TITLE)
+  assert.equal(hooks(), 1)
+
+  isConfigured = false
+  await page.click(page.document.querySelector('.dk-head button'))
+  assert.equal(hookNotice(page), undefined)
+  assert.equal(hooks(), 1)
+})
+
+// A Deck service that cannot say when its hook's tool last received a call,
+// as when the local state is not a database, while the project config and
+// the Session read as usual.
+const HOOK_FAILED = { content: [{ type: 'text', text: 'file is not a database' }], isError: true }
+
+test('where the Deck service cannot say whether Deck\'s hook ever ran, the first read shows no notice of it and reads the rest as usual', async t => {
+  const page = await openPage({ answer: (name, args) => (name === 'deck_hook' ? HOOK_FAILED : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const called = (tool: string) => page.sent.filter(message => message.method === 'tools/call' && message.params.name === tool).length
+  const configFailed = [...document.querySelectorAll('.dk-notice__title')].find(title => text(title) === '读取项目配置失败')!
+
+  assert.equal(hookNotice(page), undefined)
+  assert.equal(shown(page, configFailed), false)
+  assert.equal(shown(page, document.querySelector('[role="tablist"]')), true)
+  assert.deepEqual([called('deck_tasks'), called('deck_skills')], [1, 1])
+  assert.ok(shown(page, rowOf(document, 70)))
+})
+
+test('where the Deck service can no longer say whether Deck\'s hook ever ran, a later read hides the notice of it and reads the rest as usual', async t => {
+  let hookFails = false
+  const answer = deckWithHook({ receivedAt: null })
+  const page = await openPage({ answer: (name, args) => (name === 'deck_hook' && hookFails ? HOOK_FAILED : answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const called = (tool: string) => page.sent.filter(message => message.method === 'tools/call' && message.params.name === tool).length
+  const configFailed = [...document.querySelectorAll('.dk-notice__title')].find(title => text(title) === '读取项目配置失败')!
+
+  assert.equal(hookNotice(page)?.[0], HOOK_TITLE)
+  hookFails = true
+  await page.click(document.querySelector('.dk-head button'))
+
+  assert.equal(hookNotice(page), undefined)
+  assert.equal(shown(page, configFailed), false)
+  assert.equal(shown(page, document.querySelector('[role="tablist"]')), true)
+  assert.deepEqual([called('deck_tasks'), called('deck_skills')], [2, 2])
+  assert.equal(text(document.querySelector('.dk-head__fresh')), '刚刚')
+  assert.ok(shown(page, rowOf(document, 70)))
 })

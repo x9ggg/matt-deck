@@ -321,6 +321,16 @@ body{margin:0;background:var(--ground)}
       <span class="dk-head__fresh caption" id="fresh"></span>
       <button class="dk-btn dk-btn--sm" type="button" id="refresh" disabled>刷新</button>
     </header>
+    <div class="dk-notice is-warn" role="status" id="hook" hidden>
+      <div class="dk-notice__body">
+        <div class="dk-notice__line"><span class="dk-notice__title heading">钩子未生效，开始执行不会登记占用。</span><button class="dk-btn dk-btn--sm" type="button">怎么做</button></div>
+        <ol class="dk-steps" hidden>
+          <li>在终端里运行一次 <code>codex</code>。</li>
+          <li>在钩子审查里信任 Deck 的钩子。</li>
+          <li>重启桌面应用。</li>
+        </ol>
+      </div>
+    </div>
     <div class="dk-tabs" role="tablist" id="tabs" hidden>
       <button class="dk-tab" type="button" role="tab" aria-selected="false" data-tab="next">下一步</button>
       <button class="dk-tab" type="button" role="tab" aria-selected="true" data-tab="tasks">任务</button>
@@ -1013,6 +1023,13 @@ body{margin:0;background:var(--ground)}
     try {
       const [config, named] = await Promise.all([callTool('deck_config'), callTool('deck_session')])
       session = named
+      // In a Configured Project, the page says Deck's hook may not run while
+      // no call from it was received: Codex runs it only once the person
+      // trusted it, and until then a sent $implement records no Occupancy.
+      // Where the Deck service cannot say, the page says nothing of the
+      // hook and reads the rest as usual: the Tasks' own read says why the
+      // local state cannot be read.
+      const hook = config.configured ? await callTool('deck_hook').catch(() => undefined) : undefined
       // Configured again, the project's skills are read again; until that
       // read answers, what an earlier one said of implement no longer holds,
       // a read still out included, and every "执行" is off, whether or not
@@ -1029,6 +1046,7 @@ body{margin:0;background:var(--ground)}
       $('project').hidden = $('session').hidden = false
       $('loading').hidden = $('failed').hidden = true
       $('tabs').hidden = !config.configured
+      $('hook').hidden = !config.configured || hook?.receivedAt !== null
       $('unconfigured').hidden = config.configured
       showPanel()
       // A list read before keeps its freshness until the next read answers.
@@ -1501,6 +1519,12 @@ body{margin:0;background:var(--ground)}
   }
   for (const tab of tabs) tab.addEventListener('click', () => selectTab(tab.dataset.tab))
   $('back').addEventListener('click', back)
+  const howTo = $('hook').querySelector('button')
+  howTo.addEventListener('click', () => {
+    const steps = $('hook').querySelector('ol')
+    steps.hidden = !steps.hidden
+    howTo.textContent = steps.hidden ? '怎么做' : '收起'
+  })
   $('refresh').addEventListener('click', () => read(true))
 
   // While the tab is shown the Pane reads every 60 seconds, and once as it

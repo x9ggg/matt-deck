@@ -3527,7 +3527,7 @@ test('started for Codex, the hook\'s tool records the Session\'s Occupancy of ea
   }
 })
 
-test('the hook\'s tool records nothing for a prompt with no $implement on a Task, reading no Task Source, nor without a Session, nor for a closed or unknown Task', async t => {
+test('the hook\'s tool records no Occupancy for a prompt with no $implement on a Task, reading no Task Source, nor without a Session, nor for a closed or unknown Task', async t => {
   const dir = await configured()
   const user = await home()
   const gh = await fakeGh()
@@ -3543,10 +3543,12 @@ test('the hook\'s tool records nothing for a prompt with no $implement on a Task
     await callFrom(deck, 7 as unknown as string, HOOK_TOOL, { prompt: '$implement #3' }),
   ]
   assert.deepEqual(await gh.calls(), [])
-  assert.deepEqual(await readdir(user), [])
   quiet.push(await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #4\n$implement #8' }))
-  // Not even in the local state, for the next read to release.
-  assert.deepEqual(await readdir(user), [])
+  // Not even in the local state, for the next read to release; the time of
+  // each call is all it holds.
+  const state = new DatabaseSync(join(user, '.matt-deck', 'deck.sqlite'), { readOnly: true })
+  assert.deepEqual(state.prepare('SELECT * FROM occupancies').all(), [])
+  state.close()
 
   for (const each of quiet) {
     assert.deepEqual(each, { content: [], isError: false })
@@ -3671,6 +3673,129 @@ test('$implement typed on a Task another Session holds leaves it with that Sessi
   assert.deepEqual(occupants(groups.inProgress), { 3: CODEX_NEIGHBOUR })
 })
 
+// Deck's hook runs only once the person trusted it (ADR-0006): the Pane in a
+// tab tells from deck_hook whether it ever has.
+test('started for Codex, deck_hook answers when a hook\'s tool of this machine last received a call in a Configured Project, null before any, for the page only', async t => {
+  const dir = await configured()
+  const user = await home()
+  const clock = await fakeClock(Date.UTC(2026, 10, 26, 9, 0))
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const pane = startDeck(dir, { ...gh.env, ...clock.env, HOME: user }, 'codex')
+  t.after(pane.stop)
+  const elsewhere = startDeck(dir, { ...gh.env, ...clock.env, HOME: user }, 'codex')
+  t.after(elsewhere.stop)
+  const unconfigured = startDeck(await workspace(), { ...gh.env, ...clock.env, HOME: user }, 'codex')
+  t.after(unconfigured.stop)
+
+  const { result: listed } = await pane.request('tools/list')
+  const before = await callFrom(pane, CODEX_SESSION, 'deck_hook', {})
+  // A call from a Deck service started outside any Configured Project.
+  await callFrom(unconfigured, CODEX_NEIGHBOUR, HOOK_TOOL, { prompt: '$implement #3' })
+  const outside = await callFrom(pane, CODEX_SESSION, 'deck_hook', {})
+  // Another Deck service, on a prompt that runs nothing, with no Session set
+  // by the test.
+  await callFrom(elsewhere, undefined, HOOK_TOOL, { prompt: '只是问问 k3v9' })
+  const received = await callFrom(pane, CODEX_SESSION, 'deck_hook', {})
+  await clock.set(Date.UTC(2026, 10, 26, 9, 5))
+  await callFrom(pane, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' })
+  // A Deck service that read its clock before, writing after.
+  await clock.set(Date.UTC(2026, 10, 26, 9, 1))
+  await callFrom(elsewhere, CODEX_NEIGHBOUR, HOOK_TOOL, { prompt: '只是问问 k3v9' })
+  const again = await callFrom(pane, CODEX_SESSION, 'deck_hook', {})
+
+  assert.deepEqual(listed.tools.find((tool: any) => tool.name === 'deck_hook')._meta, { ui: { visibility: ['app'] } })
+  assert.equal(before.isError, false)
+  assert.deepEqual(before.structuredContent, { receivedAt: null })
+  assert.deepEqual(JSON.parse(before.content[0].text), before.structuredContent)
+  assert.deepEqual(outside.structuredContent, { receivedAt: null })
+  assert.deepEqual(received.structuredContent, { receivedAt: Date.UTC(2026, 10, 26, 9, 0) })
+  assert.deepEqual(again.structuredContent, { receivedAt: Date.UTC(2026, 10, 26, 9, 5) })
+})
+
+// The command line that installs Deck into Codex, run in the test's home.
+const CODEX_CLI = join(import.meta.dirname, '..', 'plugin', 'cli', 'codex.ts')
+const codexCli = (user: string, command: string) => exec(process.execPath, [CODEX_CLI, command], { env: { ...process.env, HOME: user } })
+
+// Codex asks for trust again once Deck's hook moves in the hooks file: an
+// install that writes the hook in forgets the calls received before it.
+test('install that writes Deck\'s hook into the Codex hooks forgets the hook\'s calls received before: deck_hook answers null', async t => {
+  const user = await home()
+  const deck = startDeck(await configured(), { HOME: user }, 'codex')
+  t.after(deck.stop)
+  await codexCli(user, 'install')
+  await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '只是问问 r2m8' })
+  await codexCli(user, 'uninstall')
+  // The person's own hook on UserPromptSubmit, ahead of where Deck's goes.
+  const hooks = join(user, '.codex', 'hooks.json')
+  await writeFile(hooks, `${JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] } }, null, 2)}\n`)
+  const received = (await callFrom(deck, CODEX_SESSION, 'deck_hook', {})).structuredContent
+
+  await codexCli(user, 'install')
+
+  assert.notEqual(received.receivedAt, null)
+  assert.deepEqual((await callFrom(deck, CODEX_SESSION, 'deck_hook', {})).structuredContent, { receivedAt: null })
+})
+
+test('install that finds Deck\'s hook there already keeps the time of the hook\'s last call', async t => {
+  const user = await home()
+  const clock = await fakeClock(Date.UTC(2026, 10, 26, 9, 0))
+  const deck = startDeck(await configured(), { ...clock.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+  await codexCli(user, 'install')
+  await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '只是问问 r2m8' })
+
+  await codexCli(user, 'install')
+
+  assert.deepEqual((await callFrom(deck, CODEX_SESSION, 'deck_hook', {})).structuredContent, { receivedAt: Date.UTC(2026, 10, 26, 9, 0) })
+})
+
+test('install that fails to forget the hook\'s calls, the local state not being a database, still writes Deck\'s hook in and succeeds, leaving the state as it is', async () => {
+  const user = await home()
+  await mkdir(join(user, '.matt-deck'))
+  const state = join(user, '.matt-deck', 'deck.sqlite')
+  await writeFile(state, 'not a database q4n7\n')
+
+  await codexCli(user, 'install')
+
+  const { hooks } = JSON.parse(await readFile(join(user, '.codex', 'hooks.json'), 'utf8'))
+  assert.deepEqual(
+    hooks.UserPromptSubmit.flatMap((group: any) => group.hooks).map((handler: any) => [handler.server, handler.tool]),
+    [['matt_deck', HOOK_TOOL]],
+  )
+  assert.equal(await readFile(state, 'utf8'), 'not a database q4n7\n')
+})
+
+test('install without a local state writes none', async () => {
+  const user = await home()
+
+  const { stdout } = await codexCli(user, 'install')
+
+  assert.match(stdout, /加上 Deck 的钩子/)
+  assert.deepEqual((await readdir(user)).sort(), ['.agents', '.codex'])
+})
+
+test('the hook\'s tool records the Occupancy when the time of the call fails to be written', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+  // A local state that refuses the time of a call from the hook.
+  await mkdir(join(user, '.matt-deck'))
+  const db = new DatabaseSync(join(user, '.matt-deck', 'deck.sqlite'))
+  db.exec('CREATE TABLE hook_calls (id INTEGER PRIMARY KEY CHECK (id = 0), received_at INTEGER NOT NULL)')
+  db.exec("CREATE TRIGGER refuse_call BEFORE INSERT ON hook_calls BEGIN SELECT RAISE(ABORT, 'refused z8q1'); END")
+  db.close()
+
+  const sent = await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' })
+
+  assert.deepEqual(sent, { content: [], isError: false })
+  assert.deepEqual((await callFrom(deck, CODEX_SESSION, 'deck_hook', {})).structuredContent, { receivedAt: null })
+  const { groups } = (await deck.callTool('deck_tasks', { refresh: true })).structuredContent
+  assert.deepEqual(occupants(groups.inProgress), { 3: CODEX_SESSION })
+})
+
 test('started for Codex, deck_report keeps a report sent with no Session under the Session the call comes from', async t => {
   const user = await home()
   const gh = await fakeGh()
@@ -3693,7 +3818,7 @@ test('started for Codex, deck_report keeps a report sent with no Session under t
   assert.deepEqual(reports.map((report: any) => [report.session, report.result]), [[CODEX_SESSION, '做完了。'], [CODEX_NEIGHBOUR, '旁边的。']])
 })
 
-test('only started for Codex does the Deck service offer the hook\'s tool, which the model sees too, and deck_execute, for the page only', async t => {
+test('only started for Codex does the Deck service offer the hook\'s tool, which the model sees too, and deck_execute and deck_hook, for the page only', async t => {
   const claude = startDeck(await configured())
   t.after(claude.stop)
   const codex = startDeck(await configured(), {}, 'codex')
@@ -3706,11 +3831,12 @@ test('only started for Codex does the Deck service offer the hook\'s tool, which
     [
       [HOOK_TOOL, { prompt: '$implement #3' }],
       ['deck_execute', { task: 3 }],
+      ['deck_hook', {}],
     ].map(([name, args]) => claude.request('tools/call', { name, arguments: args, _meta: { threadId: CODEX_SESSION } })),
   )
 
-  assert.deepEqual([named(forClaude, HOOK_TOOL), named(forClaude, 'deck_execute')], [undefined, undefined])
-  assert.deepEqual(refused.map(reply => reply.error?.code), [-32602, -32602])
+  assert.deepEqual([named(forClaude, HOOK_TOOL), named(forClaude, 'deck_execute'), named(forClaude, 'deck_hook')], [undefined, undefined, undefined])
+  assert.deepEqual(refused.map(reply => reply.error?.code), [-32602, -32602, -32602])
   assert.equal(named(forCodex, HOOK_TOOL)._meta, undefined)
   assert.deepEqual(named(forCodex, 'deck_execute')._meta, { ui: { visibility: ['app'] } })
 })

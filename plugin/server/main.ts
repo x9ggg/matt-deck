@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
+import { hookReceivedAt, receiveHookCall } from '../kernel/hook.ts'
 import { inspectProject } from '../kernel/inspect.ts'
 import { mapViews } from '../kernel/maps.ts'
 import { beat, endSession, implementedTasks, occupy, release, settleOccupancies } from '../kernel/occupancy.ts'
@@ -750,7 +751,17 @@ const codexTools = {
       const session = meta?.threadId
       try {
         // Outside a Configured Project, Codex's own Sessions included, at once.
-        if (typeof prompt !== 'string' || typeof session !== 'string' || session === '' || !(await readProjectConfig(workspace)).configured) {
+        if (!(await readProjectConfig(workspace)).configured) {
+          return SILENT
+        }
+        // The time this tool was called, which the Pane in a tab reads to
+        // tell whether Deck's hook runs. The agent sees this tool and can call
+        // it too, so the time says the tool was called, not that the hook ran.
+        // One that fails to be written stops nothing after it.
+        try {
+          receiveHookCall(homedir(), Date.now())
+        } catch {}
+        if (typeof prompt !== 'string' || typeof session !== 'string' || session === '') {
           return SILENT
         }
         const called = implementedTasks(prompt, callOf(host)(IMPLEMENT, undefined))
@@ -776,6 +787,17 @@ const codexTools = {
       }
 
       return SILENT
+    },
+  },
+  deck_hook: {
+    description:
+      'For the Pane in a tab: when a Deck service of this machine last received a call from Deck\'s hook on UserPromptSubmit in a Configured Project, as receivedAt in milliseconds since the epoch; null where none ever did. Codex runs the hook only once the person trusted it.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    _meta: { ui: { visibility: ['app'] } },
+    run: async (): Promise<ToolResult> => {
+      const result = { receivedAt: hookReceivedAt(homedir()) }
+
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
     },
   },
   deck_configure: {

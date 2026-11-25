@@ -301,7 +301,8 @@ test('install adds Deck\'s hook on UserPromptSubmit to the user\'s Codex hooks a
   assert.equal(await readFile(hooksFile(user), 'utf8'), installed)
   assert.ok(stdout.includes(hooksFile(user)), stdout)
   assert.ok(stdout.includes(`原来的文件备份在 ${join(user, '.codex', 'hooks.json.before-matt-deck')}`), stdout)
-  assert.match(stdout, /终端里运行一次 codex.*信任/)
+  // What to do before the hook runs, and how: Codex asks nowhere else.
+  assert.ok(stdout.includes('接下来两步：在终端里运行一次 codex，在钩子审查里信任 Deck 的钩子；再重启 Codex 桌面应用。'), stdout)
 
   const { stdout: removed } = await run(user, 'uninstall')
 
