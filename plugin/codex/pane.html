@@ -581,15 +581,26 @@ body{margin:0;background:var(--ground)}
       ? task.labels.find(each => WAITING_LABELS.includes(each))
       : task.labels.find(each => TRIAGE_LABELS.includes(each))
 
+  // The actions of a Task as it is held: this Session's is released; another
+  // Session's taken over, asked in the place `place`; an Orphaned one either.
+  const heldActions = (task, state, place) =>
+    state === 'running' ? [releaseButton(task.number, task.occupant)]
+    : state === 'other' ? [takeOverButton(task.number, place)]
+    : state === 'orphaned' ? [takeOverButton(task.number, place), releaseButton(task.number, task.occupant)]
+    : []
+
   const taskRow = (task, group) => {
     const state = stateOf(task, group)
+    // Asked to take it over, the row's place holds the asking.
+    if (isAsked(task, state, 'tasks')) return el('li', '', takeOverAsk(task, state))
     const status = statusOf(task, state)
     if (state === 'closed' && task.hasEvidence) status.push(glyphed(el('span', 'is-pass', '验收证据'), CHECK))
     const label = labelOf(task, state)
     const meta = [...status, ...(label === undefined ? [] : [el('span', 'dk-tag', label)])]
+    const actions = state === 'ready' ? [executeButton(task.number, '执行', 'dk-btn dk-btn--sm dk-btn--go')] : heldActions(task, state, 'tasks')
     const aside =
       state === 'closed' && task.closedAt !== null ? [el('span', 'dk-row__aside caption', shortTime(task.closedAt))]
-      : state === 'ready' ? [el('span', 'dk-row__actions', executeButton(task.number, '执行', 'dk-btn dk-btn--sm dk-btn--go'))]
+      : actions.length > 0 ? [el('span', 'dk-row__actions', ...actions)]
       : []
     const element = row(task, state, '', [], [], meta, aside)
     element.addEventListener('click', () => openTask(task.number))
@@ -716,6 +727,7 @@ body{margin:0;background:var(--ground)}
   let into
   const chosenTab = () => tabs.find(tab => tab.getAttribute('aria-selected') === 'true').dataset.tab
   const enter = step => {
+    closeTakeOver()
     into ??= { tab: chosenTab(), steps: [] }
     into.steps.push({ ...step, left: window.scrollY })
     showPanel()
@@ -731,29 +743,33 @@ body{margin:0;background:var(--ground)}
     drawStep()
     window.scrollTo(0, left)
   }
+  // What the step drew last; over it, a Task's detail holds the asking to
+  // take it over, where it was asked there.
+  const showStep = step => {
+    $('into-end').replaceChildren(...step.drawn.end)
+    const found = takeover?.place === 'detail' ? entries().find(([each]) => each.number === step.task) : undefined
+    const state = found && stateOf(...found)
+    $('into-body').replaceChildren(...(found !== undefined && isAsked(found[0], state, 'detail') ? [takeOverAsk(found[0], state)] : []), ...step.drawn.body)
+    // Drawn while another step was shown, its "执行" goes by the skills
+    // read since.
+    showExecutable()
+  }
   // The step shown: the way to it, what it drew last, then what it draws now.
   const drawStep = async () => {
     if (into === undefined) return
     const step = into.steps.at(-1)
-    const show = ({ end, body }) => {
-      $('into-end').replaceChildren(...end)
-      $('into-body').replaceChildren(...body)
-      // Drawn while another step was shown, its "执行" goes by the skills
-      // read since.
-      showExecutable()
-    }
     const way = [tabs.find(tab => tab.dataset.tab === into.tab).textContent, ...into.steps.slice(0, -1).map(each => each.crumb)]
     $('crumbs').replaceChildren(`${way.join(' / ')} / `, el('b', '', step.crumb))
-    show(step.drawn)
+    showStep(step)
     step.drawn = await step.draw()
-    if (into?.steps.at(-1) === step) show(step.drawn)
+    if (into?.steps.at(-1) === step) showStep(step)
   }
 
   // The detail of the Task `number`, entered from its row or from the detail
   // shown. What the list knows of it (its state, what blocks it) comes from
   // the list, the rest from its own read.
   const openTask = number =>
-    enter({ crumb: `#${number}`, withTasks: true, draw: () => drawTask(number), drawn: { end: [], body: [el('p', 'dk-why', `正在读取 #${number}…`)] } })
+    enter({ crumb: `#${number}`, task: number, withTasks: true, draw: () => drawTask(number), drawn: { end: [], body: [el('p', 'dk-why', `正在读取 #${number}…`)] } })
 
   const drawTask = async number => {
     let answer
@@ -806,9 +822,16 @@ body{margin:0;background:var(--ground)}
     const closeout = entry?.isPendingCloseout ? [closeoutButton(closeoutOf(number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
 
     return {
-      // The action its row has, then the link: a ready Task is executed; a
-      // Spec or Map is not, a Pending Closeout one has its closeout.
-      end: [...(state === 'ready' && entry.kind === undefined ? [executeButton(number, '执行', 'dk-btn dk-btn--sm dk-btn--go')] : []), ...closeout, open],
+      // The actions its row has, then the link: a ready Task is executed, a
+      // held one released or taken over; a Spec or Map is neither, a Pending
+      // Closeout one has its closeout.
+      end: [
+        ...(entry?.kind !== undefined ? []
+          : state === 'ready' ? [executeButton(number, '执行', 'dk-btn dk-btn--sm dk-btn--go')]
+          : heldActions(entry, state, 'detail')),
+        ...closeout,
+        open,
+      ],
       body: [el('div', 'dk-detail',
         el('div', 'dk-detail__title title', el('span', `dk-id${state === undefined ? '' : ` is-${state}`}`, `#${task.number}`), el('span', '', task.title)),
         meta,
@@ -903,6 +926,8 @@ body{margin:0;background:var(--ground)}
   // Evidence; when it was updated, or closed.
   const wallCard = card => {
     const state = stateOf(card, card.group)
+    // Asked to take it over, the card's place holds the asking.
+    if (isAsked(card, state, 'map')) return takeOverAsk(card, state)
     const edges = [
       ...(card.blockers.length > 0 ? [`被 ${refs(card.blockers)} 阻塞`] : []),
       ...(card.blocking.length > 0 ? [`挡着 ${refs(card.blocking)}`] : []),
@@ -919,8 +944,12 @@ body{margin:0;background:var(--ground)}
       el('span', 'dk-card__title heading', card.title),
       el('span', 'dk-card__meta caption', ...relation),
       el('div', 'dk-card__foot caption', el('span', '', state === 'closed' ? shortTime(card.closedAt) : `更新 ${shortTime(card.updatedAt).slice(0, 5)}`),
-        // The action its row in "任务" has: none for a Spec or Map.
-        ...(state === 'ready' && card.kind === undefined ? [executeButton(card.number, '执行', 'dk-btn dk-btn--sm dk-btn--go')] : [])))
+        // The action its row in "任务" has, an Orphaned one's "接管" alone,
+        // its "释放" in the detail: none for a Spec or Map.
+        ...(card.kind !== undefined ? []
+          : state === 'ready' ? [executeButton(card.number, '执行', 'dk-btn dk-btn--sm dk-btn--go')]
+          : state === 'orphaned' ? [takeOverButton(card.number, 'map')]
+          : heldActions(card, state, 'map'))))
   }
 
   // The "地图" tab: the Map View shown, its blocked Child Tasks past three
@@ -973,6 +1002,7 @@ body{margin:0;background:var(--ground)}
   // Reads the Tasks, the Task Source again when `refresh` asks for it, then
   // their Map Views from that read. A read that fails says why, in "任务" and
   // in "地图", above what was read before, if anything.
+  // Answers whether the Tasks were read.
   const readTasks = async refresh => {
     let failure
     try {
@@ -981,6 +1011,10 @@ body{margin:0;background:var(--ground)}
       if (viewed.ok) {
         list = answer
         maps = viewed.maps
+        // The Task asked to be taken over is asked no more once no other
+        // Session holds it: released, closed, gone, or this Session's by now.
+        const found = takeover === undefined ? undefined : entries().find(([each]) => each.number === takeover.number)
+        if (found === undefined || !['other', 'orphaned'].includes(stateOf(...found))) takeover = undefined
       } else {
         failure = FAILURE[viewed.failure.kind](viewed.failure.message)
       }
@@ -1001,6 +1035,7 @@ body{margin:0;background:var(--ground)}
       showMap()
     }
     showRecommendation()
+    return failure === undefined
   }
 
   // The call of the configure skill, as the Deck service gives it, read with
@@ -1018,8 +1053,19 @@ body{margin:0;background:var(--ground)}
   // earlier one answering after it is dropped.
   let skillsAsked
 
+  // The reads asked for, one after another: each begins once the one before
+  // it has ended, and "刷新" is off until the last has. Each answers whether
+  // the project config and the Session were read, and the Tasks too in a
+  // Configured Project.
+  let reading = Promise.resolve()
   const read = async (refresh = false) => {
     $('refresh').disabled = true
+    const before = reading
+    let ended
+    const asked = (reading = new Promise(resolve => {
+      ended = resolve
+    }))
+    await before
     try {
       const [config, named] = await Promise.all([callTool('deck_config'), callTool('deck_session')])
       session = named
@@ -1054,8 +1100,9 @@ body{margin:0;background:var(--ground)}
         readAt = undefined
         showFreshness()
       }
+      let tasksRead = true
       if (config.configured) {
-        await readTasks(refresh)
+        tasksRead = await readTasks(refresh)
         // Read again, the page no longer says a request was not made.
         if (refresh) asking = { ...asking, failure: undefined }
         // Every tab's "执行" goes by the skills: they are read with the first
@@ -1065,14 +1112,17 @@ body{margin:0;background:var(--ground)}
         // every step with "刷新", after what it is drawn from is read again.
         if (refresh || into?.steps.at(-1).withTasks) await drawStep()
       }
+      return tasksRead
     } catch (error) {
       $('failed').querySelector('.dk-notice__text').textContent = `Deck 服务出错：${error.message}。点“刷新”重试。`
       $('loading').hidden = true
       $('failed').hidden = false
       readAt = 'failed'
       showFreshness()
+      return false
     } finally {
-      $('refresh').disabled = false
+      ended()
+      if (reading === asked) $('refresh').disabled = false
     }
   }
 
@@ -1114,7 +1164,9 @@ body{margin:0;background:var(--ground)}
   // A "执行" of the Task `number`, which the page draws again as "执行"
   // stands: it fills in the Execute Prompt the Deck service gives, never
   // sends it, and occupies nothing; the hook does, once the person sends it.
-  const executeButton = (number, label, className) => {
+  // A button whose click ends in that prompt another way, `onClick`, is
+  // drawn as "执行" stands too.
+  const executeButton = (number, label, className, onClick = () => execute(number)) => {
     const button = el('button', className, label)
     button.type = 'button'
     button.dataset.execute = String(number)
@@ -1123,7 +1175,7 @@ body{margin:0;background:var(--ground)}
     // Not a click on the row it is in.
     button.addEventListener('click', event => {
       event.stopPropagation()
-      execute(number)
+      onClick()
     })
     return button
   }
@@ -1132,10 +1184,13 @@ body{margin:0;background:var(--ground)}
     button.disabled = filled !== undefined || implement?.copy !== 'same'
     button.textContent = filled === true ? '已填入' : button.dataset.label
   }
-  const execute = async number => {
+  // `before` runs first, every "执行" of the Task off meanwhile; answering
+  // false, nothing is filled in.
+  const execute = async (number, before = async () => true) => {
     filling.set(number, false)
     showExecutable()
     try {
+      if (!(await before())) return
       await fill((await callTool('deck_execute', { task: number })).prompt)
       filling.set(number, true)
       showExecutable()
@@ -1147,6 +1202,150 @@ body{margin:0;background:var(--ground)}
       filling.delete(number)
       showExecutable()
     }
+  }
+
+  // Taking over and releasing (docs/codex-tab-layout.md, "接管确认"). The
+  // takeover the person is asked to confirm: the Task's number, the place it
+  // was asked in ('tasks', 'map', 'detail', 'next'), why the last "接管"
+  // moved nothing, if it did not, and which of its buttons has the focus,
+  // 'confirm' or 'cancel', if one does. Kept here: each read draws the
+  // places anew, and a button off as it is drawn cannot take the focus.
+  // While "接管" moves the Occupancy, `moving` is true.
+  let takeover
+  // The focus the person moves onto the asking's buttons, or elsewhere.
+  document.addEventListener('focusin', event => {
+    if (takeover !== undefined) takeover.focus = event.target.dataset?.takeover
+  })
+  // Moved off the asking's button onto nothing in the page, a blank of it or
+  // outside it, the focus is not put back. A button drawn anew, or off, is
+  // left by the page, not the person.
+  document.addEventListener('focusout', event => {
+    const left = event.target
+    if (event.relatedTarget !== null || left.dataset?.takeover === undefined || left.disabled) return
+    queueMicrotask(() => {
+      if (takeover !== undefined && left.isConnected) takeover.focus = undefined
+    })
+  })
+  // Whether the Task, in the state it is in, is asked to be taken over in
+  // the place: only while another Session holds it, or it is Orphaned.
+  const isAsked = (task, state, place) =>
+    takeover?.number === task.number && takeover.place === place && (state === 'other' || state === 'orphaned')
+  // Every place the asking can be in, drawn as it now stands.
+  const showTakeOver = () => {
+    showTasks()
+    showMap()
+    showRecommendation()
+    if (into !== undefined) showStep(into.steps.at(-1))
+  }
+  const askTakeOver = (number, place) => {
+    takeover = { number, place, focus: 'cancel' }
+    showTakeOver()
+  }
+  const closeTakeOver = () => {
+    if (takeover === undefined) return
+    takeover = undefined
+    showTakeOver()
+  }
+  // "接管": asks, in the place it is in, to take the Task over. Off as
+  // "执行" is: the Execute Prompt follows the takeover.
+  const takeOverButton = (number, place) => executeButton(number, '接管', 'dk-btn dk-btn--sm', () => askTakeOver(number, place))
+  // "释放": releases the Occupancy the Session `holder` has of the Task, and
+  // asks nothing.
+  const releaseButton = (number, holder) => {
+    const button = smallButton('释放')
+    button.addEventListener('click', event => {
+      event.stopPropagation()
+      release(number, holder)
+    })
+    return button
+  }
+
+  // The asking, in the place of the Task's row, card or button: who executes
+  // it, then "接管" and "取消". Just asked, the focus goes onto "取消"; drawn
+  // anew, it stays on the button of the asking it was on.
+  const takeOverAsk = (task, state) => {
+    const glyph = plate(state)
+    glyph.classList.add('dk-plate--sm')
+    const title =
+      state === 'orphaned'
+        ? [`#${task.number} 的 Session 已结束`]
+        : [`#${task.number} 正由 ${task.occupantHost === session.sessionHost ? 'Session' : HOST_NAME[task.occupantHost]}`, el('span', 'mono', task.occupantShort), '执行']
+    let said = ['接管会把 Occupancy 转给本 Session。']
+    if (takeover.failure !== undefined) {
+      // The reason in the Pane's words, and the hint that holds here: not
+      // "刷新", which moves nothing, but "接管" again.
+      const { kind, message } = takeover.failure
+      said = FAILURE[kind]?.(message) ?? [`Deck 服务出错：${message}。点“刷新”重试。`]
+      said.push(said.pop().replace(/点“刷新”重试。$/, '再点“接管”重试。'))
+    }
+    const confirm = executeButton(task.number, '接管', 'dk-btn', () => takeOver(task.number, task.occupant))
+    const cancel = el('button', 'dk-btn dk-btn--quiet', '取消')
+    cancel.type = 'button'
+    // Off with "接管" while the Occupancy moves: closed then, it would move all
+    // the same.
+    cancel.disabled = takeover.moving === true
+    cancel.addEventListener('click', closeTakeOver)
+    confirm.dataset.takeover = 'confirm'
+    cancel.dataset.takeover = 'cancel'
+    const focus = { confirm, cancel }[takeover.focus]
+    // Once it is in the page, which the caller puts it in; "接管" off then
+    // takes it as it is on again.
+    if (focus !== undefined) queueMicrotask(() => focus.focus())
+    const words = el('span', 'dk-notice__text')
+    words.replaceChildren(...said)
+    const notice = el(
+      'div',
+      'dk-notice is-warn',
+      glyph,
+      el('div', 'dk-notice__body', el('span', 'dk-notice__title heading', ...title), words, el('div', 'dk-notice__actions', confirm, cancel)),
+    )
+    notice.setAttribute('role', 'status')
+    return notice
+  }
+
+  // Takes the Task `number` over from the Session `from`, as the person
+  // confirmed: the Occupancy moves to this Session at once, the Tasks are
+  // read again, and the Execute Prompt is filled in as "执行" fills it in.
+  // Not moved, nothing is filled in: the asking says why, or closes where the
+  // Task is closed or gone, or held by a third Session by now, as the Tasks
+  // read again show.
+  const takeOver = (number, from) =>
+    // A button of an asking closed since, still in the page, does nothing.
+    takeover === undefined ? undefined : execute(number, async () => {
+      takeover.moving = true
+      showTakeOver()
+      let answer
+      try {
+        answer = await callTool('deck_occupy', { session: session.session, task: number, takeOver: from })
+      } catch (error) {
+        answer = { ok: false, failure: { message: error.message } }
+      }
+      // Drawn at once, why or closed, then as the Tasks are read again.
+      if (takeover?.number === number) {
+        takeover = answer.ok || answer.failure.kind === 'not-open' ? undefined : { ...takeover, moving: false, failure: answer.failure }
+        showTakeOver()
+      }
+      // Not moved, "接管" is on again at once: the Tasks are read again
+      // behind any read under way, which it does not wait for.
+      const readAgain = read()
+      if (!(answer.ok && answer.occupied)) return false
+      // Read again, the project may be not configured by now, or implement
+      // not the same copy: nothing is filled in then. A read that fails
+      // cannot say: nothing is filled in either, and the next read that
+      // answers draws the Task as this Session's.
+      return (await readAgain) && implement?.copy === 'same'
+    })
+
+  // Releases the Occupancy the Session `holder` has of the Task `number`,
+  // then reads the Tasks again, which show it in the group it is in now.
+  // One that passed to another Session since stays with it.
+  const release = async (number, holder) => {
+    try {
+      await callTool('deck_release', { task: number, session: holder })
+    } catch {
+      // Not released, the Tasks read again show it held still.
+    }
+    await read()
   }
 
   // Why "执行" is off, said once at the top of the 任务 and 地图 tabs, and
@@ -1174,6 +1373,9 @@ body{margin:0;background:var(--ground)}
       }
     }
     for (const button of document.querySelectorAll('[data-execute]')) drawExecute(button)
+    // The asking's "接管" the focus was on, off until now, takes it again.
+    const focus = takeover?.focus === undefined ? null : document.querySelector(`[data-takeover="${takeover.focus}"]`)
+    if (focus !== null && !focus.disabled && document.activeElement !== focus) focus.focus()
   }
 
   const smallButton = (label, className = '') => {
@@ -1428,10 +1630,12 @@ body{margin:0;background:var(--ground)}
         ...field('理由', reason),
         ...field('阻塞', blockers),
       ),
-      // Executed unless there is no Task, or it is closed, held by another
-      // Session or Orphaned, this Session's own Orphaned Task included.
-      ...(task === null || ['closed', 'other', 'orphaned'].includes(state)
-        ? []
+      // Executed unless there is no Task, or it is closed; held by another
+      // Session or Orphaned, this Session's own Orphaned Task included, after
+      // the person confirms taking it over, asked in the button's place.
+      ...(task === null || state === 'closed' ? []
+        : found !== undefined && isAsked(found[0], state, 'next') ? [takeOverAsk(found[0], state)]
+        : state === 'other' || state === 'orphaned' ? [executeButton(task, '执行这个 Task', 'dk-btn dk-btn--primary dk-btn--block', () => askTakeOver(task, 'next'))]
         : [executeButton(task, '执行这个 Task', 'dk-btn dk-btn--primary dk-btn--block')]),
     )
   }
@@ -1509,6 +1713,7 @@ body{margin:0;background:var(--ground)}
   const selectTab = chosen => {
     for (const each of tabs) each.setAttribute('aria-selected', String(each.dataset.tab === chosen))
     into = undefined
+    closeTakeOver()
     if (isSwitching) {
       isSwitching = false
       showMap()

@@ -60,7 +60,7 @@ Codex 桌面应用的标签页里，Pane 的每个画面怎么排。画面在 [`
 
 - 预填的按钮点过之后停用 5 秒，字换成“已填入”，然后换回。画面见 `#tasks-filled`。这样连点两下不会往输入框里填两份。
 - “我现在该做什么”例外：点过之后进入等待，见“下一步”。
-- 对被其他 Session 占用的 Task 点“执行”，先出接管确认，见“任务”。
+- 对被其他 Session 占用的 Task 点“接管”或“执行这个 Task”，先出接管确认，见“任务”。
 
 ## 下一步
 
@@ -78,7 +78,7 @@ Codex 桌面应用的标签页里，Pane 的每个画面怎么排。画面在 [`
 - 没有取消，没有忙碌状态。“再问一次”在等待期间和停止之后都能点，点了重新填入、重新计时，旧请求之后到的回报不显示。
 - 等待期间点过“再问一次”之后，`#next-waiting` 里那句话换成“已重新填入。输入框里上一份还在的话，先删掉再发送。”。宿主把新的一份接在后面，页面看不到输入框，只能提醒。
 - Recommendation 的卡片：眉题“下一个成就”、Task 的标题和编号、四个字段（下一步、技能、理由、阻塞）、主按钮“执行这个 Task”。字段没有内容时写“无”，不省略。技能名照 Codex 的写法。
-- 推荐的 Task 被其他 Session 占用时，点“执行这个 Task”先出接管确认，画在主按钮的位置上。
+- 推荐的 Task 被其他 Session 占用或是 Orphaned 时，点“执行这个 Task”先出接管确认，画在主按钮的位置上。
 - 原因的两种写法：“Codex 里找不到 ask-matt，不能预填。”和“Codex 里的 ask-matt 不是同一份，不能预填。”
 
 ## 任务
@@ -105,12 +105,15 @@ Codex 桌面应用的标签页里，Pane 的每个画面怎么排。画面在 [`
 | Spec 或 Map | 各分组的计数 | 地图 |
 | Pending Closeout 的 Spec | `待收尾核对` | 收尾核对、地图 |
 
-**接管确认**（`#tasks-takeover`、`#tasks-takeover-host`、`#tasks-takeover-orphaned`）。对其他 Session 占用的 Task 点“接管”，或者从 Recommendation、详情里对它点“执行”时，这一行的位置上换成一条提示，列表的其余部分不动。
+**接管确认**（`#tasks-takeover`、`#tasks-takeover-host`、`#tasks-takeover-orphaned`）。对其他 Session 占用的或 Orphaned 的 Task 点“接管”（行上、卡片上、详情的返回栏里），或者在 Recommendation 里对它点“执行这个 Task”时，点的那个位置上换成一条提示：行的位置、卡片的位置、详情的返回栏下面、Recommendation 主按钮的位置。列表的其余部分不动。
 
 - 标题说谁在执行：`#72 正由 Session 045b96fc 执行`；另一个宿主的 Session 写成 `#69 正由 Claude Code 3f9c21d0 执行`；Orphaned 的写 `#75 的 Session 已结束`。说明都是“接管会把 Occupancy 转给本 Session。”
 - 两个按钮：“接管”和“取消”。提示出现时焦点落在“取消”上。
-- 点“接管”：Occupancy 转给本 Session，再把 Execute Prompt 填进输入框。点“取消”：提示收起，什么都不变。
-- “释放”不用确认，点了直接释放。
+- 点“接管”：Occupancy 转给本 Session，再把 Execute Prompt 填进输入框；转移进行中“取消”和“接管”一同停用，转移结束后恢复。点“取消”：提示收起，什么都不变。
+- “接管”和“执行”一同停用：`implement` 不能用时（见下面“执行不能用”一段），以及这个 Task 的 Execute Prompt 正在填入、填入后的 5 秒里。
+- 没有接管成：Deck 服务说了原因的，提示留着，说明换成原因，末尾是“再点“接管”重试。”；Task 已关闭或不在了，或者已经转给第三个 Session，提示收起，列表照重新读到的画。
+- 换标签页、进入或退出详情时提示收起；这个 Task 不再被其他 Session 占用时（被释放、已关闭）也收起。
+- “释放”不用确认，点了直接释放。接管和释放之后都重新读一次 Task。接管成了、这次读取却出错的，不填 Execute Prompt，下一次读到时这个 Task 画成本 Session 的。
 
 **Pending Closeout**（`#tasks-closeout`）。Child Task 全部关闭而 Spec 还开着：这一行换成金色虚线框，图形是 ◈，进度环走满，状态词写“待收尾核对”，动作是金色的“收尾核对”和“地图”。不写“已完成”，不写“验收通过”。
 
