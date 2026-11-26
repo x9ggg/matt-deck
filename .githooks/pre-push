@@ -2,13 +2,16 @@
 # Pushing to origin publishes. Refuses a commit whose author or committer
 # email is not one of GitHub's noreply ones, or whose message or added lines
 # hold a path of the machine it was written on (private-paths, beside this).
+# Then runs npm test and npm run check, and refuses the push if either fails.
 paths="$(dirname "$0")/private-paths"
 zero=$(git hash-object --stdin </dev/null | tr '0-9a-f' '0')
 status=0
+pushed=
 
 while read -r _ local_sha _ remote_sha; do
   # A deleted ref pushes nothing.
   [ "$local_sha" = "$zero" ] && continue
+  pushed=1
   if [ "$remote_sha" = "$zero" ]; then
     commits=$(git rev-list "$local_sha" --not --remotes="$1")
   else
@@ -27,5 +30,18 @@ while read -r _ local_sha _ remote_sha; do
     fi
   done
 done
+
+# The tests run on the working tree the push is made from, uncommitted
+# changes included, so push from a clean tree at the commit being pushed.
+if [ "$status" = 0 ] && [ -n "$pushed" ]; then
+  log=$(mktemp)
+  if { npm test && npm run check; } >"$log" 2>&1 </dev/null; then
+    rm -f "$log"
+  else
+    tail -n 40 "$log" >&2
+    echo "pre-push: npm test or npm run check failed; the whole output is in $log" >&2
+    status=1
+  fi
+fi
 
 exit $status
