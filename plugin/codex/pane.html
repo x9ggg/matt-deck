@@ -674,7 +674,7 @@ body{margin:0;background:var(--ground)}
           event.stopPropagation()
           openMap(container.number)
         })
-        const closeout = container.isPendingCloseout ? [closeoutButton(closeoutOf(container.number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
+        const closeout = container.isPendingCloseout ? [closeoutButton(container.number, closeoutOf(container.number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
         return containerRow(container, [el('span', 'dk-row__actions', ...closeout, open)])
       }),
     )
@@ -764,8 +764,9 @@ body{margin:0;background:var(--ground)}
     const state = found && stateOf(...found)
     $('into-body').replaceChildren(...(found !== undefined && isAsked(found[0], state, 'detail') ? [takeOverAsk(found[0], state)] : []), ...step.drawn.body)
     // Drawn while another step was shown, its "执行" goes by the skills
-    // read since.
+    // read since, and its prefills as they stand.
     showExecutable()
+    showPrefills()
   }
   // The step shown: the way to it, what it drew last, then what it draws now.
   const drawStep = async () => {
@@ -831,14 +832,15 @@ body{margin:0;background:var(--ground)}
     const open = el('button', 'dk-btn dk-btn--sm dk-btn--quiet', '在 GitHub 打开')
     open.type = 'button'
     // Through the Host, which opens it in the browser: the page holds no link.
-    // Refused, the result notice says so.
-    open.addEventListener('click', () =>
+    // Refused, the result notice says so; clicked again, it goes.
+    open.addEventListener('click', () => {
+      closeResult()
       request('ui/open-link', { url: task.url }).catch(error =>
         showResult('没有打开链接', `宿主拒绝了这次打开${error.message === '' ? '' : `：${error.message}`}。再点一次重试。`),
-      ),
-    )
+      )
+    })
 
-    const closeout = entry?.isPendingCloseout ? [closeoutButton(closeoutOf(number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
+    const closeout = entry?.isPendingCloseout ? [closeoutButton(number, closeoutOf(number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
     // The Spec or Map it is under, as the list holds it; clicked, its Map View.
     const parent = list.containers.find(container => container.number === entry?.parent)
     const up = el('button', 'dk-parent__link', parent === undefined ? '' : `${parent.kind === 'spec' ? 'Spec' : 'Map'} #${parent.number} ${parent.title}`)
@@ -891,17 +893,12 @@ body{margin:0;background:var(--ground)}
   // read with the list gives it; none where deck_map answered from a read
   // that found it no Pending Closeout.
   const closeoutOf = number => maps.find(map => map.number === number)?.closeoutPrompt ?? null
-  // "收尾核对", which puts the closeout check in the prompt, off with none; on
-  // a row, it is no click on the row.
-  const closeoutButton = (prompt, className) => {
+  // "收尾核对" of the Spec `number`, which puts the closeout check in the
+  // prompt, off with none; on a row, it is no click on the row.
+  const closeoutButton = (number, prompt, className) => {
     const button = el('button', className, '收尾核对')
     button.type = 'button'
-    button.disabled = prompt === null
-    button.addEventListener('click', event => {
-      event.stopPropagation()
-      prefill(button, prompt)
-    })
-    return button
+    return prefiller(button, `closeout:${number}`, () => prompt, prompt === null)
   }
   const CARD_STATE = { ready: '可执行', running: '进行中', other: '进行中', orphaned: 'Orphaned', blocked: '阻塞', closed: '已解锁' }
   // The card's four counts: the group, its glyph, its name.
@@ -944,7 +941,7 @@ body{margin:0;background:var(--ground)}
     return el('article', `dk-spec${map.isPendingCloseout ? ' is-closeout' : ''}`, head, el('span', 'dk-spec__title title', map.title),
       ...(map.goal === null ? [] : [el('span', 'dk-spec__goal', map.goal)]),
       el('div', 'dk-spec__stats', ...counts), progress,
-      ...(map.isPendingCloseout ? [el('div', 'dk-spec__foot caption', el('span', '', 'Child Task 已全部解锁，Spec 还没关闭。'), closeoutButton(map.closeoutPrompt, 'dk-btn dk-btn--unlock'))] : []))
+      ...(map.isPendingCloseout ? [el('div', 'dk-spec__foot caption', el('span', '', 'Child Task 已全部解锁，Spec 还没关闭。'), closeoutButton(map.number, map.closeoutPrompt, 'dk-btn dk-btn--unlock'))] : []))
   }
 
   // A Child Task's card: its glyph, number and state; its title; what blocks
@@ -1207,42 +1204,71 @@ body{margin:0;background:var(--ground)}
   // Refused from a button, the result notice says to click the button, by
   // its words `label`, again.
   const notFilled = (error, label) => showResult('没有填入输入框', `${refusal(error)}再点“${label}”重试。`)
-  // The last prefill from each button.
-  const prefilled = new WeakMap()
-  // Fills in the text from the button, which is off from the click and stays
-  // off for 5 seconds once it is filled in, so a second click fills in no
-  // second copy. Refused by the Host, the button is on again at once and the
-  // result notice says why; not answered in 10 seconds, it is on again and
-  // the notice says so. An answer after that counts while the button has
-  // filled in nothing since.
-  const prefill = async (button, text) => {
+  // The prefills from a button being filled in, or filled in the last 5
+  // seconds, `filled` then, by what they fill in: a skill's call by the
+  // skill's name, the configure skill's call, a Spec's closeout check by its
+  // number. Every button filling in the same, drawn before or since, is off
+  // meanwhile, so no second copy goes in the prompt.
+  const prefilling = new Map()
+  // The last prefill of each.
+  const prefilled = new Map()
+  // The button, filling in what `text()` gives as the thing `key`, off
+  // besides while `off`: drawn as the prefills stand, and drawn so again
+  // with them. Not a click on the row it is in.
+  const prefiller = (button, key, text, off) => {
+    button.dataset.prefill = key
+    button.dataset.label = button.textContent
+    button.dataset.off = String(off)
+    drawPrefill(button)
+    button.addEventListener('click', event => {
+      event.stopPropagation()
+      prefill(key, button.dataset.label, text())
+    })
+    return button
+  }
+  const drawPrefill = button => {
+    const under = prefilling.get(button.dataset.prefill)
+    button.disabled = button.dataset.off === 'true' || under !== undefined
+    button.textContent = under?.filled ? '已填入' : button.dataset.label
+  }
+  const showPrefills = () => {
+    for (const button of document.querySelectorAll('[data-prefill]')) drawPrefill(button)
+  }
+  // Fills in the text as the thing `key`, from a button with the words
+  // `label`; every button of the same is off from the click and stays off
+  // for 5 seconds once it is filled in. Refused by the Host, they are on
+  // again at once and the result notice says why; not answered in 10
+  // seconds, they are on again and the notice says so. An answer after that
+  // counts while nothing filled in the same since.
+  const prefill = async (key, label, text) => {
     closeResult()
-    const label = button.textContent
-    const asked = {}
-    prefilled.set(button, asked)
-    const on = () => {
-      button.textContent = label
-      button.disabled = false
+    const asked = { filled: false }
+    prefilled.set(key, asked)
+    prefilling.set(key, asked)
+    showPrefills()
+    const done = () => {
+      if (prefilling.get(key) === asked) prefilling.delete(key)
+      showPrefills()
     }
-    button.disabled = true
     let unanswered
     try {
       await fill(text, () => {
-        on()
+        done()
         unanswered = showUnanswered(`再点“${label}”重试。`)
       })
     } catch (error) {
-      if (prefilled.get(button) !== asked) return
+      if (prefilled.get(key) !== asked) return
       notFilled(error, label)
-      on()
+      done()
       return
     }
-    if (prefilled.get(button) !== asked) return
+    if (prefilled.get(key) !== asked) return
     closeUnanswered(unanswered)
-    button.textContent = '已填入'
-    button.disabled = true
+    asked.filled = true
+    prefilling.set(key, asked)
+    showPrefills()
     await new Promise(resolve => setTimeout(resolve, 5_000))
-    if (prefilled.get(button) === asked) on()
+    done()
   }
 
   // implement as the last read of the skills lists it: undefined before the
@@ -1568,9 +1594,7 @@ body{margin:0;background:var(--ground)}
         notice.querySelector('.dk-notice__text').textContent = why[1]
         // Drawn anew, as the 技能 tab's: off while the Deck service has given
         // no call of the configure skill.
-        const rerun = smallButton('重跑配置')
-        rerun.disabled = configureCall === undefined
-        rerun.addEventListener('click', () => prefill(rerun, configureCall))
+        const rerun = prefiller(smallButton('重跑配置'), 'configure', () => configureCall, configureCall === undefined)
         const line = notice.querySelector('.dk-notice__line')
         line.replaceChildren(line.firstElementChild, rerun)
       }
@@ -1610,15 +1634,7 @@ body{margin:0;background:var(--ground)}
   // Codex finds a skill by its name in its own skill directories; a call it
   // finds another file for, or none, runs no skill of the Skill Source.
   const UNPREFILLABLE = { different: 'Codex 里的不是同一份，不能预填。', missing: 'Codex 里找不到，不能预填。' }
-  const prefillButton = skill => {
-    const button = smallButton('预填', 'dk-btn--go')
-    button.disabled = skill.copy !== 'same'
-    button.addEventListener('click', event => {
-      event.stopPropagation()
-      prefill(button, skill.call)
-    })
-    return button
-  }
+  const prefillButton = skill => prefiller(smallButton('预填', 'dk-btn--go'), `skill:${skill.name}`, () => skill.call, skill.copy !== 'same')
 
   // A skill's text, entered from its row, with its "预填" at the end of the
   // bar (see "Entering and going back"), on or off by what the last read of
@@ -1699,9 +1715,7 @@ body{margin:0;background:var(--ground)}
     ]
     const unprefillable = skills.filter(skill => skill.copy !== 'same').length
     if (unprefillable > 0) {
-      const rerun = smallButton('重跑配置')
-      rerun.disabled = configureCall === undefined
-      rerun.addEventListener('click', () => prefill(rerun, configureCall))
+      const rerun = prefiller(smallButton('重跑配置'), 'configure', () => configureCall, configureCall === undefined)
       const notice = el(
         'div',
         'dk-notice is-warn',
@@ -1910,8 +1924,7 @@ body{margin:0;background:var(--ground)}
     if (why !== undefined) {
       const rerun = el('button', 'dk-btn', '重跑配置')
       rerun.type = 'button'
-      rerun.disabled = configureCall === undefined
-      rerun.addEventListener('click', () => prefill(rerun, configureCall))
+      prefiller(rerun, 'configure', () => configureCall, configureCall === undefined)
       shown.push(el('div', 'dk-next__line', el('span', 'dk-why caption', why), rerun))
     }
     $('next').replaceChildren(el('div', 'dk-next', ...shown), ...(asking.phase === 'answered' ? [askButton('再问一次', 'dk-btn')] : []))
@@ -1971,7 +1984,7 @@ body{margin:0;background:var(--ground)}
   document.addEventListener('visibilitychange', readIfShown)
 
   const configure = $('unconfigured').querySelector('button')
-  configure.addEventListener('click', () => prefill(configure, configureCall))
+  prefiller(configure, 'configure', () => configureCall, false)
 
   follow(
     (

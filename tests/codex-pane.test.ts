@@ -5877,3 +5877,102 @@ test('"我现在该做什么" the Host answers once it was clicked again, while 
   await page.advance(2_000)
   assert.deepEqual(deck.reads, [])
 })
+
+test('a prefill the Host answers after a read drew its button anew counts on the button drawn since: taken, it says 已填入 for 5 seconds; clicked again since, a refusal of the first changes nothing', async t => {
+  const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)), answerMessage: () => undefined })
+  t.after(page.close)
+  const { document } = page
+  const closeout = () => rowOf(document, 64).querySelector<HTMLButtonElement>('button')!
+
+  await page.click(closeout())
+  await page.advance(10_000)
+  assert.equal(topNotice(page)?.title, '宿主还没应答这次预填。')
+  const drawnBefore = closeout()
+  await page.advance(60_000)
+  assert.notEqual(closeout(), drawnBefore)
+  await page.respond(prefillsSent(page)[0], { result: {} })
+  assert.equal(topNotice(page), undefined)
+  assert.deepEqual([text(closeout()), closeout().disabled], ['已填入', true])
+  await page.advance(5_000)
+  assert.deepEqual([text(closeout()), closeout().disabled], ['收尾核对', false])
+
+  await page.click(closeout())
+  await page.advance(10_000)
+  await page.advance(60_000)
+  await page.click(closeout())
+  assert.deepEqual([text(closeout()), closeout().disabled], ['收尾核对', true])
+  await page.respond(prefillsSent(page)[1], { error: { code: -32000, message: REFUSAL } })
+  assert.equal(topNotice(page), undefined)
+  assert.deepEqual([text(closeout()), closeout().disabled], ['收尾核对', true])
+  await page.respond(prefillsSent(page)[2], { result: {} })
+  assert.deepEqual([text(closeout()), closeout().disabled], ['已填入', true])
+})
+
+test('a prefill goes by what it fills in: the 5 seconds of a "收尾核对" hold for its Spec\'s every "收尾核对", of a skill\'s "预填" for its row and its text, of a "重跑配置" for every "重跑配置", through reads, tabs and details', async t => {
+  const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)) })
+  const { document } = page
+  const state = (button: Element | null | undefined) => [text(button!), (button as HTMLButtonElement).disabled]
+
+  await page.click(rowOf(document, 64).querySelector('button'))
+  await page.advance(1_000)
+  await page.click(tabNamed(document, '地图'))
+  assert.deepEqual(state(document.querySelector('#map .dk-spec__foot button')), ['已填入', true])
+  await page.click(tabNamed(document, '任务'))
+  await page.click(rowOf(document, 64))
+  assert.deepEqual(state(barButton(document, '已填入')), ['已填入', true])
+  await page.click(barButton(document, '返回'))
+  await page.advance(4_000)
+  assert.deepEqual(state(rowOf(document, 64).querySelector('button')), ['收尾核对', false])
+  page.close()
+
+  const skills = SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy: 'different' } : skill))
+  const other = await openPage({ answer: deckWithSkills(skills) })
+  t.after(other.close)
+  const reruns = () => [...other.document.querySelectorAll('button')].filter(each => ['重跑配置', '已填入'].includes(text(each)!) && shown(other, each))
+  const row = () => [...other.document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === '$ask-matt')!.querySelector('button')!
+  await other.click(other.document.querySelector('#tasks-noexec button'))
+  await other.click(tabNamed(other.document, '技能'))
+  assert.deepEqual(reruns().map(state), [['已填入', true]])
+  await other.click(row())
+  await other.click(other.document.querySelector('.dk-head button'))
+  assert.deepEqual(state(row()), ['已填入', true])
+  await other.click([...other.document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === '$ask-matt')!)
+  assert.deepEqual(state(barButton(other.document, '已填入')), ['已填入', true])
+  await other.advance(5_000)
+  assert.deepEqual(state(barButton(other.document, '预填')), ['预填', false])
+})
+
+test('"执行" the Host answers, taken, after it was clicked again changes nothing', async t => {
+  const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)), answerMessage: () => undefined })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowExecute(document, 81))
+  await page.advance(10_000)
+  await page.click(rowExecute(document, 81))
+  await page.respond(prefillsSent(page)[0], { result: {} })
+  assert.deepEqual(executeShown(rowExecute(document, 81)), ['执行', false])
+  assert.equal(topNotice(page), undefined)
+})
+
+test('"在 GitHub 打开" clicked again after a refusal puts the notice of it away, and the Host answers {} unless the test says otherwise', async t => {
+  let refusing = true
+  const page = await openPage({ answer: deckAt('/work/matt-deck'), answerOpenLink: () => (refusing ? { error: { code: -32000, message: REFUSAL } } : { result: {} }) })
+  t.after(page.close)
+  await page.click(rowOf(page.document, 70))
+  await page.click(barButton(page.document, '在 GitHub 打开'))
+  assert.equal(resultShown(page)?.title, '没有打开链接')
+  refusing = false
+  await page.click(barButton(page.document, '在 GitHub 打开'))
+  assert.equal(resultShown(page), undefined)
+
+  // Unless told otherwise, the Host answers {}.
+  const plain = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(plain.close)
+  const answers: any[] = []
+  plain.window.addEventListener('message', (event: any) => answers.push(event.data))
+  await plain.click(rowOf(plain.document, 70))
+  await plain.click(barButton(plain.document, '在 GitHub 打开'))
+  const asked = plain.sent.find(message => message.method === 'ui/open-link')
+  assert.deepEqual(answers.find(each => each.id === asked.id)?.result, {})
+})
