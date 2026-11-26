@@ -738,12 +738,17 @@ body{margin:0;background:var(--ground)}
   //
   // A view enters a step with enter({ crumb, draw, drawn }) from its tab's
   // content or from the step shown: `crumb` names it in the way ('#70',
-  // '$implement'); `draw` reads what it shows and answers { end, body }, the
-  // elements at the end of the bar and its content; `drawn` is what it shows
-  // until the first drawing answers; `withTasks`, whether it is drawn from the
-  // Tasks. A step draws as it is entered, as the way goes back to it, and with
-  // "刷新"; drawn from the Tasks, with each read of them too. What it drew last
-  // stays until the next drawing answers. "返回" goes back one step, to where
+  // '$implement'); `draw` reads what it shows and answers { end, body, key },
+  // the elements at the end of the bar and its content, and what they were
+  // drawn from, or { end, failed } where its read failed, `failed` the
+  // notice of why; `drawn` is what it shows until the first drawing answers;
+  // `withTasks`, whether it is drawn from the Tasks. A step draws as it is
+  // entered, as the way goes back to it, and with "刷新"; drawn from the
+  // Tasks, with each read of them too. What it drew last stays until the
+  // next drawing answers, and stays as it is where that is drawn from the
+  // same; only the drawing begun last counts. A read that fails, of the step
+  // or of the Tasks it is drawn from, says why over what the step read
+  // before, if anything. "返回" goes back one step, to where
   // the page was scrolled when it was entered. The first step entered from a
   // tab's content may be given `via`, the crumbs of what the tab shows
   // between it and the step ('#64' of a Map View), which the way keeps.
@@ -771,7 +776,9 @@ body{margin:0;background:var(--ground)}
   }
   // What the step drew last; over it, a Task's detail holds the asking to
   // take it over, where it was asked there.
+  let shownDrawn
   const showStep = step => {
+    shownDrawn = step.drawn
     $('into-end').replaceChildren(...step.drawn.end)
     const found = takeover?.place === 'detail' ? entries().find(([each]) => each.number === step.task) : undefined
     const state = found && stateOf(...found)
@@ -788,11 +795,32 @@ body{margin:0;background:var(--ground)}
     const step = into.steps.at(-1)
     const way = [tabs.find(tab => tab.dataset.tab === into.tab).textContent, ...into.via, ...into.steps.slice(0, -1).map(each => each.crumb)]
     $('crumbs').replaceChildren(`${way.join(' / ')} / `, el('b', '', step.crumb))
-    showStep(step)
-    const drawn = await step.draw()
-    if (!current()) return
+    if (shownDrawn !== step.drawn) showStep(step)
+    const drawing = (step.drawing = {})
+    const answer = await step.draw()
+    if (!current() || step.drawing !== drawing) return
+    // Read the same as before, the step keeps what it drew of it.
+    if (answer.failed === undefined && answer.key !== step.read?.key) step.read = answer
+    const failed = answer.failed === undefined ? [] : [answer.failed]
+    // Drawn from the Tasks, a read of them that failed says why over it too.
+    if (step.withTasks && !$('tasks-failed').hidden) {
+      const tasksFailed = $('tasks-failed').cloneNode(true)
+      tasksFailed.removeAttribute('id')
+      failed.unshift(tasksFailed)
+    }
+    const drawn = {
+      end: step.read?.end ?? answer.end,
+      body: [...failed, ...(step.read?.body ?? [])],
+      key: JSON.stringify([...failed.map(each => each.textContent), step.read?.key]),
+    }
+    if (drawn.key === step.drawn.key) return
     step.drawn = drawn
-    if (into?.steps.at(-1) === step) showStep(step)
+    if (into?.steps.at(-1) !== step) return
+    // The focus on an action of the bar goes back on that action.
+    const focused = $('into-end').contains(document.activeElement) ? document.activeElement : undefined
+    const action = focused && (focused.dataset.label ?? focused.textContent)
+    showStep(step)
+    if (action !== undefined) [...$('into-end').querySelectorAll('button')].find(each => (each.dataset.label ?? each.textContent) === action)?.focus()
   }
 
   // The detail of the Task `number`, entered from its row or from the detail
@@ -814,7 +842,7 @@ body{margin:0;background:var(--ground)}
     if (failure !== undefined) {
       const notice = failedNotice(`读取 #${number} 失败`, '')
       notice.querySelector('.dk-notice__text').replaceChildren(...failure)
-      return { end: [], body: [notice] }
+      return { end: [], failed: notice }
     }
     const { task, reports } = answer
     const entryOf = wanted => entries().find(([each]) => each.number === wanted)
@@ -865,6 +893,8 @@ body{margin:0;background:var(--ground)}
     const belongs = parent === undefined ? [] : [el('div', 'dk-parent caption', el('span', '', '属于'), up)]
 
     return {
+      // What it is drawn from: its own read, and what the list holds of it.
+      key: JSON.stringify([answer, entry, group, (entry?.blockers ?? []).map(entryOf), parent, closeoutOf(number), session.session]),
       // The actions its row has, then the link: a ready Task is executed, a
       // held one released or taken over; a Spec or Map is neither, a Pending
       // Closeout one has its closeout.
@@ -914,7 +944,7 @@ body{margin:0;background:var(--ground)}
   const closeoutButton = (number, prompt, className) => {
     const button = el('button', className, '收尾核对')
     button.type = 'button'
-    return prefiller(button, `closeout:${number}`, () => prompt, prompt === null)
+    return prefiller(button, `closeout:${number}`, () => prompt, () => prompt === null)
   }
   const CARD_STATE = { ready: '可执行', running: '进行中', other: '进行中', orphaned: 'Orphaned', blocked: '阻塞', closed: '已解锁' }
   // The card's four counts: the group, its glyph, its name.
@@ -1258,12 +1288,12 @@ body{margin:0;background:var(--ground)}
   // The last prefill of each.
   const prefilled = new Map()
   // The button, filling in what `text()` gives as the thing `key`, off
-  // besides while `off`: drawn as the prefills stand, and drawn so again
+  // besides while `off()`: drawn as the prefills stand, and drawn so again
   // with them. Not a click on the row it is in.
   const prefiller = (button, key, text, off) => {
     button.dataset.prefill = key
     button.dataset.label = button.textContent
-    button.dataset.off = String(off)
+    button.prefillOff = off
     drawPrefill(button)
     button.addEventListener('click', event => {
       event.stopPropagation()
@@ -1273,7 +1303,7 @@ body{margin:0;background:var(--ground)}
   }
   const drawPrefill = button => {
     const under = prefilling.get(button.dataset.prefill)
-    button.disabled = button.dataset.off === 'true' || under !== undefined
+    button.disabled = button.prefillOff() || under !== undefined
     button.textContent = under?.filled ? '已填入' : button.dataset.label
   }
   const showPrefills = () => {
@@ -1639,7 +1669,7 @@ body{margin:0;background:var(--ground)}
         notice.querySelector('.dk-notice__text').textContent = why[1]
         // Drawn anew, as the 技能 tab's: off while the Deck service has given
         // no call of the configure skill.
-        const rerun = prefiller(smallButton('重跑配置'), 'configure', () => configureCall, configureCall === undefined)
+        const rerun = prefiller(smallButton('重跑配置'), 'configure', () => configureCall, () => configureCall === undefined)
         const line = notice.querySelector('.dk-notice__line')
         line.replaceChildren(line.firstElementChild, rerun)
       }
@@ -1679,7 +1709,12 @@ body{margin:0;background:var(--ground)}
   // Codex finds a skill by its name in its own skill directories; a call it
   // finds another file for, or none, runs no skill of the Skill Source.
   const UNPREFILLABLE = { different: 'Codex 里的不是同一份，不能预填。', missing: 'Codex 里找不到，不能预填。' }
-  const prefillButton = skill => prefiller(smallButton('预填', 'dk-btn--go'), `skill:${skill.name}`, () => skill.call, skill.copy !== 'same')
+  // A skill's "预填", by what the last read of the skills says of it: a
+  // skill no longer listed is found by Codex no more.
+  const prefillButton = skill => {
+    const listed = () => skillsListed.find(each => each.name === skill.name)
+    return prefiller(smallButton('预填', 'dk-btn--go'), `skill:${skill.name}`, () => (listed() ?? skill).call, () => listed()?.copy !== 'same')
+  }
 
   // A skill's text, entered from its row, with its "预填" at the end of the
   // bar (see "Entering and going back"), on or off by what the last read of
@@ -1693,23 +1728,25 @@ body{margin:0;background:var(--ground)}
   }
 
   const drawSkillText = async skill => {
-    const prefillIt = prefillButton(skillsListed.find(each => each.name === skill.name) ?? { ...skill, copy: 'missing' })
-    let body
+    const end = [prefillButton(skill)]
+    let answer
     try {
-      const answer = await callTool('deck_skill', { name: skill.name })
-      body = answer.ok
-        ? el(
-            'div',
-            'dk-detail',
-            el('div', 'dk-detail__title title', el('span', 'dk-skill__name mono', answer.skill.call)),
-            el('span', 'dk-why mono', answer.skill.path),
-            el('div', 'dk-prose dk-raw', answer.skill.text),
-          )
-        : failedNotice('读取技能失败', skillFailure(answer.failure))
+      answer = await callTool('deck_skill', { name: skill.name })
     } catch (error) {
-      body = failedNotice('读取技能失败', skillFailure({ message: error.message }))
+      answer = { ok: false, failure: { message: error.message } }
     }
-    return { end: [prefillIt], body: [body] }
+    if (!answer.ok) return { end, failed: failedNotice('读取技能失败', skillFailure(answer.failure)) }
+    return {
+      key: JSON.stringify(answer),
+      end,
+      body: [el(
+        'div',
+        'dk-detail',
+        el('div', 'dk-detail__title title', el('span', 'dk-skill__name mono', answer.skill.call)),
+        el('span', 'dk-why mono', answer.skill.path),
+        el('div', 'dk-prose dk-raw', answer.skill.text),
+      )],
+    }
   }
 
   const skillRow = skill => {
@@ -1760,7 +1797,7 @@ body{margin:0;background:var(--ground)}
     ]
     const unprefillable = skills.filter(skill => skill.copy !== 'same').length
     if (unprefillable > 0) {
-      const rerun = prefiller(smallButton('重跑配置'), 'configure', () => configureCall, configureCall === undefined)
+      const rerun = prefiller(smallButton('重跑配置'), 'configure', () => configureCall, () => configureCall === undefined)
       const notice = el(
         'div',
         'dk-notice is-warn',
@@ -1804,6 +1841,8 @@ body{margin:0;background:var(--ground)}
     }
     showNext()
     showExecutable()
+    // A skill's "预填" and every "重跑配置", drawn before, go by what was read.
+    showPrefills()
   }
 
   // The 技能 tab shows the list the skills were last read into: opened before
@@ -1971,7 +2010,7 @@ body{margin:0;background:var(--ground)}
     if (why !== undefined) {
       const rerun = el('button', 'dk-btn', '重跑配置')
       rerun.type = 'button'
-      prefiller(rerun, 'configure', () => configureCall, configureCall === undefined)
+      prefiller(rerun, 'configure', () => configureCall, () => configureCall === undefined)
       shown.push(el('div', 'dk-next__line', el('span', 'dk-why caption', why), rerun))
     }
     $('next').replaceChildren(el('div', 'dk-next', ...shown), ...(asking.phase === 'answered' ? [askButton('再问一次', 'dk-btn')] : []))
@@ -2031,7 +2070,7 @@ body{margin:0;background:var(--ground)}
   document.addEventListener('visibilitychange', readIfShown)
 
   const configure = $('unconfigured').querySelector('button')
-  prefiller(configure, 'configure', () => configureCall, false)
+  prefiller(configure, 'configure', () => configureCall, () => false)
 
   follow(
     (

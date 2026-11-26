@@ -6172,3 +6172,240 @@ test('a late "刷新" whose Tasks are answered while the read after it waits for
   await page.click(tabNamed(document, '技能'))
   assert.ok([...document.querySelectorAll('.dk-skill__name')].some(each => text(each) === '$grill-as-read-last-6t1x'))
 })
+
+// The Deck service of the Tasks, whose deck_task answers as `detailOf`
+// says for #70, or not yet where it gives undefined.
+const deckWithDetail = (detailOf: () => object | undefined) => (name: string, args: any) =>
+  name === 'deck_task' && args.number === 70 ? detailOf() : deckWithSkills()(name, args)
+
+test('a detail read again the same as it was drawn is left as it is: its bar, its content and the focus on its button stay', async t => {
+  const page = await openPage({ answer: deckWithDetail(() => answered(DETAILS[70]!)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 70))
+  const open = barButton(document, '在 GitHub 打开') as HTMLElement
+  const content = document.querySelector('.dk-detail')
+  open.focus()
+
+  await page.advance(60_000)
+  await page.click(document.querySelector('.dk-head button'))
+  open.focus()
+  await page.advance(60_000)
+
+  assert.equal(barButton(document, '在 GitHub 打开'), open)
+  assert.equal(document.querySelector('.dk-detail'), content)
+  assert.equal(document.activeElement, open)
+})
+
+test('a detail read again changed is drawn anew, and the focus on an action of its bar goes back on that action', async t => {
+  let title = 'Task 详情'
+  const page = await openPage({ answer: deckWithDetail(() => answered(detail(70, title))) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 70))
+  ;(barButton(document, '在 GitHub 打开') as HTMLElement).focus()
+
+  title = 'Task 详情，改过的标题 5r8n'
+  await page.advance(60_000)
+
+  assert.equal(detailShown(page)?.title, '#70 Task 详情，改过的标题 5r8n')
+  assert.equal(document.activeElement, barButton(document, '在 GitHub 打开'))
+})
+
+test('a detail whose read again fails keeps what it read under the notice of why, until a read succeeds; one never read shows the notice alone', async t => {
+  let failing = false
+  const page = await openPage({
+    answer: deckWithDetail(() => answered(failing ? { ok: false, failure: { kind: 'offline', message: 'dial tcp 9z' } } : DETAILS[70]!)),
+  })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 70))
+  const before = detailShown(page)
+
+  failing = true
+  await page.advance(60_000)
+  const notices = [...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each))
+  assert.deepEqual(notices.map(each => text(each.querySelector('.dk-notice__title'))), ['读取 #70 失败'])
+  assert.equal(text(notices[0]!.querySelector('.dk-notice__text')), '连不上 GitHub。检查网络后点“刷新”重试。')
+  // Under the bar, over what was read.
+  assert.ok(notices[0]!.compareDocumentPosition(document.querySelector('.dk-detail')!) & 4)
+  assert.ok(document.querySelector('.dk-bar')!.compareDocumentPosition(notices[0]!) & 4)
+  assert.deepEqual({ ...detailShown(page), bar: before?.bar }, before)
+
+  failing = false
+  await page.advance(60_000)
+  assert.deepEqual([...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each)), [])
+  assert.deepEqual(detailShown(page), before)
+
+  // Never read, the notice is all it shows.
+  failing = true
+  await page.click(barButton(document, '返回'))
+  await page.click(rowOf(document, 70))
+  assert.deepEqual([...document.querySelectorAll('#into .dk-notice.is-danger')].filter(each => shown(page, each)).map(each => text(each.querySelector('.dk-notice__title'))), ['读取 #70 失败'])
+  assert.equal(document.querySelector('.dk-detail'), null)
+})
+
+test('a detail open while the Tasks or their Map Views cannot be read shows "读取 Task 失败" and why over it', async t => {
+  let failing = ''
+  const page = await openPage({
+    answer: (name, args: any) =>
+      name === failing ? answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp 9z' } }) : deckWithSkills()(name, args),
+  })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 70))
+
+  for (const call of ['deck_tasks', 'deck_map']) {
+    failing = call
+    await page.advance(60_000)
+    const notices = [...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each))
+    assert.deepEqual(notices.map(each => [text(each.querySelector('.dk-notice__title')), text(each.querySelector('.dk-notice__text'))]), [
+      ['读取 Task 失败', '连不上 GitHub。检查网络后点“刷新”重试。'],
+    ], call)
+    assert.ok(notices[0]!.compareDocumentPosition(document.querySelector('.dk-detail')!) & 4)
+
+    failing = ''
+    await page.advance(60_000)
+    assert.deepEqual([...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each)), [])
+  }
+})
+
+test('a detail\'s read answering after a later read of it is dropped: the later one is shown', async t => {
+  let late = true
+  const page = await openPage({ answer: deckWithDetail(() => (late ? undefined : answered(detail(70, '后一次读到的 1p4z')))) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 70))
+  const entering = page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_task').at(-1)
+
+  late = false
+  await page.advance(60_000)
+  assert.equal(detailShown(page)?.title, '#70 后一次读到的 1p4z')
+  await page.respond(entering, { result: answered(detail(70, '进入时读到的 8d3x')) })
+  assert.equal(detailShown(page)?.title, '#70 后一次读到的 1p4z')
+})
+
+// A skill's row in 技能, by its call.
+const skillRowOf = (document: Document, call: string) =>
+  [...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === call)!
+
+test('a skill\'s text whose read again fails keeps what it read under the notice of why, until a read succeeds', async t => {
+  let failing = false
+  const page = await openPage({
+    answer: (name, args: any) =>
+      name === 'deck_skill' && failing ? answered({ ok: false, failure: { kind: 'failed', message: 'EACCES 7v2b' } }) : deckWithSkills()(name, args),
+  })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '技能'))
+  await page.click(skillRowOf(document, IMPLEMENT))
+  const read = text(document.querySelector('.dk-detail'))
+
+  failing = true
+  await page.click(document.querySelector('.dk-head button'))
+  const notices = [...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each))
+  assert.deepEqual(notices.map(each => [text(each.querySelector('.dk-notice__title')), text(each.querySelector('.dk-notice__text'))]), [
+    ['读取技能失败', 'Deck 服务出错：EACCES 7v2b。点“刷新”重试。'],
+  ])
+  assert.equal(text(document.querySelector('.dk-detail')), read)
+  assert.ok(notices[0]!.compareDocumentPosition(document.querySelector('.dk-detail')!) & 4)
+
+  failing = false
+  await page.click(document.querySelector('.dk-head button'))
+  assert.deepEqual([...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each)), [])
+  assert.equal(text(document.querySelector('.dk-detail')), read)
+})
+
+test('a skill\'s "预填" from its text stays 已填入 for 5 seconds through "刷新", its row\'s too, and fills in no second copy', async t => {
+  const page = await openPage({ answer: deckWithSkills() })
+  t.after(page.close)
+  const { document } = page
+  const state = (button: Element) => [text(button), (button as HTMLButtonElement).disabled]
+  await page.click(tabNamed(document, '技能'))
+  await page.click(skillRowOf(document, IMPLEMENT))
+
+  await page.click(barButton(document, '预填'))
+  await page.click(document.querySelector('.dk-head button'))
+  await page.advance(2_000)
+  await page.click(barButton(document, '已填入'))
+  assert.deepEqual(state(barButton(document, '已填入')), ['已填入', true])
+  await page.click(barButton(document, '返回'))
+  assert.deepEqual(state(skillRowOf(document, IMPLEMENT).querySelector('button')!), ['已填入', true])
+  assert.deepEqual(prefills(page), [prefilled(IMPLEMENT)])
+  await page.advance(3_000)
+  assert.deepEqual(state(skillRowOf(document, IMPLEMENT).querySelector('button')!), ['预填', false])
+})
+
+test('"重跑配置" stays off for 5 seconds everywhere through reads and tabs, and "收尾核对" for its Spec through reads', async t => {
+  const skills = SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy: 'different' } : skill))
+  const page = await openPage({ answer: deckWithSkills(skills) })
+  t.after(page.close)
+  const { document } = page
+  const reruns = () => [...document.querySelectorAll('button')].filter(each => each.dataset.label === '重跑配置' && shown(page, each)).map(each => [text(each), each.disabled])
+
+  await page.click(document.querySelector('#tasks-noexec button'))
+  await page.click(document.querySelector('.dk-head button'))
+  assert.deepEqual(reruns(), [['已填入', true]])
+  for (const tab of ['地图', '技能']) {
+    await page.click(tabNamed(document, tab))
+    await page.click(document.querySelector('.dk-head button'))
+    assert.deepEqual(reruns(), [['已填入', true]], tab)
+  }
+  await page.advance(5_000)
+  assert.deepEqual(reruns(), [['重跑配置', false]])
+  page.close()
+
+  const closeout = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)) })
+  t.after(closeout.close)
+  const { document: doc } = closeout
+  const onRow = () => rowOf(doc, 64).querySelector('button')!
+  await closeout.click(onRow())
+  await closeout.click(doc.querySelector('.dk-head button'))
+  await closeout.click(onRow())
+  assert.deepEqual([text(onRow()), onRow().disabled], ['已填入', true])
+  // In its detail, and back; on its card in 地图.
+  await closeout.click(rowOf(doc, 64))
+  assert.deepEqual([text(barButton(doc, '已填入')), (barButton(doc, '已填入') as HTMLButtonElement).disabled], ['已填入', true])
+  await closeout.click(barButton(doc, '返回'))
+  assert.deepEqual([text(onRow()), onRow().disabled], ['已填入', true])
+  await closeout.click(tabNamed(doc, '地图'))
+  const onCard = doc.querySelector<HTMLButtonElement>('#map .dk-spec__foot button')!
+  assert.deepEqual([text(onCard), onCard.disabled], ['已填入', true])
+  assert.equal(prefills(closeout).length, 1)
+})
+
+test('"刷新" that finds a skill no longer the same file puts the "预填" of its text off before the skill\'s text is read again', async t => {
+  let copy = 'same'
+  let reading = true
+  const page = await openPage({
+    answer: (name, args: any) =>
+      name === 'deck_skill' && !reading ? undefined : deckWithSkills(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)))(name, args),
+  })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '技能'))
+  await page.click(skillRowOf(document, IMPLEMENT))
+  assert.equal((barButton(document, '预填') as HTMLButtonElement).disabled, false)
+
+  copy = 'different'
+  reading = false
+  await page.click(document.querySelector('.dk-head button'))
+  assert.equal((barButton(document, '预填') as HTMLButtonElement).disabled, true)
+})
+
+test('"刷新" that finds a skill gone from the Skill Source puts the "预填" of its text off before the skill\'s text is read again', async t => {
+  let gone = false
+  const page = await openPage({
+    answer: (name, args: any) =>
+      name === 'deck_skill' && gone ? undefined : deckWithSkills(gone ? SKILLS.filter(skill => skill.name !== 'implement') : SKILLS)(name, args),
+  })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '技能'))
+  await page.click(skillRowOf(document, IMPLEMENT))
+  assert.equal((barButton(document, '预填') as HTMLButtonElement).disabled, false)
+
+  gone = true
+  await page.click(document.querySelector('.dk-head button'))
+  assert.equal((barButton(document, '预填') as HTMLButtonElement).disabled, true)
+})
