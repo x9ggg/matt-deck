@@ -1,8 +1,9 @@
 // Task kernel: the skills of a project's Skill Source, read and never
 // written. Host-agnostic: it knows a workspace, a home directory and how the
 // host calls a skill, a rule it is handed.
-import { readdir, readFile, realpath } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
+import type { Dirent } from 'node:fs'
+import { readdir, readFile, realpath, stat } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 
 import type { ProjectConfig } from './config.ts'
 
@@ -16,9 +17,10 @@ export type CallOf = (name: string, plugin: string | undefined) => string
 // its host writes it; `path` is its file, `~` for the home.
 export type Skill = { name: string; call: string; description: string; path: string }
 
-// Whether the host, looking for a skill by its name in its own skill
-// directories, finds this same file, its links resolved: every copy it finds
-// is the Skill Source's file, one of them is another file, or it finds none.
+// What the host calls by a skill's name, among the skill files it finds in
+// its own skill directories, known by the names their frontmatter gives:
+// exactly one file, its links resolved, and it is the Skill Source's; another
+// file; or none, as for a name the host cannot call.
 export type HostCopy = 'same' | 'different' | 'missing'
 
 // Why the Skill Source cannot be read: it is not there, or holds no skill of
@@ -151,22 +153,63 @@ const readAll = async (source: SkillSource, workspace: string, home: string, cal
   return skills.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }
 
-// The copy of a skill the host finds by its name in its own skill
-// directories, as the Skill Source's file at `file` is to it.
-const hostCopy = async (file: string, name: string, directories: string[], workspace: string, home: string): Promise<HostCopy> => {
-  const own = await realpath(file)
-  const found: string[] = []
+// How deep Codex looks for skill folders under each of its skill
+// directories (`MAX_SCAN_DEPTH` in codex-rs/ext/skills/src/loader/mod.rs).
+const CODEX_SCAN_DEPTH = 6
+
+// Every skill file the host finds itself under `directories`, its links
+// resolved, with the name the host knows it by: its frontmatter's `name`, or
+// when that is empty the name of its folder, links resolved. The directories
+// are walked as Codex walks its own: down to CODEX_SCAN_DEPTH levels, each
+// directory once under each of them, following links to directories but not
+// to files, and never into a hidden directory.
+const scanHost = async (directories: string[], workspace: string, home: string) => {
+  const found: { name: string; file: string }[] = []
   for (const directory of directories) {
-    try {
-      found.push(await realpath(join(resolveDirectory(directory, workspace, home), name, 'SKILL.md')))
-    } catch (error: any) {
-      if (!isMissing(error)) {
-        throw error
+    const queue = [{ dir: resolveDirectory(directory, workspace, home), depth: 0 }]
+    const visited = new Set<string>()
+    while (queue.length > 0) {
+      const { dir, depth } = queue.shift()!
+      // What cannot be read, Codex passes over: a link in a loop, a
+      // directory or file it may not read.
+      const real = await realpath(dir).catch(() => undefined)
+      if (real === undefined || visited.has(real)) {
+        continue
+      }
+      visited.add(real)
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => [] as Dirent[])
+      for (const entry of entries) {
+        const path = join(dir, entry.name)
+        const kind = entry.isSymbolicLink() ? await stat(path).catch(() => undefined) : entry
+        if (kind?.isDirectory()) {
+          if (depth < CODEX_SCAN_DEPTH && !entry.name.startsWith('.')) {
+            queue.push({ dir: path, depth: depth + 1 })
+          }
+        } else if (entry.isFile() && entry.name === 'SKILL.md') {
+          const text = await readFile(path, 'utf8').catch(() => undefined)
+          if (text !== undefined) {
+            const file = await realpath(path)
+            found.push({ name: parse(text).fields.name || basename(dirname(file)), file })
+          }
+        }
       }
     }
   }
 
-  return found.length === 0 ? 'missing' : found.every(each => each === own) ? 'same' : 'different'
+  return found
+}
+
+// What the host finds under its name, as the Skill Source's file at `file`
+// is to it: the one file of that name is this one, another file is, or none.
+// A name holding a character Codex's `$` does not take calls nothing.
+const hostCopy = async (file: string, name: string, found: { name: string; file: string }[]): Promise<HostCopy> => {
+  if (!/^[A-Za-z0-9_:-]+$/.test(name)) {
+    return 'missing'
+  }
+  const own = await realpath(file)
+  const files = new Set(found.filter(each => each.name === name).map(each => each.file))
+
+  return files.size === 0 ? 'missing' : files.size === 1 && files.has(own) ? 'same' : 'different'
 }
 
 // The skills of the Skill Source. Given the directories a host finds skills
@@ -179,12 +222,13 @@ export const listSkills = async (
   hostDirectories?: string[],
 ): Promise<(Skill & { copy?: HostCopy })[]> => {
   const skills = await readAll(source, workspace, home, callOf)
+  const found = hostDirectories === undefined ? [] : await scanHost(hostDirectories, workspace, home)
   const listed = []
   for (const { text, file, ...skill } of skills) {
     listed.push(
       hostDirectories === undefined
         ? skill
-        : { ...skill, copy: await hostCopy(file, skill.name, hostDirectories, workspace, home) },
+        : { ...skill, copy: await hostCopy(file, skill.name, found) },
     )
   }
 

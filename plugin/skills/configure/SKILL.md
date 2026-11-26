@@ -17,7 +17,7 @@ disable-model-invocation: true
 - `host`：Deck 服务所在的宿主，`claude-code` 或 `codex`。
 - `existing`：现有配置。`{ configured: false }`；`{ configured: true, config }`；或配置文件存在但格式不对时的 `{ configured: true, problem }`。
 - `taskSource`：从仓库的 Matt issue tracker 文档预填的 Task Source，没有文档时为 `null`。`tracker` 是文档标题里写的任务来源，标题里读不出时为 `null`。`type` 是它对应的 Task Source 类型，没有可预填的类型时为 `null`。
-- `skillSources`：本机找到的 Matt skills，每份一项，可直接放进配置。`host` 为 `codex` 时还包括项目里 Codex 的技能目录（`.agents/skills`、`.codex/skills`），这两项的路径相对项目根目录写，随仓库走。
+- `skillSources`：本机找到的 Matt skills，每份一项，可直接放进配置。`host` 为 `codex` 时还包括 Codex 自己的技能目录：用户目录下的 `~/.codex/skills`，和项目里的 `.agents/skills`、`.codex/skills`，项目里这两项的路径相对项目根目录写，随仓库走。
 - `isServiceAllowed`：只在 `host` 为 `claude-code` 时有。本项目的 `.claude/settings.local.json` 里是否已有允许 Deck 服务工具的权限规则。
 
 Deck 服务连不上时，告诉用户原因并停止。

@@ -23,7 +23,7 @@ const HOSTS: Record<Host, { callOf: CallOf; short: (session: string) => string; 
     // A Codex Session's id begins with the time it was started: two started
     // a moment apart share their first characters.
     short: session => session.slice(-8),
-    skillDirectories: ['~/.agents/skills', '.agents/skills', '.codex/skills'],
+    skillDirectories: ['~/.agents/skills', '~/.codex/skills', '.agents/skills', '.codex/skills'],
   },
 }
 
