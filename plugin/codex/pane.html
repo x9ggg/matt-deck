@@ -306,6 +306,9 @@ body{margin:0;background:var(--ground)}
 .dk-prose p{white-space:pre-wrap}
 /* A checked acceptance criterion: its box filled. */
 .dk-prose li.is-checked::before{border-color:var(--pass);background:var(--pass)}
+/* The Spec or Map a Task belongs to opens its Map View in the page, not as
+   a link: drawn as the layout draws its link. */
+.dk-parent__link{min-width:0;padding:0;border:0;background:none;color:var(--progress);font:inherit;text-align:left;text-decoration:underline;text-overflow:ellipsis;text-underline-offset:3px;white-space:nowrap;overflow:hidden;cursor:pointer}
 /* A Task blocking the one shown goes on into it. */
 .dk-edge{cursor:pointer}
 /* A badge's words are in its colours, whatever their row gives them. */
@@ -723,12 +726,14 @@ body{margin:0;background:var(--ground)}
   // Tasks. A step draws as it is entered, as the way goes back to it, and with
   // "刷新"; drawn from the Tasks, with each read of them too. What it drew last
   // stays until the next drawing answers. "返回" goes back one step, to where
-  // the page was scrolled when it was entered.
+  // the page was scrolled when it was entered. The first step entered from a
+  // tab's content may be given `via`, the crumbs of what the tab shows
+  // between it and the step ('#64' of a Map View), which the way keeps.
   let into
   const chosenTab = () => tabs.find(tab => tab.getAttribute('aria-selected') === 'true').dataset.tab
-  const enter = step => {
+  const enter = (step, via = []) => {
     closeTakeOver()
-    into ??= { tab: chosenTab(), steps: [] }
+    into ??= { tab: chosenTab(), via, steps: [] }
     into.steps.push({ ...step, left: window.scrollY })
     showPanel()
     window.scrollTo(0, 0)
@@ -758,7 +763,7 @@ body{margin:0;background:var(--ground)}
   const drawStep = async () => {
     if (into === undefined) return
     const step = into.steps.at(-1)
-    const way = [tabs.find(tab => tab.dataset.tab === into.tab).textContent, ...into.steps.slice(0, -1).map(each => each.crumb)]
+    const way = [tabs.find(tab => tab.dataset.tab === into.tab).textContent, ...into.via, ...into.steps.slice(0, -1).map(each => each.crumb)]
     $('crumbs').replaceChildren(`${way.join(' / ')} / `, el('b', '', step.crumb))
     showStep(step)
     step.drawn = await step.draw()
@@ -767,9 +772,10 @@ body{margin:0;background:var(--ground)}
 
   // The detail of the Task `number`, entered from its row or from the detail
   // shown. What the list knows of it (its state, what blocks it) comes from
-  // the list, the rest from its own read.
-  const openTask = number =>
-    enter({ crumb: `#${number}`, task: number, withTasks: true, draw: () => drawTask(number), drawn: { end: [], body: [el('p', 'dk-why', `正在读取 #${number}…`)] } })
+  // the list, the rest from its own read. Entered from a card on a wall,
+  // `via` names the Map View it is on.
+  const openTask = (number, via) =>
+    enter({ crumb: `#${number}`, task: number, withTasks: true, draw: () => drawTask(number), drawn: { end: [], body: [el('p', 'dk-why', `正在读取 #${number}…`)] } }, via)
 
   const drawTask = async number => {
     let answer
@@ -820,6 +826,12 @@ body{margin:0;background:var(--ground)}
     open.addEventListener('click', () => request('ui/open-link', { url: task.url }))
 
     const closeout = entry?.isPendingCloseout ? [closeoutButton(closeoutOf(number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
+    // The Spec or Map it is under, as the list holds it; clicked, its Map View.
+    const parent = list.containers.find(container => container.number === entry?.parent)
+    const up = el('button', 'dk-parent__link', parent === undefined ? '' : `${parent.kind === 'spec' ? 'Spec' : 'Map'} #${parent.number} ${parent.title}`)
+    up.type = 'button'
+    up.addEventListener('click', () => openMap(parent.number))
+    const belongs = parent === undefined ? [] : [el('div', 'dk-parent caption', el('span', '', '属于'), up)]
 
     return {
       // The actions its row has, then the link: a ready Task is executed, a
@@ -835,6 +847,7 @@ body{margin:0;background:var(--ground)}
       body: [el('div', 'dk-detail',
         el('div', 'dk-detail__title title', el('span', `dk-id${state === undefined ? '' : ` is-${state}`}`, `#${task.number}`), el('span', '', task.title)),
         meta,
+        ...belongs,
         section(['描述'], task.description === '' ? why('没有描述。') : el('div', 'dk-prose', el('p', '', task.description))),
         section(['验收条件'], task.acceptance.length === 0
           ? why('正文里没有验收条件。')
@@ -923,8 +936,9 @@ body{margin:0;background:var(--ground)}
 
   // A Child Task's card: its glyph, number and state; its title; what blocks
   // it and what it blocks, else who holds it or whether it has Acceptance
-  // Evidence; when it was updated, or closed.
-  const wallCard = card => {
+  // Evidence; when it was updated, or closed. Clicked, its detail, the way
+  // going through the Map View `map`.
+  const wallCard = (card, map) => {
     const state = stateOf(card, card.group)
     // Asked to take it over, the card's place holds the asking.
     if (isAsked(card, state, 'map')) return takeOverAsk(card, state)
@@ -939,7 +953,7 @@ body{margin:0;background:var(--ground)}
       : [' ']
     const glyph = plate(state)
     glyph.classList.add('dk-plate--sm')
-    return el('article', `dk-card is-${state}`,
+    const element = el('article', `dk-card is-${state}`,
       el('div', 'dk-card__head', glyph, el('span', `dk-id is-${state}`, `#${card.number}`), el('span', 'dk-card__state caption', CARD_STATE[state])),
       el('span', 'dk-card__title heading', card.title),
       el('span', 'dk-card__meta caption', ...relation),
@@ -950,6 +964,8 @@ body{margin:0;background:var(--ground)}
           : state === 'ready' ? [executeButton(card.number, '执行', 'dk-btn dk-btn--sm dk-btn--go')]
           : state === 'orphaned' ? [takeOverButton(card.number, 'map')]
           : heldActions(card, state, 'map'))))
+    element.addEventListener('click', () => openTask(card.number, [`#${map.number}`]))
+    return element
   }
 
   // The "地图" tab: the Map View shown, its blocked Child Tasks past three
@@ -985,7 +1001,7 @@ body{margin:0;background:var(--ground)}
         isWallOpen = true
         showMap()
       })
-      $('map-view').replaceChildren(mapCard(map), el('div', 'dk-wall', ...map.wall.filter(card => !unshown.includes(card)).map(wallCard)), ...(unshown.length === 0 ? [] : [more]))
+      $('map-view').replaceChildren(mapCard(map), el('div', 'dk-wall', ...map.wall.filter(card => !unshown.includes(card)).map(card => wallCard(card, map))), ...(unshown.length === 0 ? [] : [more]))
     }
   }
 

@@ -2538,6 +2538,69 @@ test('"地图" on a Spec\'s or Map\'s row in "任务" opens its Map View, and "�
   assert.equal(mapShown(page).card[0]!.startsWith('Spec #64'), true)
 })
 
+test('a card on the wall opens its Child Task\'s detail, the way going through the Spec; "返回" goes back to the Map View where it was scrolled, one step at a time', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+  const cardOf = (number: number) => [...document.querySelectorAll('#map .dk-card')].find(each => text(each.querySelector('.dk-id')) === `#${number}`)!
+  await page.click(tabNamed(document, '地图'))
+
+  // A button on a card is no click on the card.
+  await page.click(cardOf(70).querySelector('button'))
+  assert.equal(shown(page, document.querySelector('#into')), false)
+
+  page.scroll(360)
+  await page.click(cardOf(73))
+  assert.equal(detailShown(page)?.crumbs, '地图 / #64 / #73')
+  assert.equal(detailShown(page)?.title, '#73 推荐：我现在该做什么')
+  assert.equal(page.scrolled(), 0)
+  assert.deepEqual([...document.querySelectorAll('[role="tab"][aria-selected="true"]')].map(text), ['地图'])
+
+  // On into what blocks it, and back one step at a time.
+  await page.click([...document.querySelectorAll('.dk-detail .dk-edge')].find(edge => text(edge)!.includes('#72'))!)
+  assert.equal(detailShown(page)?.crumbs, '地图 / #64 / #73 / #72')
+  await page.click(document.querySelector('#back'))
+  assert.equal(detailShown(page)?.crumbs, '地图 / #64 / #73')
+  await page.click(document.querySelector('#back'))
+  assert.equal(shown(page, document.querySelector('#into')), false)
+  assert.equal(mapShown(page).card[0]!.startsWith('Spec #64'), true)
+  assert.equal(page.scrolled(), 360)
+})
+
+test('a Child Task\'s detail says the Spec or Map it belongs to, which opens that Map View; a Task under none says nothing of it', async t => {
+  const second = {
+    ...TASKS.containers[0],
+    ...task(90, '另一张地图', { labels: [], parent: null }),
+    kind: 'map',
+    children: [],
+    progress: { closed: 0, inProgress: 0, total: 0 },
+  }
+  const tasks = { ...TASKS, containers: [TASKS.containers[0], second] }
+  const maps = { ...MAPS, maps: [...MAPS.maps, { ...second, goal: null, wall: [] }] }
+  const page = await openPage({ answer: deckAt('/work/matt-deck', true, tasks, maps) })
+  t.after(page.close)
+  const { document } = page
+  const belongs = () => document.querySelector('.dk-detail .dk-parent')
+  // The Map View shown before is another one.
+  await page.click([...document.querySelectorAll('#tasks .dk-row--container')][1]!.querySelector('button'))
+  await page.click(tabNamed(document, '任务'))
+
+  await page.click(rowOf(document, 64))
+  assert.equal(belongs(), null)
+  await page.click(document.querySelector('#back'))
+
+  await page.click(rowOf(document, 70))
+  assert.equal(text(belongs()), '属于 Spec #64 规格：里程碑二')
+  // Drawn between the state's line and the first section, as the layout has it.
+  assert.equal(belongs()!.previousElementSibling!.classList.contains('dk-detail__meta'), true)
+  assert.equal(page.window.getComputedStyle(belongs()!.querySelector('button')!).cursor, 'pointer')
+
+  await page.click(belongs()!.querySelector('button'))
+  assert.deepEqual([...document.querySelectorAll('[role="tab"][aria-selected="true"]')].map(text), ['地图'])
+  assert.equal(shown(page, document.querySelector('#into')), false)
+  assert.equal(mapShown(page).card[0]!.startsWith('Spec #64'), true)
+})
+
 test('with no Spec and no Map the "地图" tab says so and what would be there', async t => {
   const tasks = { ...TASKS, containers: [] }
   const page = await openPage({ answer: deckAt('/work/matt-deck', true, tasks, { ...MAPS, maps: [] }) })
