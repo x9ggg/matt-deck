@@ -36,6 +36,9 @@ export const openPage = async ({
   const sent: any[] = []
   const fetched: string[] = []
   let unanswered = 0
+  // The error of an answer that threw or rejected, until a test gets it; in a
+  // box, as an answer may throw anything, undefined too.
+  let failed: { error: unknown } | undefined
 
   // The page's clock: Date.now() and the page's timers run on a time the
   // test moves with advance(), from the moment the page opens.
@@ -109,7 +112,13 @@ export const openPage = async ({
         result: { protocolVersion: '2026-01-26', hostInfo: { name: 'fake-host' }, hostCapabilities: {}, hostContext },
       })
     } else if (data.method === 'tools/call') {
-      toPage({ id: data.id, result: await answer(data.params.name, data.params.arguments, page.window.document) })
+      try {
+        toPage({ id: data.id, result: await answer(data.params.name, data.params.arguments, page.window.document) })
+      } catch (error) {
+        // The test's answer threw or rejected: the next settled() hands the
+        // error to the test waiting on the page, or close() does if none waits.
+        failed ??= { error }
+      }
     } else if (data.method === 'ui/open-link') {
       // Codex opens the link in the default browser and answers {} (#68).
       toPage({ id: data.id, result: {} })
@@ -124,12 +133,17 @@ export const openPage = async ({
   })
 
   // Resolves once the page has had every answer and sent nothing new for a
-  // few ticks.
+  // few ticks; rejects with the error of an answer that failed, once.
   const settled = async () => {
     let quiet = 0
     let seen = sent.length
     while (quiet < 3) {
       await new Promise(resolve => setTimeout(resolve, 5))
+      if (failed !== undefined) {
+        const { error } = failed
+        failed = undefined
+        throw error
+      }
       quiet = unanswered === 0 && sent.length === seen ? quiet + 1 : 0
       seen = sent.length
     }
@@ -190,9 +204,14 @@ export const openPage = async ({
       document.dispatchEvent(new Event('visibilitychange'))
       await settled()
     },
+    // Closes the page, throwing the error of an answer that failed while no
+    // test waited on the page, as after a click by hand.
     close: () => {
       page.window.close()
       host.close()
+      if (failed !== undefined) {
+        throw failed.error
+      }
     },
   }
 }
