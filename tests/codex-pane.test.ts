@@ -5319,3 +5319,259 @@ test('"再问一次" the Host refuses keeps waiting for the request before, and 
   assert.deepEqual(parts(page.document.querySelector('.dk-rec__head'), 'span'), ['下一个成就', 'Task 详情', '#70'])
   assert.deepEqual(deck.reads, ['request-1', 'request-1'])
 })
+
+// The result notice as the person reads it: its title and words, under the
+// tabs.
+const resultSaid = (page: { window: any; document: Document }) => {
+  const result = resultShown(page)
+  return result === undefined ? undefined : [result.title, result.said]
+}
+
+test('"释放" that releases nothing says so in the result notice: the reason and to click it again, the Deck service failing, or the Occupancy held by another Session by now; the Tasks are read again', async t => {
+  const deck = deckThatOccupies()
+  let release: () => object = () => answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp 9z' } })
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_release' ? release() : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const reads = () => calledWith(page, 'deck_tasks').length
+
+  let before = reads()
+  await page.click(rowButton(document, 74, '释放'))
+  assert.deepEqual(resultSaid(page), ['#74 没有释放', '连不上 GitHub。检查网络后再点“释放”重试。'])
+  assert.equal(resultShown(page)?.order.join(), '抬头,标签页,结果提示')
+  assert.equal(reads(), before + 1)
+
+  release = () => ({ content: [{ type: 'text', text: 'the state is locked 6w1p' }], isError: true })
+  before = reads()
+  await page.click(rowButton(document, 74, '释放'))
+  assert.deepEqual(resultSaid(page), ['#74 没有释放', 'Deck 服务出错：the state is locked 6w1p。再点“释放”重试。'])
+  assert.equal(reads(), before + 1)
+
+  release = () => answered({ ok: false, failure: { kind: 'unauthenticated', message: 'not logged in 4k' } })
+  await page.click(rowButton(document, 74, '释放'))
+  assert.deepEqual(resultSaid(page), ['#74 没有释放', 'gh 未登录。运行 gh auth login 后再点“释放”重试。'])
+
+  release = () => answered({ ok: true, released: false })
+  before = reads()
+  await page.click(rowButton(document, 74, '释放'))
+  assert.deepEqual(resultSaid(page), ['#74 没有释放', 'Occupancy 已转给别的 Session。'])
+  assert.equal(reads(), before + 1)
+
+  // Released, it says nothing.
+  release = () => deck.answer('deck_release', { task: 74, session: SESSION.session })
+  await page.click(rowButton(document, 74, '释放'))
+  assert.equal(resultShown(page), undefined)
+})
+
+test('a takeover that moves nothing once its asking was closed says why in the result notice, to click "接管" again', async t => {
+  let answer: (value: object) => void = () => {}
+  const deck = deckThatOccupies(undefined, () => new Promise(resolve => (answer = resolve)))
+  const page = await openPage({ answer: deck.answer })
+  t.after(page.close)
+  const { document } = page
+  // Clicked by hand: the move is not answered yet, so the page is not settled.
+  const moment = () => new Promise(resolve => setTimeout(resolve, 20))
+  await page.click(rowButton(document, 72, '接管'))
+  ;(askButton(document, '接管') as HTMLElement).click()
+  await moment()
+  ;(tabNamed(document, '地图') as HTMLElement).click()
+  await moment()
+  ;(tabNamed(document, '任务') as HTMLElement).click()
+  await moment()
+  assert.equal(askShown(page), undefined)
+
+  answer(answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp 9z' } }))
+  await page.settled()
+
+  assert.deepEqual(resultSaid(page), ['#72 没有接管', '连不上 GitHub。检查网络后再点“接管”重试。'])
+  assert.deepEqual(executeShown(rowButton(document, 72, '接管')), ['接管', true])
+})
+
+test('a takeover the Deck service finds held by a third Session by now closes its asking and says who executes the Task, of this Host or the other', async t => {
+  let third = { occupant: '019a8c3e-1f2b-7c4d-9e0f-0a1bc0ffee12', occupantHost: 'codex', occupantShort: 'c0ffee12' }
+  const deck = deckThatOccupies(undefined, () => answered({ ok: true, occupied: false, ...third, isOrphaned: false }))
+  const page = await openPage({ answer: deck.answer })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  assert.equal(askShown(page), undefined)
+  assert.deepEqual(resultSaid(page), ['#72 没有接管', '已改由 Session c0ffee12 执行。'])
+
+  third = { occupant: CLAUDE_CODE, occupantHost: 'claude-code', occupantShort: '3f9c21d0' }
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  assert.equal(askShown(page), undefined)
+  assert.deepEqual(resultSaid(page), ['#72 没有接管', '已改由 Claude Code 3f9c21d0 执行。'])
+  assert.deepEqual(prefills(page), [])
+})
+
+test('a takeover of a Task closed or gone by now closes its asking and says so in the Pane\'s own words', async t => {
+  const deck = deckThatOccupies(undefined, () => answered({ ok: false, failure: { kind: 'not-open', message: '#72 is closed' } }))
+  const page = await openPage({ answer: deck.answer })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+
+  assert.equal(askShown(page), undefined)
+  assert.deepEqual(resultSaid(page), ['#72 没有接管', '它已经关闭，或者不在 Task Source 里了。'])
+  assert.deepEqual(prefills(page), [])
+})
+
+// The button of a card on the wall with the words `label`.
+const cardButton = (document: Document, number: number, label: string) =>
+  [...wallCard(document, number)!.querySelectorAll('button')].find(each => text(each) === label)!
+
+test('closed, the asking leaves the focus where it was asked: on the row\'s or card\'s "接管" once cancelled, on its "释放" once taken over', async t => {
+  const page = await openPage({ answer: deckThatOccupies().answer })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '取消'))
+  assert.equal(document.activeElement, rowButton(document, 72, '接管'))
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  assert.equal(askShown(page), undefined)
+  assert.equal(document.activeElement, rowButton(document, 72, '释放'))
+
+  await page.click(tabNamed(document, '地图'))
+  await page.click(cardButton(document, 69, '接管'))
+  await page.click(askButton(document, '取消'))
+  assert.equal(document.activeElement, cardButton(document, 69, '接管'))
+  await page.click(cardButton(document, 69, '接管'))
+  await page.click(askButton(document, '接管'))
+  assert.equal(askShown(page), undefined)
+  assert.equal(document.activeElement, cardButton(document, 69, '释放'))
+})
+
+test('closed, an asking under a detail\'s bar leaves the focus on the Task\'s action in the bar; one in a Recommendation on "执行这个 Task", once it is on again, unless the person moved the focus meanwhile', async t => {
+  const occupies = deckThatOccupies()
+  const recommends = deckThatRecommends()
+  const page = await openPage({
+    answer: (name, args: any) => (['deck_ask', 'deck_recommendation'].includes(name) ? recommends.answer(name, args) : occupies.answer(name, args)),
+  })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowOf(document, 72))
+  await page.click(barButton(document, '接管'))
+  await page.click(askButton(document, '取消'))
+  assert.equal(document.activeElement, barButton(document, '接管'))
+  await page.click(barButton(document, '接管'))
+  await page.click(askButton(document, '接管'))
+  assert.equal(askShown(page), undefined)
+  assert.equal(document.activeElement, barButton(document, '释放'))
+
+  const recommended = () => document.querySelector<HTMLButtonElement>('.dk-rec [data-execute]')!
+  await page.click(tabNamed(document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  recommends.reported.set('request-1', { ...RECOMMENDATION, task: 69 })
+  await page.advance(2_000)
+  await page.click(recommended())
+  await page.click(askButton(document, '取消'))
+  assert.equal(document.activeElement, recommended())
+  await page.click(recommended())
+  await page.click(askButton(document, '接管'))
+  assert.equal(askShown(page), undefined)
+  // Off while its Execute Prompt was just filled in, it takes the focus as
+  // it is on again.
+  assert.deepEqual(executeShown(recommended()), ['已填入', false])
+  assert.equal(document.activeElement, document.body)
+  await page.advance(5_000)
+  assert.deepEqual(executeShown(recommended()), ['执行这个 Task', true])
+  assert.equal(document.activeElement, recommended())
+
+  await page.click(button(page, '再问一次'))
+  recommends.reported.set('request-2', { ...RECOMMENDATION, task: 75 })
+  await page.advance(2_000)
+  await page.click(recommended())
+  await page.click(askButton(document, '接管'))
+  const refresh = document.querySelector<HTMLButtonElement>('.dk-head button')!
+  refresh.focus()
+  await page.advance(5_000)
+  assert.deepEqual(executeShown(recommended()), ['执行这个 Task', true])
+  assert.equal(document.activeElement, refresh)
+})
+
+test('closed, an asking whose Task is closed by now, its place without a button, leaves the focus on the Task\'s row or card', async t => {
+  let isClosed = false
+  const closed = { ...OTHER, isOpen: false, closedAt: '2026-11-22T08:30:00Z', occupant: null, occupantHost: null, occupantShort: null }
+  const deck = deckThatOccupies(undefined, () => {
+    isClosed = true
+    return answered({ ok: false, failure: { kind: 'not-open', message: '#72 is closed' } })
+  })
+  const page = await openPage({
+    answer: (name, args: any) => {
+      if (isClosed && name === 'deck_tasks') {
+        return answered({ ...TASKS, groups: { ...TASKS.groups, inProgress: TASKS.groups.inProgress.filter(each => each.number !== 72), done: [...TASKS.groups.done, closed] } })
+      }
+      if (isClosed && name === 'deck_map') {
+        return answered({ ...MAPS, maps: [{ ...MAPS.maps[0], wall: MAPS.maps[0]!.wall.map((each: any) => (each.number === 72 ? card(closed, 'done') : each)) }, MAPS.maps[1]] })
+      }
+      return deck.answer(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  assert.equal(askShown(page), undefined)
+  assert.deepEqual(buttonsIn(rowOf(document, 72)), [])
+  assert.equal((rowOf(document, 72) as HTMLElement).tabIndex, 0)
+  assert.equal(document.activeElement, rowOf(document, 72))
+
+  // Open again, as a read finds it.
+  isClosed = false
+  await page.click(document.querySelector('.dk-head button'))
+  await page.click(tabNamed(document, '地图'))
+  await page.click(cardButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  assert.equal(askShown(page), undefined)
+  assert.deepEqual(buttonsIn(wallCard(document, 72)), [])
+  assert.equal((wallCard(document, 72) as HTMLElement).tabIndex, 0)
+  assert.equal(document.activeElement, wallCard(document, 72))
+})
+
+test('closed, an asking leaves the focus where it is once the person has gone to the Host, as to its prompt, and on the row where the button there stays off for long', async t => {
+  let implement = 'same'
+  const occupies = deckThatOccupies()
+  const recommends = deckThatRecommends()
+  const page = await openPage({
+    answer: (name, args: any) =>
+      name === 'deck_skills'
+        ? answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy: implement } : skill)) })
+        : ['deck_ask', 'deck_recommendation'].includes(name) ? recommends.answer(name, args) : occupies.answer(name, args),
+  })
+  t.after(page.close)
+  const { document, window } = page
+  const recommended = () => document.querySelector<HTMLButtonElement>('.dk-rec [data-execute]')!
+
+  await page.click(tabNamed(document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  recommends.reported.set('request-1', { ...RECOMMENDATION, task: 69 })
+  await page.advance(2_000)
+  await page.click(recommended())
+  await page.click(askButton(document, '接管'))
+  assert.deepEqual(executeShown(recommended()), ['已填入', false])
+  // The person goes to the prompt the Execute Prompt is in: the page's
+  // window loses the focus.
+  window.dispatchEvent(new window.FocusEvent('blur'))
+  await page.advance(5_000)
+  assert.deepEqual(executeShown(recommended()), ['执行这个 Task', true])
+  assert.equal(document.activeElement, document.body)
+
+  // Asked while "接管" was on, cancelled once a read found implement not the
+  // same: the row's "接管" stays off, and the focus goes on the row.
+  await page.click(tabNamed(document, '任务'))
+  await page.click(rowButton(document, 72, '接管'))
+  implement = 'different'
+  await page.click(document.querySelector('.dk-head button'))
+  await page.click(askButton(document, '取消'))
+  assert.deepEqual(executeShown(rowButton(document, 72, '接管')), ['接管', false])
+  assert.equal(document.activeElement, rowOf(document, 72))
+})

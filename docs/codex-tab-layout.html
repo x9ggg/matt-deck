@@ -683,6 +683,45 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       </section>
     </div></div>
   </section>
+  <section class="shot" id="tasks-takeover-failed">
+    <h3>没有接管成<code>#tasks-takeover-failed</code></h3>
+    <p>转给了第三个 Session、Task 已关闭，或者提示收起之后才没接管成：结果提示在标签页下面说原因，焦点回到那一行的按钮上。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span></span>
+        <span class="dk-head__fresh caption">刚刚</span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">技能</button>
+      </div>
+      <div class="dk-notice is-danger" role="status">
+        <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+        <div class="dk-notice__body">
+          <span class="dk-notice__title heading">#72 没有接管</span>
+          <span class="dk-notice__text">已改由 Session c0ffee12 执行。</span>
+        </div>
+      </div>
+      </div>
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">进行中</span><span class="dk-group__count mono">4</span></header>
+        <ul class="dk-list">
+      <li class="dk-row is-other" tabindex="0">
+        <span class="dk-plate is-other" role="img" aria-label="进行中 · 其他 Session"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 2.4a5.6 5.6 0 0 0 0 11.2z" fill="currentColor"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-other">#72</span><span class="dk-row__title heading">Matt 技能</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>进行中 ·</span><span class="mono">c0ffee12</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">接管</button></span></div>
+        </div>
+      </li>
+        </ul>
+      </section>
+    </div></div>
+  </section>
   <section class="shot" id="tasks-takeover-host">
     <h3>接管确认：另一个 Host 的 Session<code>#tasks-takeover-host</code><span class="shot__part">只画变化的部分</span></h3>
     <p>标识前面写 Host 名。</p>

@@ -560,11 +560,15 @@ body{margin:0;background:var(--ground)}
       ? task.isOrphaned ? 'orphaned' : task.occupant === session.session ? 'running' : 'other'
       : { ready: 'ready', blocked: 'blocked', done: 'closed' }[group]
 
-  // A row: the glyph, the number and title, then what it says of itself.
-  const row = (task, state, className, before, after, meta, aside) =>
-    el('li', `dk-row is-${state}${className}`, plate(state), el('div', 'dk-row__main',
+  // A row: the glyph, the number and title, then what it says of itself. It
+  // takes the focus, as a closed asking may leave it there.
+  const row = (task, state, className, before, after, meta, aside) => {
+    const element = el('li', `dk-row is-${state}${className}`, plate(state), el('div', 'dk-row__main',
       el('div', 'dk-row__line', ...before, el('span', `dk-id is-${state}`, `#${task.number}`), el('span', 'dk-row__title heading', task.title), ...after),
       el('div', 'dk-row__line', el('span', 'dk-row__meta caption', ...meta), ...aside)))
+    element.tabIndex = 0
+    return element
+  }
 
   // What a Task's row says of its state, and the detail's badge.
   const statusOf = (task, state) =>
@@ -735,6 +739,7 @@ body{margin:0;background:var(--ground)}
   const enter = (step, via = []) => {
     closeTakeOver()
     closeResult()
+    refocus = undefined
     into ??= { tab: chosenTab(), via, steps: [] }
     into.steps.push({ ...step, left: window.scrollY })
     showPanel()
@@ -743,6 +748,7 @@ body{margin:0;background:var(--ground)}
   }
   const back = () => {
     closeResult()
+    refocus = undefined
     const { left } = into.steps.pop()
     if (into.steps.length === 0) into = undefined
     showPanel()
@@ -967,6 +973,8 @@ body{margin:0;background:var(--ground)}
           : state === 'ready' ? [executeButton(card.number, '执行', 'dk-btn dk-btn--sm dk-btn--go')]
           : state === 'orphaned' ? [takeOverButton(card.number, 'map')]
           : heldActions(card, state, 'map'))))
+    // It takes the focus, as a closed asking may leave it there.
+    element.tabIndex = 0
     element.addEventListener('click', () => openTask(card.number, [`#${map.number}`]))
     return element
   }
@@ -1054,6 +1062,7 @@ body{margin:0;background:var(--ground)}
       showMap()
     }
     showRecommendation()
+    placeFocus()
     return failure === undefined
   }
 
@@ -1160,7 +1169,8 @@ body{margin:0;background:var(--ground)}
   // prefill, takeover or release begins, with another tab, and into or back
   // from what is drilled into; a read draws nothing of it.
   const showResult = (title, said, ...more) => {
-    const notice = failedNotice(title, said)
+    const notice = failedNotice(title, '')
+    notice.querySelector('.dk-notice__text').replaceChildren(...[said].flat())
     notice.querySelector('.dk-notice__body').append(...more)
     $('result').replaceChildren(notice)
   }
@@ -1275,6 +1285,36 @@ body{margin:0;background:var(--ground)}
       if (takeover !== undefined && left.isConnected) takeover.focus = undefined
     })
   })
+  // Where the asking closed by the person, or by the takeover it asked for,
+  // leaves the focus: the Task's number, the place it was asked in, and the
+  // read of the Tasks it waits for, `until`, if any. The focus goes on the
+  // button the place has for the Task now, once its Execute Prompt is no
+  // longer being filled in; where it has none, or one off for another
+  // reason, on the Task's row or card. Moved elsewhere by the person
+  // meanwhile, in the page or out of it to the Host, or the place left, it
+  // stays where it is.
+  let refocus
+  const placeFocus = () => {
+    if (refocus === undefined || refocus.until !== undefined) return
+    const { number, place } = refocus
+    const holder = place === 'tasks' || place === 'map'
+      ? [...document.querySelectorAll(place === 'tasks' ? '#tasks .dk-row' : '#map .dk-card')].find(each => each.querySelector('.dk-id')?.textContent === `#${number}`)
+      : undefined
+    const actions = '[data-execute], [data-release]'
+    const button =
+      place === 'detail' ? (into?.steps.at(-1).task === number ? $('into-end').querySelector(actions) : null)
+      : place === 'next' ? $('next').querySelector(`.dk-rec [data-execute="${number}"]`)
+      : holder?.querySelector(actions) ?? null
+    if (button?.disabled && filling.has(number)) return
+    refocus = undefined
+    ;(button?.disabled === false ? button : holder)?.focus()
+  }
+  document.addEventListener('focusin', () => {
+    refocus = undefined
+  })
+  window.addEventListener('blur', () => {
+    refocus = undefined
+  })
   // Whether the Task, in the state it is in, is asked to be taken over in
   // the place: only while another Session holds it, or it is Orphaned.
   const isAsked = (task, state, place) =>
@@ -1285,6 +1325,7 @@ body{margin:0;background:var(--ground)}
     showMap()
     showRecommendation()
     if (into !== undefined) showStep(into.steps.at(-1))
+    placeFocus()
   }
   const askTakeOver = (number, place) => {
     takeover = { number, place, focus: 'cancel' }
@@ -1302,6 +1343,7 @@ body{margin:0;background:var(--ground)}
   // asks nothing.
   const releaseButton = (number, holder) => {
     const button = smallButton('释放')
+    button.dataset.release = String(number)
     button.addEventListener('click', event => {
       event.stopPropagation()
       release(number, holder)
@@ -1320,20 +1362,17 @@ body{margin:0;background:var(--ground)}
         ? [`#${task.number} 的 Session 已结束`]
         : [`#${task.number} 正由 ${task.occupantHost === session.sessionHost ? 'Session' : HOST_NAME[task.occupantHost]}`, el('span', 'mono', task.occupantShort), '执行']
     let said = ['接管会把 Occupancy 转给本 Session。']
-    if (takeover.failure !== undefined) {
-      // The reason in the Pane's words, and the hint that holds here: not
-      // "刷新", which moves nothing, but "接管" again.
-      const { kind, message } = takeover.failure
-      said = FAILURE[kind]?.(message) ?? [`Deck 服务出错：${message}。点“刷新”重试。`]
-      said.push(said.pop().replace(/点“刷新”重试。$/, '再点“接管”重试。'))
-    }
+    if (takeover.failure !== undefined) said = retried(takeover.failure, '接管')
     const confirm = executeButton(task.number, '接管', 'dk-btn', () => takeOver(task.number, task.occupant))
     const cancel = el('button', 'dk-btn dk-btn--quiet', '取消')
     cancel.type = 'button'
     // Off with "接管" while the Occupancy moves: closed then, it would move all
     // the same.
     cancel.disabled = takeover.moving === true
-    cancel.addEventListener('click', closeTakeOver)
+    cancel.addEventListener('click', () => {
+      refocus = { number: takeover.number, place: takeover.place }
+      closeTakeOver()
+    })
     confirm.dataset.takeover = 'confirm'
     cancel.dataset.takeover = 'cancel'
     const focus = { confirm, cancel }[takeover.focus]
@@ -1350,6 +1389,15 @@ body{margin:0;background:var(--ground)}
     )
     notice.setAttribute('role', 'status')
     return notice
+  }
+
+  // Why an Occupancy was not moved, in the Pane's words, and the hint that
+  // holds there: not "刷新", which moves nothing, but the button `label`
+  // again.
+  const retried = ({ kind, message }, label) => {
+    const said = FAILURE[kind]?.(message) ?? [`Deck 服务出错：${message}。点“刷新”重试。`]
+    said.push(said.pop().replace(/点“刷新”重试。$/, `再点“${label}”重试。`))
+    return said
   }
 
   // Takes the Task `number` over from the Session `from`, as the person
@@ -1375,14 +1423,35 @@ body{margin:0;background:var(--ground)}
       } catch (error) {
         answer = { ok: false, failure: { message: error.message } }
       }
-      // Drawn at once, why or closed, then as the Tasks are read again.
-      if (takeover?.number === number) {
-        takeover = answer.ok || answer.failure.kind === 'not-open' ? undefined : { ...takeover, moving: false, failure: answer.failure }
+      // Drawn at once, why or closed, then as the Tasks are read again. Why
+      // it moved nothing is said in the asking while it is open and the
+      // reason holds; else in the result notice.
+      const asked = takeover?.number === number
+      const { place } = takeover ?? {}
+      const why =
+        answer.ok ? answer.occupied ? undefined : `已改由 ${answer.occupantHost === session.sessionHost ? 'Session' : HOST_NAME[answer.occupantHost]} ${answer.occupantShort} 执行。`
+        : answer.failure.kind === 'not-open' ? '它已经关闭，或者不在 Task Source 里了。'
+        : asked ? undefined
+        : retried(answer.failure, '接管')
+      const closed = asked && (answer.ok || answer.failure.kind === 'not-open')
+      if (asked) {
+        takeover = closed ? undefined : { ...takeover, moving: false, failure: answer.failure }
         showTakeOver()
       }
+      if (why !== undefined) showResult(`#${number} 没有接管`, why)
       // Not moved, "接管" is on again at once: the Tasks are read again
       // behind any read under way, which it does not wait for.
       const readAgain = read()
+      // Closed by the takeover, the asking leaves the focus in its place as
+      // the Tasks read again show it.
+      if (closed) {
+        refocus = { number, place, until: readAgain }
+        readAgain.then(() => {
+          if (refocus?.until !== readAgain) return
+          refocus.until = undefined
+          placeFocus()
+        })
+      }
       if (!(answer.ok && answer.occupied)) return false
       // Read again, the project may be not configured by now, or implement
       // not the same copy: nothing is filled in then. A read that fails
@@ -1393,14 +1462,18 @@ body{margin:0;background:var(--ground)}
 
   // Releases the Occupancy the Session `holder` has of the Task `number`,
   // then reads the Tasks again, which show it in the group it is in now.
-  // One that passed to another Session since stays with it.
+  // One that passed to another Session since stays with it. Not released,
+  // the result notice says why.
   const release = async (number, holder) => {
     closeResult()
+    let answer
     try {
-      await callTool('deck_release', { task: number, session: holder })
-    } catch {
-      // Not released, the Tasks read again show it held still.
+      answer = await callTool('deck_release', { task: number, session: holder })
+    } catch (error) {
+      answer = { ok: false, failure: { message: error.message } }
     }
+    if (!answer.ok) showResult(`#${number} 没有释放`, retried(answer.failure, '释放'))
+    else if (!answer.released) showResult(`#${number} 没有释放`, 'Occupancy 已转给别的 Session。')
     await read()
   }
 
@@ -1432,6 +1505,7 @@ body{margin:0;background:var(--ground)}
     // The asking's "接管" the focus was on, off until now, takes it again.
     const focus = takeover?.focus === undefined ? null : document.querySelector(`[data-takeover="${takeover.focus}"]`)
     if (focus !== null && !focus.disabled && document.activeElement !== focus) focus.focus()
+    placeFocus()
   }
 
   const smallButton = (label, className = '') => {
@@ -1781,6 +1855,7 @@ body{margin:0;background:var(--ground)}
     into = undefined
     closeTakeOver()
     closeResult()
+    refocus = undefined
     if (isSwitching) {
       isSwitching = false
       showMap()
