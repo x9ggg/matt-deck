@@ -36,7 +36,7 @@ test('rejects on a click', async t => {
   })
   t.after(page.close)
   opened = true
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
 })
 
 test('rejects after a click by hand', async t => {
@@ -51,7 +51,7 @@ test('rejects after a click by hand', async t => {
   })
   t.after(page.close)
   opened = true
-  ;(page.document.querySelector('.dk-head button') as HTMLElement).click()
+  ;(page.document.querySelector('.dk-head > button') as HTMLElement).click()
   await new Promise(resolve => setTimeout(resolve, 20))
 })
 `
@@ -96,7 +96,7 @@ test('an answer that comes late, and the calls it leads to, are waited for', asy
 
   assert.deepEqual(calls, ['deck_config', 'deck_session', 'deck_configure'])
   calls.length = 0
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.deepEqual(calls, ['deck_config', 'deck_session', 'deck_configure'])
 })
 

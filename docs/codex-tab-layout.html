@@ -34,6 +34,7 @@
 .dk-chip svg{flex:none;width:9px;height:9px;color:var(--progress)}
 .dk-chip--project{border-color:var(--progress);color:var(--progress)}
 .dk-chip b{color:var(--ink);font-weight:400}
+.dk-chip__occupancy{display:inline-flex;align-items:center;gap:var(--space-1);padding:0;border:0;background:none;color:inherit;font:inherit;cursor:pointer}
 
 /* ---- Button ---- */
 .dk-btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);height:var(--control-height);padding:0 var(--space-3);border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface);color:var(--ink);font:inherit;font-weight:600;white-space:nowrap;cursor:pointer}
@@ -321,7 +322,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <div class="dk-top">
       <header class="dk-head">
         <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
-        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span> <button class="dk-chip__occupancy" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></button></span>
         <span class="dk-head__fresh caption">3 分钟前</span>
         <button class="dk-btn dk-btn--sm" type="button">刷新</button>
       </header>
@@ -355,7 +356,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <div class="dk-top">
       <header class="dk-head">
         <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
-        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span> <button class="dk-chip__occupancy" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></button></span>
         <span class="dk-head__fresh caption">3 分钟前</span>
         <button class="dk-btn dk-btn--sm" type="button">刷新</button>
       </header>
@@ -415,7 +416,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <div class="dk-top">
       <header class="dk-head">
         <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
-        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span> <button class="dk-chip__occupancy" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></button></span>
         <span class="dk-head__fresh caption">3 分钟前</span>
         <button class="dk-btn dk-btn--sm" type="button">刷新</button>
       </header>
@@ -904,7 +905,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <div class="dk-top">
       <header class="dk-head">
         <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
-        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span> <button class="dk-chip__occupancy" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></button></span>
         <span class="dk-head__fresh caption is-failed">读取失败</span>
         <button class="dk-btn dk-btn--sm" type="button">刷新</button>
       </header>
@@ -966,7 +967,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <div class="dk-top">
       <header class="dk-head">
         <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
-        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span></span>
         <span class="dk-head__fresh"></span>
         <button class="dk-btn dk-btn--sm" type="button">刷新</button>
       </header>
@@ -1014,7 +1015,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <div class="dk-top">
       <header class="dk-head">
         <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
-        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span> <button class="dk-chip__occupancy" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></button></span>
         <span class="dk-head__fresh caption">3 分钟前</span>
         <button class="dk-btn dk-btn--sm" type="button">刷新</button>
       </header>
@@ -1105,7 +1106,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <div class="dk-top">
       <header class="dk-head">
         <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
-        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span> <button class="dk-chip__occupancy" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></button></span>
         <span class="dk-head__fresh caption">3 分钟前</span>
         <button class="dk-btn dk-btn--sm" type="button">刷新</button>
       </header>
@@ -1269,7 +1270,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <div class="dk-top">
       <header class="dk-head">
         <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
-        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span> <button class="dk-chip__occupancy" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></button></span>
         <span class="dk-head__fresh caption">3 分钟前</span>
         <button class="dk-btn dk-btn--sm" type="button">刷新</button>
       </header>
@@ -1372,7 +1373,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <div class="dk-top">
       <header class="dk-head">
         <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
-        <span class="dk-chip"><span>Session <b>8186a893</b></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span> <button class="dk-chip__occupancy" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 13.5 8 4 13.5z" fill="currentColor"/></svg><b>#74</b></button></span>
         <span class="dk-head__fresh caption">3 分钟前</span>
         <button class="dk-btn dk-btn--sm" type="button">刷新</button>
       </header>

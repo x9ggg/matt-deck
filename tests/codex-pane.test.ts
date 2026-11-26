@@ -272,7 +272,8 @@ test('in a Configured Project the Pane heads its four tabs with the project and 
   const selected = () => tabs().filter(tab => tab.getAttribute('aria-selected') === 'true').map(text)
 
   assert.equal(text(document.querySelector('.dk-chip--project')), 'matt-deck')
-  assert.equal(text(document.querySelector('.dk-head .dk-chip:not(.dk-chip--project)')), 'Session 045b96fc')
+  // This Session holds #74: the head marks it after the Session's id.
+  assert.equal(text(document.querySelector('.dk-head .dk-chip:not(.dk-chip--project)')), 'Session 045b96fc #74')
   assert.equal(text(document.querySelector('.dk-head__fresh')), '刚刚')
   assert.deepEqual(tabs().map(text), ['下一步', '任务', '地图', '技能'])
   assert.deepEqual(selected(), ['任务'])
@@ -302,7 +303,7 @@ test('in a Configured Project the Pane heads its four tabs with the project and 
     { name: 'deck_configure', arguments: {} },
   ])
 
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.equal(calls().length, 14)
   assert.equal(text(document.querySelector('.dk-head__fresh')), '刚刚')
 })
@@ -323,7 +324,7 @@ test('the head says how fresh the read is, stale after ten minutes, until the Pa
   await page.advance(49 * 60_000)
   assert.deepEqual(shows(), ['1 小时前', true])
 
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.deepEqual(shows(), ['刚刚', false])
 })
 
@@ -337,7 +338,7 @@ test('"刷新" is off while the Pane reads', async t => {
     },
   })
   t.after(page.close)
-  const refresh = page.document.querySelector<HTMLButtonElement>('.dk-head button')!
+  const refresh = page.document.querySelector<HTMLButtonElement>('.dk-head > button')!
   assert.equal(refresh.disabled, false)
 
   let release!: () => void
@@ -550,7 +551,7 @@ test('the filter shows one group alone, all of it, and a group past five rows sh
   assert.equal(document.querySelector('button.dk-group__more'), null)
 
   // The filter stays as it is when the Pane reads again.
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(filterShown(document)[1], ['阻塞 7'])
 })
 
@@ -591,7 +592,7 @@ test('while the Pane reads again, the head still says how fresh the list it show
 
   await page.advance(60_000)
   await page.advance(60_000)
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.deepEqual(whileReading, ['', '1 分钟前', '1 分钟前', '刚刚'])
 })
 
@@ -625,7 +626,7 @@ test('"刷新" reads the Task Source again past the Deck service\'s cache; the o
   await page.advance(60_000)
   await page.show(false)
   await page.show(true)
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.deepEqual(reads(), [{}, {}, {}, { refresh: true }])
 })
 
@@ -673,30 +674,30 @@ test('when the Task Source cannot be read the Pane says why, over the list it re
   assert.equal(shown(page, document.querySelector('#tasks .dk-empty')), false)
 
   failure = undefined
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.equal(notice(), undefined)
   assert.equal(text(document.querySelector('.dk-head__fresh')), '刚刚')
 
   // Read before: the list stays under the reason.
   failure = { kind: 'no-repository', message: 'no git remote' }
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(notice(), ['读取 Task 失败', '这个 Workspace 没有指向 GitHub 的 remote，读不到 Issues。', []])
   assert.equal(text(document.querySelector('.dk-head__fresh')), '读取失败')
   assert.deepEqual(groupsShown(document)[0], ['可执行 1', '#70 Task 详情 可执行 ready-for-agent 执行'])
 
   failure = { kind: 'failed', message: 'HTTP 502' }
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(notice()?.[1], 'gh 出错：HTTP 502。点“刷新”重试。')
   failure = { kind: 'offline', message: 'dial tcp' }
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(notice()?.[1], '连不上 GitHub。检查网络后点“刷新”重试。')
   failure = { kind: 'gh-missing', message: 'spawn gh ENOENT' }
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(notice()?.[1], '找不到 gh 命令。安装 GitHub CLI 后点“刷新”重试。')
 
   // Read again, the head says how fresh the list is, no longer that it failed.
   failure = undefined
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.equal(notice(), undefined)
   assert.equal(text(document.querySelector('.dk-head__fresh')), '刚刚')
   assert.equal(document.querySelector('.dk-head__fresh')!.classList.contains('is-failed'), false)
@@ -731,7 +732,7 @@ test('the head\'s freshness says what the last read came to, and keeps saying it
   const shows = () => freshness(page.document)
   const refresh = async () => {
     whileReading.length = 0
-    await page.click(page.document.querySelector('.dk-head button'))
+    await page.click(page.document.querySelector('.dk-head > button'))
   }
 
   // The first read: nothing to say until it answers.
@@ -893,7 +894,7 @@ test('a reason the Task Source or the Deck service gives is shown as it is, back
   }
   const fail = async (failure: object) => {
     answerOf = () => failure
-    await page.click(page.document.querySelector('.dk-head button'))
+    await page.click(page.document.querySelector('.dk-head > button'))
   }
 
   await fail(answered({ ok: false, failure: { kind: 'failed', message: 'run `gh auth refresh' } }))
@@ -1192,7 +1193,7 @@ test('"刷新" reads the skills again, on whichever tab it is clicked, and openi
   })
   t.after(page.close)
   const { document } = page
-  const refresh = document.querySelector('.dk-head button')!
+  const refresh = document.querySelector('.dk-head > button')!
   const tabs = [...document.querySelectorAll('[role="tab"]')]
   const warned = () =>
     [...document.querySelectorAll('.dk-notice.is-warn[role="status"]')].filter(notice => shown(page, notice)).map(notice => text(notice.querySelector('.dk-notice__title')))
@@ -1223,13 +1224,14 @@ test('whatever the person clicks, the Pane only puts text in the prompt and neve
   // Every button the person sees on every view the 技能 tab has, and the
   // unconfigured Pane's: each time the last one the page shows now and that
   // was not clicked yet, so a text's "预填" comes before its "返回", and
-  // "刷新" at the end, as it draws the list again.
+  // "刷新" at the end, as it draws the list again. The head's mark of this
+  // Session's Task leads out of these views, into a Task's detail.
   const clickAll = async (page: typeof configured) => {
     const clicked = new Set<Element>()
-    const refresh = page.document.querySelector('.dk-head button')!
+    const refresh = page.document.querySelector('.dk-head > button')!
     for (;;) {
       const button = [...page.document.querySelectorAll<HTMLButtonElement>('.dk-pane button:not([role="tab"])')].findLast(
-        each => each !== refresh && !clicked.has(each) && shown(page, each) && !each.disabled,
+        each => each.closest('.dk-head') === null && !clicked.has(each) && shown(page, each) && !each.disabled,
       )
       if (button === undefined) {
         break
@@ -1582,7 +1584,7 @@ test('the reads every 60 seconds, as the tab is shown again and on "刷新" leav
   const deck = deckThatRecommends()
   const page = await openNext(deck)
   t.after(page.close)
-  const refresh = page.document.querySelector('.dk-head button')!
+  const refresh = page.document.querySelector('.dk-head > button')!
   await page.click(button(page, '我现在该做什么'))
   await page.click(button(page, '再问一次'))
   const waiting = nextTab(page)
@@ -1645,7 +1647,7 @@ test('"我现在该做什么" is off until the skills are read, and on again onc
   assert.equal(reads, 1)
   assert.deepEqual(nextTab(page).buttons, ['我现在该做什么'])
   // "刷新" on this tab reads the skills again.
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.equal(reads, 2)
   assert.deepEqual(nextTab(page).buttons, ['我现在该做什么（停用）', '重跑配置'])
   // Shown again without a "刷新" in between, the tab reads no skills.
@@ -1701,14 +1703,14 @@ test('when the Deck service cannot make the request the 下一步 tab says why i
   // "刷新" reads the page again, and the notice of a request that was not
   // made goes; it makes no request.
   assert.equal(asks, 8)
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.deepEqual(nextTab(page).said, ['把 $ask-matt 填进输入框，附带 Task Snapshot。'])
   assert.equal(asks, 8)
   await fail(answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp 9z' } }))
   // Away on another tab "刷新" takes it away too.
   const tabs = [...page.document.querySelectorAll('[role="tab"]')]
   await page.click(tabs[1]!)
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   await page.click(tabs[0]!)
   assert.deepEqual(nextTab(page).said, ['把 $ask-matt 填进输入框，附带 Task Snapshot。'])
   await page.advance(10_000)
@@ -2061,11 +2063,11 @@ test('until deck_task answers the detail says it is reading the Task; when it fa
   assert.deepEqual(detailShown(page)!.bar, ['返回'])
 
   failure = { content: [{ type: 'text', text: 'database is locked' }], isError: true }
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.deepEqual(notice(), ['读取 #70 失败', 'Deck 服务出错：database is locked。点“刷新”重试。'])
 
   failure = undefined
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.equal(notice(), undefined)
   assert.equal(detailShown(page)!.title, '#70 Task 详情')
 })
@@ -2102,7 +2104,7 @@ test('a Task the list no longer holds still shows what deck_task reads, with no 
 
   await page.click(rowOf(page.document, 70))
   tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [] } }
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.equal(detailShown(page)!.title, '#70 Task 详情')
   assert.deepEqual(detailShown(page)!.meta, ['ready-for-human', 'x9ggg, someone', '更新 11-21'])
   assert.equal(page.document.querySelector('.dk-detail__title .dk-id')!.className, 'dk-id')
@@ -2164,7 +2166,7 @@ test('a project no longer configured shows no detail', async t => {
 
   await page.click(rowOf(page.document, 70))
   configured = false
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.equal(detailShown(page), undefined)
   assert.equal(shown(page, page.document.querySelector('#unconfigured')), true)
 })
@@ -2180,7 +2182,7 @@ test('a skill\'s text goes the way a Task\'s detail goes: "刷新" reads it and 
   await page.click(row(IMPLEMENT))
   assert.equal(page.scrolled(), 0)
   assert.equal(text(document.querySelector('.dk-crumbs b')), IMPLEMENT)
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual([called('deck_skills'), called('deck_skill')], [2, 2])
   assert.equal(text(document.querySelector('.dk-detail .dk-skill__name')), IMPLEMENT)
 
@@ -2198,7 +2200,7 @@ test('"刷新" with a skill\'s text open draws its "预填" by what the new read
   t.after(page.close)
   const { document } = page
   const prefillShown = () => [...document.querySelectorAll<HTMLButtonElement>('.dk-bar button')].find(each => text(each) === '预填')!
-  const refresh = () => page.click(document.querySelector('.dk-head button'))
+  const refresh = () => page.click(document.querySelector('.dk-head > button'))
   const implement = (more: object) => SKILLS.map((skill: any) => (skill.name === 'implement' ? { ...skill, ...more } : skill))
 
   await page.click([...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === IMPLEMENT)!)
@@ -2274,7 +2276,7 @@ test('"刷新" with a skill\'s text open turns its "预填" off when the Skill S
   t.after(page.close)
   const { document } = page
   const prefillShown = () => [...document.querySelectorAll<HTMLButtonElement>('.dk-bar button')].find(each => text(each) === '预填')!
-  const refresh = () => page.click(document.querySelector('.dk-head button'))
+  const refresh = () => page.click(document.querySelector('.dk-head > button'))
 
   await page.click([...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === IMPLEMENT)!)
   assert.equal(prefillShown().disabled, false)
@@ -2477,7 +2479,7 @@ test('a wall shows three blocked Child Tasks and puts the rest behind "还有 N 
   assert.deepEqual(numbersShown(), [70, 80, 81, 82, 83, 84, 65])
   assert.deepEqual(mapShown(page).more, [])
   // Read again, the wall stays open.
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(numbersShown(), [70, 80, 81, 82, 83, 84, 65])
   // Another Map View's wall is not.
   await page.click(document.querySelector('#map .dk-spec__head button'))
@@ -2518,7 +2520,7 @@ test('with more than one Spec or Map, "切换" lists them all to choose the Map 
   await page.click(switchButton())
   await page.click([...document.querySelectorAll('#map .dk-row')][1]!)
   assert.deepEqual(mapShown(page), { card: ['Map #50 切换 旧地图 可执行 0 进行中 0 阻塞 0 已解锁 0 解锁进度 0 / 0 0%'], wall: [], more: [] })
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.equal(mapShown(page).card[0]!.startsWith('Map #50'), true)
 
   // Another tab leaves the list to switch to: back in "地图" is the Map View.
@@ -2659,7 +2661,7 @@ test('the "地图" tab says it is reading until the first read comes back, and w
   assert.deepEqual(notice(), [])
 
   failure = { kind: 'unauthenticated', message: 'not logged in' }
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(notice(), [['读取 Task 失败', 'gh 未登录。运行 gh auth login 后点“刷新”重试。', ['gh', 'gh auth login']]])
   assert.equal(text(document.querySelector('.dk-head__fresh')), '读取失败')
   assert.equal(mapShown(page).card[0]!.startsWith('Spec #64'), true)
@@ -2668,7 +2670,7 @@ test('the "地图" tab says it is reading until the first read comes back, and w
   assert.equal(text([...document.querySelectorAll('#tasks .dk-notice.is-danger')].find(each => shown(page, each))!.querySelector('.dk-notice__text')), 'gh 未登录。运行 gh auth login 后点“刷新”重试。')
 
   failure = undefined
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   await page.click(tabNamed(document, '地图'))
   assert.deepEqual(notice(), [])
 })
@@ -2723,7 +2725,7 @@ test('the Tasks and their Map Views are one read: when deck_map fails after deck
   // The Task Source has changed, and deck_map cannot read it.
   tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [] } }
   mapAnswer = () => answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp' } })
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(noticeIn('tasks'), ['连不上 GitHub。检查网络后点“刷新”重试。'])
   assert.deepEqual(groupsShown(document), before)
   assert.equal(text(document.querySelector('.dk-head__fresh')), '读取失败')
@@ -2733,7 +2735,7 @@ test('the Tasks and their Map Views are one read: when deck_map fails after deck
 
   // A tool error of deck_map says so in both, the same way.
   mapAnswer = () => ({ content: [{ type: 'text', text: 'database is locked' }], isError: true })
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(noticeIn('map'), ['Deck 服务出错：database is locked。点“刷新”重试。'])
   await page.click(tabNamed(document, '任务'))
   assert.deepEqual(noticeIn('tasks'), ['Deck 服务出错：database is locked。点“刷新”重试。'])
@@ -2741,7 +2743,7 @@ test('the Tasks and their Map Views are one read: when deck_map fails after deck
 
   // Read again, both are what the Deck service now gives.
   mapAnswer = () => answered(MAPS)
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(noticeIn('tasks'), [])
   assert.notDeepEqual(groupsShown(document), before)
 })
@@ -3216,7 +3218,7 @@ test('a ready Task\'s "执行" puts the Execute Prompt the Deck service gives in
   assert.equal(detailShown(page), undefined)
   assert.deepEqual(executeShown(rowExecute(document, 70)), ['已填入', false])
   // "刷新" and the timed read draw the row again, its "执行" as it stands.
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   await page.show(false)
   await page.show(true)
   await page.advance(4_999)
@@ -3244,7 +3246,7 @@ test('a ready Task\'s detail has "执行" in its bar before "在 GitHub 打开",
   assert.deepEqual(executeShown(barExecute(document)), ['已填入', false])
   // The detail read again within the 5 seconds says so too, and so does the row.
   await page.advance(60_000 - 55_001)
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(executeShown(barExecute(document)), ['已填入', false])
   await back()
   assert.deepEqual(executeShown(rowExecute(document, 70)), ['已填入', false])
@@ -3378,7 +3380,7 @@ test('"执行" is off, and the 任务 tab says why in its own words, when the Sk
   const answer = deckAt('/work/matt-deck')
   const page = await openPage({ answer: (name, args) => (name === 'deck_skills' ? skillsAnswer() : answer(name, args)) })
   t.after(page.close)
-  const refresh = () => page.click(page.document.querySelector('.dk-head button'))
+  const refresh = () => page.click(page.document.querySelector('.dk-head > button'))
 
   assert.deepEqual(noExecute(page), ['Skill Source 里没有 implement，不能预填执行。', '所有 Task 的“执行”先停用，重跑配置之后恢复。'])
   assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', false])
@@ -3609,7 +3611,7 @@ test('a detail drawn again while another step is shown over it has its "执行" 
   await timed
 
   copy = 'different'
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(executeShown(barExecute(document)), ['执行', false])
 
   goingBack = true
@@ -3637,7 +3639,7 @@ test('a read of the skills asked before a read finds the project not configured,
       if (reads === 1) {
         // The first read of the Pane ends, then a read finds the project not
         // configured, before this read of the skills answers.
-        const refresh = document.querySelector<HTMLButtonElement>('.dk-head button')!
+        const refresh = document.querySelector<HTMLButtonElement>('.dk-head > button')!
         while (refresh.disabled) await wait()
         configured = false
         document.dispatchEvent(new document.defaultView!.Event('visibilitychange'))
@@ -3694,7 +3696,7 @@ test('a read of the skills answered after a later one is dropped: "执行" goes 
       const copy = reads === 1 ? 'same' : 'different'
       if (reads === 1) {
         // "刷新" once the read it was off for ends, before this read answers.
-        const refresh = document.querySelector<HTMLButtonElement>('.dk-head button')!
+        const refresh = document.querySelector<HTMLButtonElement>('.dk-head > button')!
         while (refresh.disabled) await new Promise(resolve => setTimeout(resolve, 5))
         refresh.click()
         while (!laterAnswered) await new Promise(resolve => setTimeout(resolve, 5))
@@ -3832,11 +3834,11 @@ test('when the Deck service does not give the configure skill\'s call, every "�
   assert.deepEqual(prefills(page), [])
 
   isConfigureGiven = true
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.deepEqual(reruns(page), { tasks: [true], map: [true], skills: [true], next: [true] })
 
   isConfigureGiven = false
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.deepEqual(reruns(page), { tasks: [true], map: [true], skills: [true], next: [true] })
   await page.click(page.document.querySelector('#tasks .dk-notice.is-warn button'))
   assert.deepEqual(prefills(page), [prefilled(CONFIGURE_CALL)])
@@ -3883,7 +3885,7 @@ test('where Deck\'s hook never ran, the Pane says so in an orange notice between
   assert.equal(text(document.querySelector('#crumbs')), '任务 / #70')
   assert.deepEqual(hookNotice(page), [HOOK_TITLE, '收起', HOOK_STEPS])
   // Read again, it is as the person left it.
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(hookNotice(page), [HOOK_TITLE, '收起', HOOK_STEPS])
 
   await page.click(notice.querySelector('button'))
@@ -3907,7 +3909,7 @@ test('the notice that Deck\'s hook never ran goes with the first read that finds
   assert.equal(hookNotice(page), undefined)
 
   hook.receivedAt = null
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.equal(hookNotice(page)?.[0], HOOK_TITLE)
 })
 
@@ -3924,12 +3926,12 @@ test('in a project that is not configured the Pane asks nothing of Deck\'s hook 
   assert.equal(hooks(), 0)
 
   isConfigured = true
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.equal(hookNotice(page)?.[0], HOOK_TITLE)
   assert.equal(hooks(), 1)
 
   isConfigured = false
-  await page.click(page.document.querySelector('.dk-head button'))
+  await page.click(page.document.querySelector('.dk-head > button'))
   assert.equal(hookNotice(page), undefined)
   assert.equal(hooks(), 1)
 })
@@ -3964,7 +3966,7 @@ test('where the Deck service can no longer say whether Deck\'s hook ever ran, a 
 
   assert.equal(hookNotice(page)?.[0], HOOK_TITLE)
   hookFails = true
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
 
   assert.equal(hookNotice(page), undefined)
   assert.equal(shown(page, configFailed), false)
@@ -4196,7 +4198,7 @@ test('the confirmation stays where it was asked, the focus on it, through the ti
 
   // Drawn anew, the first time it was shown is not again.
   ;(document.querySelector('#filter button') as HTMLElement).focus()
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(askShown(page), asked)
   assert.deepEqual(focused(document), [text(document.querySelector('#filter button')), false])
 
@@ -4428,13 +4430,13 @@ test('a confirmation asked as implement is read the same has "接管" off once a
   await page.click(rowButton(document, 72, '接管'))
 
   copy = 'missing'
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(askShown(page)?.buttons, ['接管（停用）', '取消'])
   await page.click(askButton(document, '接管'))
   assert.deepEqual(calledWith(page, 'deck_occupy'), [])
 
   copy = 'same'
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(askShown(page)?.buttons, ['接管', '取消'])
 })
 
@@ -4746,12 +4748,12 @@ test('a takeover or a release while a timed read is under way reads once that re
     const page = await openPage({
       answer: async (name, args, document) => {
         calls.push(name)
-        if (name !== 'deck_occupy' && name !== 'deck_execute' && name !== 'deck_release') off.push((document.querySelector('.dk-head button') as HTMLButtonElement).disabled)
+        if (name !== 'deck_occupy' && name !== 'deck_execute' && name !== 'deck_release') off.push((document.querySelector('.dk-head > button') as HTMLButtonElement).disabled)
         if (name === 'deck_tasks' && isHeld) {
           isHeld = false
           ;((act === '接管' ? askButton(document, '接管') : rowButton(document, 74, '释放')) as HTMLElement).click()
           await new Promise(resolve => setTimeout(resolve, 30))
-          off.push((document.querySelector('.dk-head button') as HTMLButtonElement).disabled)
+          off.push((document.querySelector('.dk-head > button') as HTMLButtonElement).disabled)
           calls.push('held answered')
         }
         return deck.answer(name, args)
@@ -4770,7 +4772,7 @@ test('a takeover or a release while a timed read is under way reads once that re
     assert.deepEqual(calls.slice(held + 1, answeredAt).filter(each => ['deck_config', 'deck_tasks'].includes(each)), [], act)
     assert.ok(calls.indexOf('deck_config', answeredAt) > answeredAt, act)
     assert.ok(off.every(Boolean), act)
-    assert.equal((document.querySelector('.dk-head button') as HTMLButtonElement).disabled, false, act)
+    assert.equal((document.querySelector('.dk-head > button') as HTMLButtonElement).disabled, false, act)
     assert.deepEqual(buttonsIn(rowOf(document, act === '接管' ? 72 : 74).querySelector('.dk-row__actions')), act === '接管' ? ['释放'] : ['执行'], act)
   }
 })
@@ -4796,7 +4798,7 @@ test('a release the Deck service does not make, or fails at, reads the Tasks aga
     assert.equal(calledWith(page, 'deck_tasks').length, readBefore + 1)
     assert.equal(text(rowOf(document, 74).querySelector('.dk-row__meta')), '进行中 · 本 Session ready-for-agent')
     assert.deepEqual(buttonsIn(rowOf(document, 74).querySelector('.dk-row__actions')), ['释放'])
-    assert.equal((document.querySelector('.dk-head button') as HTMLButtonElement).disabled, false)
+    assert.equal((document.querySelector('.dk-head > button') as HTMLButtonElement).disabled, false)
   }
 })
 
@@ -5216,7 +5218,7 @@ test('the result notice stays through the timed reads, the read as the tab is sh
   await page.advance(60_000)
   await page.show(false)
   await page.show(true)
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.equal(reads(), readBefore + 3)
   assert.equal(resultShown(page)?.title, '没有填入输入框')
 
@@ -5510,7 +5512,7 @@ test('closed, an asking under a detail\'s bar leaves the focus on the Task\'s ac
   await page.advance(2_000)
   await page.click(recommended())
   await page.click(askButton(document, '接管'))
-  const refresh = document.querySelector<HTMLButtonElement>('.dk-head button')!
+  const refresh = document.querySelector<HTMLButtonElement>('.dk-head > button')!
   refresh.focus()
   await page.advance(5_000)
   assert.deepEqual(executeShown(recommended()), ['执行这个 Task', true])
@@ -5547,7 +5549,7 @@ test('closed, an asking whose Task is closed by now, its place without a button,
 
   // Open again, as a read finds it.
   isClosed = false
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   await page.click(tabNamed(document, '地图'))
   await page.click(cardButton(document, 72, '接管'))
   await page.click(askButton(document, '接管'))
@@ -5592,7 +5594,7 @@ test('closed, an asking leaves the focus where it is once the person has gone to
   await page.click(tabNamed(document, '任务'))
   await page.click(rowButton(document, 72, '接管'))
   implement = 'different'
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   await page.click(askButton(document, '取消'))
   assert.deepEqual(executeShown(rowButton(document, 72, '接管')), ['接管', false])
   assert.equal(document.activeElement, rowOf(document, 72))
@@ -5954,7 +5956,7 @@ test('a prefill goes by what it fills in: the 5 seconds of a "收尾核对" hold
   await other.click(tabNamed(other.document, '技能'))
   assert.deepEqual(reruns().map(state), [['已填入', true]])
   await other.click(row())
-  await other.click(other.document.querySelector('.dk-head button'))
+  await other.click(other.document.querySelector('.dk-head > button'))
   assert.deepEqual(state(row()), ['已填入', true])
   await other.click([...other.document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === '$ask-matt')!)
   assert.deepEqual(state(barButton(other.document, '已填入')), ['已填入', true])
@@ -6023,7 +6025,7 @@ test('a timed read whose Tasks the Deck service does not answer is late at 10 se
   const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' ? (dropping ? undefined : answered(tasks)) : deckWithSkills()(name, args)) })
   t.after(page.close)
   const { document } = page
-  const refresh = document.querySelector<HTMLButtonElement>('.dk-head button')!
+  const refresh = document.querySelector<HTMLButtonElement>('.dk-head > button')!
   const reads = () => calledWith(page, 'deck_tasks').length
 
   dropping = true
@@ -6053,7 +6055,7 @@ test('a read late on the skills, after "刷新" in 技能, or on a detail\'s Tas
   const page = await openPage({ answer: (name, args: any) => (name === dropping ? undefined : deckWithSkills(skills)(name, args)) })
   t.after(page.close)
   const { document } = page
-  const refresh = document.querySelector<HTMLButtonElement>('.dk-head button')!
+  const refresh = document.querySelector<HTMLButtonElement>('.dk-head > button')!
   const reads = () => calledWith(page, 'deck_tasks').length
   // Late 10 seconds after the read began, and the next timed read made.
   const lateFrom = async (begin: () => Promise<void>, wait: number) => {
@@ -6105,7 +6107,7 @@ test('once a read is late, "刷新" reads anew and draws it; the late read\'s an
 
   dropping = false
   tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [...TASKS.groups.ready, task(90, '新读到的 9q2w')] } }
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.equal(text(rowOf(document, 90).querySelector('.dk-row__title')), '新读到的 9q2w')
   assert.equal(lateShown(page), undefined)
   const drawn = text(document.querySelector('#tasks'))
@@ -6157,7 +6159,7 @@ test('while a read is under way and not late, the timed read and the read as the
   // "刷新" 5 seconds before the timed read.
   await page.advance(55_000)
   dropping = true
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   const before = reads()
   await page.advance(5_000)
   await page.show(false)
@@ -6176,13 +6178,13 @@ test('a late "刷新" whose Tasks are answered while the read after it waits for
   const { document } = page
 
   dropping = ['deck_tasks']
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   const lateRead = lastTasksRead(page)
   await page.advance(10_000)
   assert.deepEqual(lateShown(page), LATE)
 
   dropping = ['deck_skills']
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   const skillsRead = page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_skills').at(-1)
   await page.respond(lateRead, { result: answered(TASKS) })
   dropping = []
@@ -6208,7 +6210,7 @@ test('a detail read again the same as it was drawn is left as it is: its bar, it
   open.focus()
 
   await page.advance(60_000)
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   open.focus()
   await page.advance(60_000)
 
@@ -6322,7 +6324,7 @@ test('a skill\'s text whose read again fails keeps what it read under the notice
   const read = text(document.querySelector('.dk-detail'))
 
   failing = true
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   const notices = [...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each))
   assert.deepEqual(notices.map(each => [text(each.querySelector('.dk-notice__title')), text(each.querySelector('.dk-notice__text'))]), [
     ['读取技能失败', 'Deck 服务出错：EACCES 7v2b。点“刷新”重试。'],
@@ -6331,7 +6333,7 @@ test('a skill\'s text whose read again fails keeps what it read under the notice
   assert.ok(notices[0]!.compareDocumentPosition(document.querySelector('.dk-detail')!) & 4)
 
   failing = false
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual([...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each)), [])
   assert.equal(text(document.querySelector('.dk-detail')), read)
 })
@@ -6345,7 +6347,7 @@ test('a skill\'s "预填" from its text stays 已填入 for 5 seconds through "�
   await page.click(skillRowOf(document, IMPLEMENT))
 
   await page.click(barButton(document, '预填'))
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   await page.advance(2_000)
   await page.click(barButton(document, '已填入'))
   assert.deepEqual(state(barButton(document, '已填入')), ['已填入', true])
@@ -6364,11 +6366,11 @@ test('"重跑配置" stays off for 5 seconds everywhere through reads and tabs, 
   const reruns = () => [...document.querySelectorAll('button')].filter(each => each.dataset.label === '重跑配置' && shown(page, each)).map(each => [text(each), each.disabled])
 
   await page.click(document.querySelector('#tasks-noexec button'))
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(reruns(), [['已填入', true]])
   for (const tab of ['地图', '技能']) {
     await page.click(tabNamed(document, tab))
-    await page.click(document.querySelector('.dk-head button'))
+    await page.click(document.querySelector('.dk-head > button'))
     assert.deepEqual(reruns(), [['已填入', true]], tab)
   }
   await page.advance(5_000)
@@ -6380,7 +6382,7 @@ test('"重跑配置" stays off for 5 seconds everywhere through reads and tabs, 
   const { document: doc } = closeout
   const onRow = () => rowOf(doc, 64).querySelector('button')!
   await closeout.click(onRow())
-  await closeout.click(doc.querySelector('.dk-head button'))
+  await closeout.click(doc.querySelector('.dk-head > button'))
   await closeout.click(onRow())
   assert.deepEqual([text(onRow()), onRow().disabled], ['已填入', true])
   // In its detail, and back; on its card in 地图.
@@ -6409,7 +6411,7 @@ test('"刷新" that finds a skill no longer the same file puts the "预填" of i
 
   copy = 'different'
   reading = false
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.equal((barButton(document, '预填') as HTMLButtonElement).disabled, true)
 })
 
@@ -6426,7 +6428,7 @@ test('"刷新" that finds a skill gone from the Skill Source puts the "预填" o
   assert.equal((barButton(document, '预填') as HTMLButtonElement).disabled, false)
 
   gone = true
-  await page.click(document.querySelector('.dk-head button'))
+  await page.click(document.querySelector('.dk-head > button'))
   assert.equal((barButton(document, '预填') as HTMLButtonElement).disabled, true)
 })
 
@@ -6502,4 +6504,138 @@ test('asked again once a report came, the tab says the request is in the prompt,
 
   await page.click(button(page, '再问一次'))
   assert.deepEqual(nextTab(page).said, ['已填入输入框，等你发送。'])
+})
+
+// The head's mark of this Session's Occupancy: the ▶ after its id and the
+// Task's number, a button into that Task's detail.
+const occupancyMark = (page: { window: any; document: Document }) => {
+  const mark = page.document.querySelector('.dk-head .dk-chip:not(.dk-chip--project) button')
+  return mark !== null && shown(page, mark) ? mark : undefined
+}
+
+test('the head marks the Task this Session holds after its id, the first of the in-progress group where it holds two', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+
+  assert.equal(text(page.document.querySelector('.dk-head .dk-chip:not(.dk-chip--project)')), 'Session 045b96fc #74')
+  assert.equal(occupancyMark(page)!.querySelector('path')!.getAttribute('d'), 'M4 2.5 13.5 8 4 13.5z')
+
+  const mine = (number: number) => task(number, `本 Session 的 ${number}`, { occupant: SESSION.session, occupantHost: 'codex', occupantShort: '045b96fc' })
+  const two = await openPage({ answer: deckAt('/work/matt-deck', true, { ...TASKS, groups: { ...TASKS.groups, inProgress: [OTHER, mine(81), CLAUDE, mine(80)] } }) })
+  t.after(two.close)
+  assert.equal(text(two.document.querySelector('.dk-head .dk-chip:not(.dk-chip--project)')), 'Session 045b96fc #81')
+})
+
+test('the head marks no Task another Session holds, of this Host, of Claude Code or Orphaned, this Session\'s own Orphaned one too', async t => {
+  const ownOrphaned = task(81, '本 Session 失联', { occupant: SESSION.session, occupantHost: 'codex', occupantShort: '045b96fc', isOrphaned: true })
+  const page = await openPage({ answer: deckAt('/work/matt-deck', true, { ...TASKS, groups: { ...TASKS.groups, inProgress: [OTHER, CLAUDE, ORPHANED, ownOrphaned] } }) })
+  t.after(page.close)
+
+  assert.equal(text(page.document.querySelector('.dk-head .dk-chip:not(.dk-chip--project)')), 'Session 045b96fc')
+  assert.equal(occupancyMark(page), undefined)
+})
+
+test('the head\'s mark opens the Task\'s detail from each tab, its way the tab and the number, and "返回" goes back to where the tab was', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+  const selected = () => text(document.querySelector('[role="tab"][aria-selected="true"]'))
+
+  for (const tab of ['下一步', '任务', '地图', '技能']) {
+    await page.click(tabNamed(document, tab))
+    page.scroll(300)
+    await page.click(occupancyMark(page)!)
+    assert.equal(detailShown(page)?.crumbs, `${tab} / #74`, tab)
+    assert.match(detailShown(page)!.title!, /执行与 Occupancy 登记/, tab)
+    assert.equal(page.scrolled(), 0, tab)
+
+    await page.click(barButton(document, '返回'))
+    assert.equal(detailShown(page), undefined, tab)
+    assert.equal(selected(), tab)
+    assert.equal(page.scrolled(), 300, tab)
+  }
+})
+
+test('in a detail the head\'s mark goes one step further in, and "返回" back to that detail', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowOf(document, 73))
+  await page.click(occupancyMark(page)!)
+  assert.equal(detailShown(page)?.crumbs, '任务 / #73 / #74')
+
+  await page.click(barButton(document, '返回'))
+  assert.equal(detailShown(page)?.crumbs, '任务 / #73')
+})
+
+test('the head\'s mark is a button that is on and takes the focus, which the browser moves Tab onto and Enter clicks', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const mark = occupancyMark(page) as HTMLButtonElement
+
+  // jsdom moves no focus by Tab and clicks nothing by Enter; a button that
+  // is on and takes the focus is one a browser does both for.
+  assert.equal(mark.tagName, 'BUTTON')
+  assert.equal(mark.type, 'button')
+  assert.equal(mark.disabled, false)
+  assert.equal(mark.tabIndex, 0)
+  mark.focus()
+  assert.equal(page.document.activeElement, mark)
+})
+
+test('released, the head\'s mark goes with the next read; taken over, it marks the Task taken over', async t => {
+  const page = await openPage({ answer: deckThatOccupies().answer })
+  t.after(page.close)
+  const { document } = page
+  const chip = () => text(document.querySelector('.dk-head .dk-chip:not(.dk-chip--project)'))
+
+  await page.click(rowButton(document, 74, '释放'))
+  assert.equal(chip(), 'Session 045b96fc')
+  assert.equal(occupancyMark(page), undefined)
+
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  assert.equal(chip(), 'Session 045b96fc #72')
+  await page.click(occupancyMark(page)!)
+  assert.equal(detailShown(page)?.crumbs, '任务 / #72')
+})
+
+test('the head marks nothing before the Tasks are read, and a read that fails leaves the mark of the list read before', async t => {
+  let failing = false
+  let holding = true
+  const page = await openPage({
+    answer: (name, args) =>
+      name === 'deck_tasks' && holding ? undefined
+      : name === 'deck_tasks' && failing ? answered({ ok: false, failure: { kind: 'offline', message: 'offline' } })
+      : deckAt('/work/matt-deck')(name, args),
+  })
+  t.after(page.close)
+  assert.equal(text(page.document.querySelector('.dk-head .dk-chip:not(.dk-chip--project)')), 'Session 045b96fc')
+  assert.equal(occupancyMark(page), undefined)
+
+  holding = false
+  await page.advance(10_000)
+  await page.click(page.document.querySelector('.dk-head > button'))
+  assert.equal(text(occupancyMark(page)!), '#74')
+
+  failing = true
+  await page.click(page.document.querySelector('.dk-head > button'))
+  assert.equal(text(page.document.querySelector('.dk-head__fresh')), '读取失败')
+  assert.equal(text(occupancyMark(page)!), '#74')
+})
+
+test('a project no longer configured has no mark in its head, and configured again marks the Task once more', async t => {
+  let configured = true
+  const page = await openPage({ answer: (name, args) => deckAt('/work/matt-deck', configured)(name, args) })
+  t.after(page.close)
+
+  configured = false
+  await page.click(page.document.querySelector('.dk-head > button'))
+  assert.equal(text(page.document.querySelector('.dk-head .dk-chip:not(.dk-chip--project)')), 'Session 045b96fc')
+  assert.equal(occupancyMark(page), undefined)
+
+  configured = true
+  await page.click(page.document.querySelector('.dk-head > button'))
+  assert.equal(text(occupancyMark(page)!), '#74')
 })
