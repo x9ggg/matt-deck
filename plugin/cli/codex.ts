@@ -74,16 +74,22 @@ const stringEnd = (line: string, i: number, quote: string) => {
   return -1
 }
 
-// The lines of a config, by index, that start inside a multi-line string:
-// text, however they look, never a header, a key or a comment. Each line is
-// read from where the last left off, its strings and comments skipped.
-const inStrings = (lines: string[]) => {
+// The lines of a config, by index, that start inside a value: in a
+// multi-line string, or in an array or an inline table not closed yet. They
+// are part of that value, however they look, never a header, a key or a
+// comment. Each line is read from where the last left off, its strings and
+// comments skipped, the brackets in them not counted. A header's own
+// brackets close on its line.
+const inValues = (lines: string[]) => {
   const inside = new Set<number>()
   let open: string | undefined
+  let depth = 0
   lines.forEach((line, n) => {
     let i = 0
-    if (open !== undefined) {
+    if (open !== undefined || depth > 0) {
       inside.add(n)
+    }
+    if (open !== undefined) {
       i = stringEnd(line, 0, open)
       if (i === -1) {
         return
@@ -93,6 +99,11 @@ const inStrings = (lines: string[]) => {
     while (i < line.length && line[i] !== '#') {
       const quote = quoteAt(line, i)
       if (quote === undefined) {
+        if (line[i] === '[' || line[i] === '{') {
+          depth++
+        } else if ((line[i] === ']' || line[i] === '}') && depth > 0) {
+          depth--
+        }
         i++
         continue
       }
@@ -117,7 +128,7 @@ const unregistered = (text: string) => {
   let above: string[] = []
 
   const lines = text.split(/(?<=\n)/)
-  const inside = inStrings(lines)
+  const inside = inValues(lines)
   for (const [n, line] of lines.entries()) {
     const header = inside.has(n) ? null : line.match(/^\s*\[\[?\s*([^\]]*?)\s*\]\]?\s*(?:#.*)?\r?\n?$/)
     if (header !== null) {
@@ -182,14 +193,14 @@ const keyAt = (text: string) => {
 // holds that install cannot add its table after: a registration of the Deck
 // service in another form (under [mcp_servers], with spaces or quotes in its
 // header, as dotted keys, in an inline table), or mcp_servers as an inline
-// table. Read line by line, not parsed, the lines in multi-line strings
+// table. Read line by line, not parsed, the lines inside values
 // left out: what it cannot tell apart, it takes for one of them, so Deck
 // stops rather than writes a config Codex cannot read.
 const handWritten = (text: string) => {
   let table: string[] = []
   let found: 'inline' | undefined
   const lines = text.split(/\r?\n/)
-  const inside = inStrings(lines)
+  const inside = inValues(lines)
   for (const [n, line] of lines.entries()) {
     if (inside.has(n)) {
       continue
@@ -207,9 +218,15 @@ const handWritten = (text: string) => {
       return 'registration'
     }
     if (header === null && path.length === 1 && path[0] === 'mcp_servers') {
-      // A key of the inline table itself: one right after its opening brace
-      // or a comma in it, not in a table or an array within, nor a string.
-      const value = key.rest
+      // A key of the inline table itself: the first thing after its opening
+      // brace or a comma in it, comments apart, not in a table or an array
+      // within, nor a string or a comment. The table runs on over the lines
+      // that start inside it.
+      let end = n + 1
+      while (inside.has(end)) {
+        end++
+      }
+      const value = [key.rest, ...lines.slice(n + 1, end)].join('\n')
       let depth = 0
       for (let i = 1; i < value.length; ) {
         const quote = quoteAt(value, i)
@@ -220,12 +237,23 @@ const handWritten = (text: string) => {
           }
           continue
         }
+        if (value[i] === '#') {
+          i = value.indexOf('\n', i)
+          if (i === -1) {
+            break
+          }
+          continue
+        }
         if (value[i] === '{' || value[i] === '[') {
           depth++
         } else if (value[i] === '}' || value[i] === ']') {
           depth--
         }
-        if (depth === 1 && (value[i] === '{' || value[i] === ',') && keyAt(value.slice(i + 1))?.parts[0] === SERVER) {
+        if (
+          depth === 1 &&
+          (value[i] === '{' || value[i] === ',') &&
+          keyAt(value.slice(i + 1).replace(/^(?:\s|#.*)*/, ''))?.parts[0] === SERVER
+        ) {
           return 'registration'
         }
         i++

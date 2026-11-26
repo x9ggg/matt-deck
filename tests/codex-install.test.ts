@@ -287,6 +287,62 @@ test('uninstall removes a multi-line string a person put in Deck\'s table whole,
   }
 })
 
+test('install and uninstall take an array a person spread over lines in Deck\'s table for part of that table: install writes the table anew and uninstall removes it whole, its lines ending in LF or CRLF', async () => {
+  for (const eol of [String, crlf]) {
+    const registered = eol(`${BEFORE}\n[mcp_servers.matt_deck]\ncommand = "old"\nenv_vars = [\n  ["a", "b"]\n]\n`)
+    const { user, config } = await withConfig(registered)
+
+    await run(user, 'install')
+
+    const installed = await readFile(config, 'utf8')
+    assert.ok(installed.startsWith(eol(BEFORE)), installed)
+    assert.equal(registration(installed).args.at(-1), 'codex')
+    assert.ok(!installed.includes('["a", "b"]'), installed)
+
+    await writeFile(config, registered)
+    await run(user, 'uninstall')
+
+    assert.equal(await readFile(config, 'utf8'), eol(BEFORE))
+  }
+})
+
+test('install and uninstall take a line in an array or an inline table a person spread over lines for part of that value, not a header or the registration, however it looks, its lines ending in LF or CRLF', async () => {
+  for (const theirs of [
+    // Were the line in the array a header, the key after it would register
+    // the Deck service.
+    `${BEFORE}\n[other]\nlist = [\n  ["mcp_servers"]\n]\nmatt_deck = 1\n`,
+    `${BEFORE}\n[other]\nlist = [\n  [["mcp_servers"]]\n]\nmatt_deck = 1\n`,
+    // Were the line in the inline table a key of the table above it, or of
+    // none, it would register the Deck service.
+    `${BEFORE}\n[mcp_servers]\nanother = {\n  matt_deck = { command = "theirs" },\n}\n`,
+    `note = {\n  mcp_servers.matt_deck.command = "theirs",\n}\n${BEFORE}`,
+  ].flatMap(theirs => [theirs, crlf(theirs)])) {
+    const { user, config } = await withConfig(theirs)
+
+    await run(user, 'install')
+    const installed = await readFile(config, 'utf8')
+    await run(user, 'uninstall')
+
+    assert.ok(installed.startsWith(theirs), installed)
+    assert.equal(registration(installed).args.at(-1), 'codex', theirs)
+    assert.equal(await readFile(config, 'utf8'), theirs)
+  }
+})
+
+test('uninstall removes an array or an inline table a person spread over lines in Deck\'s table whole, a line in it looking like a header or a key among the rest, its lines ending in LF or CRLF', async () => {
+  for (const value of ['[\n  [["c"]]\n]', '[\n  ["after"]\n]', '{\n  a = [\n    [1]\n  ],\n  mcp_servers.matt_deck = 2,\n}']) {
+    for (const eol of [String, crlf]) {
+      const { user, config } = await withConfig(eol(BEFORE))
+      await run(user, 'install')
+      await writeFile(config, `${await readFile(config, 'utf8')}${eol(`note = ${value}\n[after]\nkey = 2\n`)}`)
+
+      await run(user, 'uninstall')
+
+      assert.equal(await readFile(config, 'utf8'), eol(`${BEFORE}\n[after]\nkey = 2\n`), value)
+    }
+  }
+})
+
 test('uninstall without a Codex config writes none', async () => {
   const user = await home()
 
@@ -316,6 +372,14 @@ const HAND_WRITTEN = [
   '[mcp_servers."matt\\x5f\\x64eck"]\ncommand = "mine"\n',
   'mcp_servers = { a = { command = """x"y""" }, matt_deck = { command = "mine" } }\n',
   "mcp_servers = { a = { command = '''a'b''' }, matt_deck = { command = \"mine\" } }\n",
+  // After an array spread over lines, a line of which looks like a header.
+  '[mcp_servers]\nother.note = [\n  ["a"]\n]\nmatt_deck = { command = "mine" }\n',
+  // In mcp_servers as an inline table that runs over lines: after a
+  // multi-line string in it, and on a line of its own, as TOML 1.1 allows.
+  'mcp_servers = { a = { command = """\nx\n""" }, matt_deck = { command = "mine" } }\n',
+  'mcp_servers = {\n  matt_deck = { command = "mine" },\n}\n',
+  // After comments in that table, a brace in one of them.
+  'mcp_servers = {\n  a = { command = "x" }, # theirs {\n  # mine\n  matt_deck = { command = "mine" },\n}\n',
 ]
 
 test('install and uninstall stop when the Codex config registers the Deck service in a form Deck does not write, its lines ending in LF or CRLF, and change nothing', async () => {
@@ -341,6 +405,9 @@ test('install stops when the Codex config holds mcp_servers as an inline table, 
     `mcp_servers = { other = { command = "other" } }\n`,
     // Named matt_deck deeper in it, or in a string: no registration.
     `mcp_servers = { a = { matt_deck = 1 }, b = [{ matt_deck = 2 }], c = "{ matt_deck = 3 }" }\n`,
+    // The same where the table runs over lines, a comment there too, and a
+    // line that would register the Deck service were it not inside the table.
+    `mcp_servers = {\n  a = {\n    matt_deck = 1,\n    mcp_servers.matt_deck = 2,\n  },\n  b = [\n    { matt_deck = 3 },\n    "matt_deck",\n  ],\n  c = """\n, matt_deck = 4\n""",\n  # , matt_deck = 5\n}\n`,
   ].flatMap(inline => [inline, crlf(inline)])) {
   const { user, config } = await withConfig(inline)
 

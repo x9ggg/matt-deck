@@ -110,9 +110,9 @@ node matt-deck/plugin/cli/codex.ts uninstall
 
 ### install 和 uninstall 不动的 config.toml
 
-Deck 不解析 `config.toml`，按行认 `[mcp_servers.matt_deck]` 这种单独一行的表头和它下面的子表（`codex mcp add` 写的也是这种）；多行字符串（`"""` 或 `'''` 括起来的）里的行是文字，不管长得像什么，都不当成表头或键（#109）。`config.toml` 里的 `matt_deck` 注册是别的写法时，install 和 uninstall 都以退出码 1 结束，什么都不改，改成这种表头或删掉之后再运行一次。别的写法指：`[mcp_servers]` 下的 `matt_deck = { ... }` 或 `matt_deck.command = ...`、带空格或引号的表头（如 `[ mcp_servers . matt_deck ]`、`[mcp_servers."matt_deck"]`）、顶层的点分键 `mcp_servers.matt_deck.command = ...`、`mcp_servers = { matt_deck = { ... } }`（#85）。照原样追加一张表会让同一个注册声明两次，Codex 整份配置都读不了。
+Deck 不解析 `config.toml`，按行认 `[mcp_servers.matt_deck]` 这种单独一行的表头和它下面的子表（`codex mcp add` 写的也是这种）；多行字符串（`"""` 或 `'''` 括起来的）里的行是文字，跨行的数组和内联表里的行是值的一部分，不管长得像什么，都不当成表头或键（#109、#112）。`config.toml` 里的 `matt_deck` 注册是别的写法时，install 和 uninstall 都以退出码 1 结束，什么都不改，改成这种表头或删掉之后再运行一次。别的写法指：`[mcp_servers]` 下的 `matt_deck = { ... }` 或 `matt_deck.command = ...`、带空格或引号的表头（如 `[ mcp_servers . matt_deck ]`、`[mcp_servers."matt_deck"]`）、顶层的点分键 `mcp_servers.matt_deck.command = ...`、`mcp_servers = { matt_deck = { ... } }`（#85）。照原样追加一张表会让同一个注册声明两次，Codex 整份配置都读不了。
 
-`mcp_servers` 写成内联表（`mcp_servers = { ... }`）、里面没有 `matt_deck` 时，install 同样以退出码 1 结束、什么都不改，因为内联表后面不能再加子表；uninstall 照常说没有注册；只有内联表最外层的键 `matt_deck` 才算注册，更深的表、数组或字符串里的不算。
+`mcp_servers` 写成内联表（`mcp_servers = { ... }`）、里面没有 `matt_deck` 时，install 同样以退出码 1 结束、什么都不改，因为内联表后面不能再加子表；uninstall 照常说没有注册；只有内联表最外层的键 `matt_deck` 才算注册，更深的表、数组或字符串里的不算；内联表跨了行时，它最外层的键接着在后面的行里认，直到它闭合（#112）。
 
 `config.toml` 里有不合法的 UTF-8 字节时，install 和 uninstall 都以退出码 1 结束、什么都不改：Deck 按文字改写它，这些字节会被换掉（#109）。
 
