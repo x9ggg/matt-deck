@@ -186,6 +186,74 @@ test('uninstall without a Codex config writes none', async () => {
   assert.deepEqual(await readdir(user), [])
 })
 
+// Deck's registration as a person may write it by hand, in a TOML form other
+// than the header install writes: a table appended after it would declare
+// the registration twice, and Codex could read none of its config. Each goes
+// first in the config, where a dotted key belongs to no table.
+const HAND_WRITTEN = [
+  '[mcp_servers]\nmatt_deck = { command = "mine" }\n',
+  '[ mcp_servers . matt_deck ]\ncommand = "mine"\n',
+  '[mcp_servers."matt_deck"]\ncommand = "mine"\n',
+  "[mcp_servers.'matt_deck']\ncommand = \"mine\"\n",
+  'mcp_servers.matt_deck.command = "mine"\n',
+  'mcp_servers = { matt_deck = { command = "mine" } }\n',
+  '[mcp_servers]\n"matt_deck".command = "mine"\n',
+  '[mcp_servers.matt_deck]\ncommand = "mine"\n\n[mcp_servers."matt_deck".env]\nDEBUG = "1"\n',
+  '[mcp_servers]\r\nmatt_deck = { command = "mine" }\r\n',
+  '[mcp_servers.matt_deck]\r\ncommand = "mine"\r\n[mcp_servers."matt_deck".env]\r\nDEBUG = "1"\r\n',
+  '[mcp_servers]\n"matt\\U0000005Fdeck" = { command = "mine" }\n',
+  '[mcp_servers."matt\\u005Fdeck"]\ncommand = "mine"\n',
+]
+
+test('install and uninstall stop when the Codex config registers the Deck service in a form Deck does not write, and change nothing', async () => {
+  for (const form of HAND_WRITTEN) {
+    for (const command of ['install', 'uninstall']) {
+      const { user, config } = await withConfig(`${form}\n${BEFORE}`)
+
+      await assert.rejects(run(user, command), (error: any) => {
+        assert.equal(error.code, 1, form)
+        assert.ok(error.stderr.includes(`${config} 里的 Deck 服务注册不是 Deck 认得的写法`), error.stderr)
+        assert.ok(error.stderr.includes(`再运行一次 ${command}`), error.stderr)
+        return true
+      })
+      assert.equal(await readFile(config, 'utf8'), `${form}\n${BEFORE}`, form)
+      assert.deepEqual(await readdir(user), ['.codex'], form)
+      assert.deepEqual(await readdir(join(user, '.codex')), ['config.toml'], form)
+    }
+  }
+})
+
+test('install stops when the Codex config holds mcp_servers as an inline table, which no table can be added to; uninstall finds no registration there', async () => {
+  const inline = `mcp_servers = { other = { command = "other" } }\n`
+  const { user, config } = await withConfig(inline)
+
+  await assert.rejects(run(user, 'install'), (error: any) => {
+    assert.equal(error.code, 1)
+    assert.ok(error.stderr.includes(`${config} 里的 mcp_servers 写成了内联表`), error.stderr)
+    return true
+  })
+  assert.equal(await readFile(config, 'utf8'), inline)
+  assert.deepEqual(await readdir(join(user, '.codex')), ['config.toml'])
+
+  const { stdout } = await run(user, 'uninstall')
+
+  assert.match(stdout, /没有 Deck 服务的注册/)
+  assert.equal(await readFile(config, 'utf8'), inline)
+})
+
+test('install and uninstall take keys only named like the Deck service for what they are: not its registration', async () => {
+  const alike = `${BEFORE}\n[mcp_servers.other.env]\nmatt_deck = "1"\n\n[profiles.matt_deck]\nmodel = "o3"\n\n[mcp_servers."matt_deck_later"]\ncommand = "later"\n`
+  const { user, config } = await withConfig(alike)
+
+  await run(user, 'install')
+  const installed = await readFile(config, 'utf8')
+  await run(user, 'uninstall')
+
+  assert.ok(installed.startsWith(alike), installed)
+  registration(installed)
+  assert.equal(await readFile(config, 'utf8'), alike)
+})
+
 // The skill install generates where Codex finds the user's skills.
 const configureSkill = (user: string) => join(user, '.agents', 'skills', 'matt-deck-configure', 'SKILL.md')
 const PLUGIN_CONFIGURE = join(import.meta.dirname, '..', 'plugin', 'skills', 'configure', 'SKILL.md')

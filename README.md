@@ -108,6 +108,12 @@ node matt-deck/plugin/cli/codex.ts uninstall
 
 卸载之后重启桌面应用。卸载后入口是否消失，列在[手动检查清单](docs/codex-manual-checklist.md)里待核对。安装前没有 `config.toml` 时，卸载后会留下一个空的；`~/.agents/skills` 这类安装时新建的上级目录也会留下。
 
+### install 和 uninstall 不动的 config.toml
+
+Deck 不解析 `config.toml`，按行认 `[mcp_servers.matt_deck]` 这种单独一行的表头和它下面的子表（`codex mcp add` 写的也是这种）。`config.toml` 里的 `matt_deck` 注册是别的写法时，install 和 uninstall 都以退出码 1 结束，什么都不改，改成这种表头或删掉之后再运行一次。别的写法指：`[mcp_servers]` 下的 `matt_deck = { ... }` 或 `matt_deck.command = ...`、带空格或引号的表头（如 `[ mcp_servers . matt_deck ]`、`[mcp_servers."matt_deck"]`）、顶层的点分键 `mcp_servers.matt_deck.command = ...`、`mcp_servers = { matt_deck = { ... } }`（#85）。照原样追加一张表会让同一个注册声明两次，Codex 整份配置都读不了。
+
+`mcp_servers` 写成内联表（`mcp_servers = { ... }`）、里面没有 `matt_deck` 时，install 同样以退出码 1 结束、什么都不改，因为内联表后面不能再加子表；uninstall 照常说没有注册。多行字符串里恰好有像这些写法的行时，Deck 也当它是，宁可停下。
+
 ### install 和 uninstall 不动的钩子文件
 
 Deck 读进 `hooks.json` 之后整份重写，所以它只经手重写之后只差空白的文件。遇到下面这些，install 和 uninstall 都以退出码 1 结束，什么都不改，`hooks.json` 原样留着，改好之后再运行一次：

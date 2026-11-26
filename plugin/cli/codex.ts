@@ -16,7 +16,7 @@ const USAGE = `Usage: node <matt-deck>/cli/codex.ts <install|uninstall>
 
 install：把 Deck 服务注册进 Codex 的用户全局配置 ~/.codex/config.toml，原有内容保留；在 ~/.agents/skills 里生成配置技能 ${CODEX_CONFIGURE_SKILL}；在 ~/.codex/hooks.json 里加上 Deck 的钩子，原有的钩子保留，改之前先备份。装完要在终端里运行一次 codex 信任这个钩子，再重启 Codex 桌面应用。注册和配置技能指向运行 install 的这一份插件，它挪了位置或更新之后要重新运行一次 install。
 uninstall：从 ~/.codex/config.toml 移除 Deck 服务的注册，别的内容不动；移除 Deck 生成的 ${CODEX_CONFIGURE_SKILL}；从 ~/.codex/hooks.json 移除 Deck 的钩子。
-退出码：0 成功，1 读写失败、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
+退出码：0 成功，1 读写失败、config.toml 里的 Deck 服务注册不是 [mcp_servers.matt_deck] 表头的写法、install 时 mcp_servers 写成了内联表、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
 `
 const SERVER = 'matt_deck'
 const TABLE = `mcp_servers.${SERVER}`
@@ -81,6 +81,72 @@ const unregistered = (text: string) => {
   }
 
   return kept.join('')
+}
+
+// The dotted key a line starts with, each part unquoted, and the text after
+// it; undefined when the line starts with no key.
+const keyAt = (text: string) => {
+  const parts: string[] = []
+  let rest = text
+  for (;;) {
+    const part = rest.match(/^\s*(?:([A-Za-z0-9_-]+)|"((?:[^"\\]|\\.)*)"|'([^']*)')\s*/)
+    if (part === null) {
+      return undefined
+    }
+    // A TOML basic string is a JSON string but for its 8-digit escape,
+    // \UXXXXXXXX, written here as the JSON escape of that character.
+    let basic = part[2]
+    try {
+      basic =
+        basic === undefined
+          ? undefined
+          : JSON.parse(
+              `"${basic.replace(/\\(U([0-9A-Fa-f]{8})|.)/g, (escape, _, hex) =>
+                hex === undefined ? escape : JSON.stringify(String.fromCodePoint(parseInt(hex, 16))).slice(1, -1),
+              )}"`,
+            )
+    } catch {}
+    parts.push(part[1] ?? basic ?? part[3]!)
+    rest = rest.slice(part[0].length)
+    if (!rest.startsWith('.')) {
+      return { parts, rest }
+    }
+    rest = rest.slice(1)
+  }
+}
+
+// What a config, its registration as install writes it taken out, still
+// holds that install cannot add its table after: a registration of the Deck
+// service in another form (under [mcp_servers], with spaces or quotes in its
+// header, as dotted keys, in an inline table), or mcp_servers as an inline
+// table. Read line by line, not parsed: a multi-line string that looks like
+// one of them is taken for it, so Deck stops rather than writes a config
+// Codex cannot read.
+const handWritten = (text: string) => {
+  let table: string[] = []
+  let found: 'inline' | undefined
+  for (const line of text.split(/\r?\n/)) {
+    const header = line.match(/^\s*\[\[?(.*)$/)
+    const key = keyAt(header === null ? line : header[1]!)
+    if (key === undefined || !key.rest.startsWith(header === null ? '=' : ']')) {
+      continue
+    }
+    const path = header === null ? [...table, ...key.parts] : key.parts
+    if (header !== null) {
+      table = key.parts
+    }
+    if (path[0] === 'mcp_servers' && path[1] === SERVER) {
+      return 'registration'
+    }
+    if (header === null && path.length === 1 && path[0] === 'mcp_servers') {
+      if (new RegExp(`[{,]\\s*(?:${SERVER}|"${SERVER}"|'${SERVER}')\\s*[.=]`).test(key.rest)) {
+        return 'registration'
+      }
+      found = 'inline'
+    }
+  }
+
+  return found
 }
 
 // Deck's hook: each prompt sent goes to the Deck service's tool as written.
@@ -180,7 +246,19 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
     const hooks = hooksIn(hooksBytes)
     const isHooked = typeof hooks !== 'string' && hooks.hooks?.UserPromptSubmit?.some(holdsDeckHook) === true
 
-    if (typeof hooks === 'string') {
+    const handwritten = handWritten(kept)
+
+    if (handwritten === 'registration') {
+      process.stderr.write(
+        `${config} 里的 Deck 服务注册不是 Deck 认得的写法（Deck 只认单独一行的 [${TABLE}] 表头和它下面的子表，不认 [mcp_servers] 下的 ${SERVER} = { ... }、带空格或引号的表头、点分键或内联表），没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。把它改成 [${TABLE}] 表头或者删掉之后，再运行一次 ${args[0]}。\n`,
+      )
+      process.exitCode = 1
+    } else if (args[0] === 'install' && handwritten === 'inline') {
+      process.stderr.write(
+        `${config} 里的 mcp_servers 写成了内联表（mcp_servers = { ... }），Deck 没法在它下面加上自己的注册，没有安装，什么都没改。把它改成 [mcp_servers.<名字>] 这样的表之后，再运行一次 install。\n`,
+      )
+      process.exitCode = 1
+    } else if (typeof hooks === 'string') {
       const problem = hooks === 'unreadable' ? '不是 Deck 能读懂的钩子文件' : '里有 Deck 改写时会变样的写法（超出双精度的数、1.0 或 1e400 这样的数、重复的键、\\u、\\/ 这样的转义，或像序号的键）'
       process.stderr.write(
         `${hooksFile} ${problem}，没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。改好它之后再运行一次 ${args[0]}。\n`,
