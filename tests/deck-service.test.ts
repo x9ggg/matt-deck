@@ -335,10 +335,11 @@ test('started for Codex, deck_setup_survey also finds the copies of Matt skills 
   const [forCodex, forClaudeCode] = await Promise.all([codex, claudeCode].map(deck => deck.callTool('deck_setup_survey')))
 
   assert.equal(forCodex.isError, false)
+  // Three files named ask-matt: $ask-matt in Codex calls none of them.
   assert.deepEqual(forCodex.structuredContent.skillSources, [
-    { type: 'directory', path: '~/.agents/skills' },
-    { type: 'directory', path: '.agents/skills' },
-    { type: 'directory', path: '.codex/skills' },
+    { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: false },
+    { type: 'directory', path: '.agents/skills', hostCallsAskMatt: false },
+    { type: 'directory', path: '.codex/skills', hostCallsAskMatt: false },
   ])
   assert.deepEqual(forClaudeCode.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills' }])
 })
@@ -354,8 +355,57 @@ test('started for Codex, deck_setup_survey finds the copy of Matt skills only in
 
   const [forCodex, forClaudeCode] = await Promise.all([codex, claudeCode].map(deck => deck.callTool('deck_setup_survey')))
 
-  assert.deepEqual(forCodex.structuredContent.skillSources, [{ type: 'directory', path: '~/.codex/skills' }])
+  assert.deepEqual(forCodex.structuredContent.skillSources, [
+    { type: 'directory', path: '~/.codex/skills', hostCallsAskMatt: true },
+  ])
   assert.deepEqual(forClaudeCode.structuredContent.skillSources, [])
+})
+
+test('started for Codex, deck_setup_survey says of each copy of Matt skills whether $ask-matt in Codex calls its ask-matt, one linked from Codex\'s skill directory among them', async t => {
+  const dir = await workspace()
+  const user = await home()
+  // The skills installer's layout: ~/.claude/skills links the copy in
+  // ~/.agents/skills, and the copy is named after the first.
+  await skill(join(user, '.agents', 'skills'), 'ask-matt')
+  await mkdir(join(user, '.claude', 'skills'), { recursive: true })
+  await symlink(join(user, '.agents', 'skills', 'ask-matt'), join(user, '.claude', 'skills', 'ask-matt'))
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_setup_survey')
+
+  assert.deepEqual(result.structuredContent.skillSources, [
+    { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: true },
+  ])
+})
+
+test('started for Codex, deck_setup_survey offers first the copy of Matt skills whose ask-matt $ask-matt in Codex calls, the others after it in their order', async t => {
+  const dir = await workspace()
+  const user = await home()
+  // Two copies apart, and a Claude Code plugin holding a third.
+  await skill(join(user, '.claude', 'skills'), 'ask-matt')
+  await skill(join(user, '.agents', 'skills'), 'ask-matt')
+  const matt = join(user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
+  await skill(join(matt, 'skills', 'engineering'), 'ask-matt')
+  await installedPlugins(user, { 'mattpocock-skills@official': [{ scope: 'user', installPath: matt }] })
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  const claudeCode = startDeck(dir, { HOME: user })
+  t.after(codex.stop)
+  t.after(claudeCode.stop)
+
+  const [forCodex, forClaudeCode] = await Promise.all([codex, claudeCode].map(deck => deck.callTool('deck_setup_survey')))
+
+  assert.deepEqual(forCodex.structuredContent.skillSources, [
+    { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true },
+    { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: false },
+    { type: 'plugin', name: 'mattpocock-skills', hostCallsAskMatt: false },
+  ])
+  // Claude Code's survey is as it was: no mark, in the order found.
+  assert.deepEqual(forClaudeCode.structuredContent.skillSources, [
+    { type: 'directory', path: '~/.claude/skills' },
+    { type: 'directory', path: '~/.agents/skills' },
+    { type: 'plugin', name: 'mattpocock-skills' },
+  ])
 })
 
 test('started for Codex, the configure skill has no permission rule to write: the survey names the host and asks no settings, and deck_allow_service is not offered', async t => {

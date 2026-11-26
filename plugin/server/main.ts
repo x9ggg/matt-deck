@@ -594,10 +594,10 @@ const tools = {
   },
   deck_setup_survey: {
     description:
-      'For the configure skill: the host this service runs for, the existing project config, the Task Source prefilled from the Matt issue tracker doc, the Matt skills found on this machine and in the host\'s own skill directories, and, for Claude Code only, whether the local settings allow the Deck service\'s tools.',
+      'For the configure skill: the host this service runs for, the existing project config, the Task Source prefilled from the Matt issue tracker doc, the Matt skills found on this machine and in the host\'s own skill directories (for Codex, each with hostCallsAskMatt: whether $ask-matt in Codex calls this copy\'s ask-matt, those it calls first), and, for Claude Code only, whether the local settings allow the Deck service\'s tools.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: async (): Promise<ToolResult> => {
-      let result: object = { host, ...(await surveySetup(workspace, homedir(), skillDirectories(host))) }
+      let result: object = { host, ...(await surveySetup(workspace, homedir(), skillDirectories(host), host === 'codex')) }
       // Codex reads no Claude Code permission rule. Local settings that
       // cannot be read allow nothing; deck_allow_service says why when it is
       // asked to write them.

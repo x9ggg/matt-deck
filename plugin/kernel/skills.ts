@@ -212,6 +212,14 @@ const hostCopy = async (file: string, name: string, found: { name: string; file:
   return files.size === 0 ? 'missing' : files.size === 1 && files.has(own) ? 'same' : 'different'
 }
 
+// What the host calls by a name, from one walk of its own skill directories:
+// for the Skill Source's file at `file` named `name`, its HostCopy.
+export const hostCopies = async (directories: string[], workspace: string, home: string) => {
+  const found = await scanHost(directories, workspace, home)
+
+  return (file: string, name: string) => hostCopy(file, name, found)
+}
+
 // The skills of the Skill Source. Given the directories a host finds skills
 // in itself, each also says what the host finds there under its name.
 export const listSkills = async (
@@ -222,13 +230,11 @@ export const listSkills = async (
   hostDirectories?: string[],
 ): Promise<(Skill & { copy?: HostCopy })[]> => {
   const skills = await readAll(source, workspace, home, callOf)
-  const found = hostDirectories === undefined ? [] : await scanHost(hostDirectories, workspace, home)
+  const copyOf = hostDirectories === undefined ? undefined : await hostCopies(hostDirectories, workspace, home)
   const listed = []
   for (const { text, file, ...skill } of skills) {
     listed.push(
-      hostDirectories === undefined
-        ? skill
-        : { ...skill, copy: await hostCopy(file, skill.name, found) },
+      copyOf === undefined ? skill : { ...skill, copy: await copyOf(file, skill.name) },
     )
   }
 

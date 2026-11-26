@@ -4,6 +4,7 @@ import { readdir, readFile, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { readProjectConfig } from './config.ts'
+import { hostCopies } from './skills.ts'
 import type { ProjectConfig } from './config.ts'
 
 const ISSUE_TRACKER_DOC = 'docs/agents/issue-tracker.md'
@@ -66,11 +67,19 @@ const SKILL_DIRECTORIES = ['~/.claude/skills', '~/.agents/skills']
 type SkillSource = ProjectConfig['skillSource']
 
 // Every copy of Matt skills found on this machine, each once: a directory
-// linking its skills from another one is the same copy. `hostDirectories`
-// are where the host finds skills itself, offered after the user-level ones,
-// written as a Skill Source's path is: `~/...` under the home, or relative
-// to the Workspace.
-const findSkillSources = async (workspace: string, home: string, hostDirectories: string[]): Promise<SkillSource[]> => {
+// linking its skills from another one is the same copy, named where it was
+// found first. `hostDirectories` are where the host finds skills itself,
+// offered after the user-level ones, written as a Skill Source's path is:
+// `~/...` under the home, or relative to the Workspace. With
+// `markHostCalls`, each copy also says whether the host, calling ask-matt by
+// its name from those directories, calls this copy's, and the copies it
+// calls come first.
+const findSkillSources = async (
+  workspace: string,
+  home: string,
+  hostDirectories: string[],
+  markHostCalls: boolean,
+): Promise<(SkillSource & { hostCallsAskMatt?: boolean })[]> => {
   const found: { source: SkillSource; marker: string }[] = []
 
   for (const dir of [...SKILL_DIRECTORIES, ...hostDirectories]) {
@@ -99,13 +108,21 @@ const findSkillSources = async (workspace: string, home: string, hostDirectories
     }
   }
 
-  return found
-    .filter(({ marker }, index) => found.findIndex(other => other.marker === marker) === index)
-    .map(({ source }) => source)
+  const copies = found.filter(({ marker }, index) => found.findIndex(other => other.marker === marker) === index)
+  if (!markHostCalls) {
+    return copies.map(({ source }) => source)
+  }
+  const copyOf = await hostCopies(hostDirectories, workspace, home)
+  const marked = []
+  for (const { source, marker } of copies) {
+    marked.push({ ...source, hostCallsAskMatt: (await copyOf(marker, MARKER)) === 'same' })
+  }
+
+  return [...marked.filter(each => each.hostCallsAskMatt), ...marked.filter(each => !each.hostCallsAskMatt)]
 }
 
-export const surveySetup = async (workspace: string, home: string, hostDirectories: string[]) => ({
+export const surveySetup = async (workspace: string, home: string, hostDirectories: string[], markHostCalls: boolean) => ({
   existing: await readExistingConfig(workspace),
   taskSource: await readTaskSourcePrefill(workspace),
-  skillSources: await findSkillSources(workspace, home, hostDirectories),
+  skillSources: await findSkillSources(workspace, home, hostDirectories, markHostCalls),
 })

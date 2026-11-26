@@ -51,8 +51,8 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 **1.5 首次配置之后的提示**
 
 - 前提：在 1.3 的信任、重启之后，在任何 Configured Project 里发消息之前做。Configured Project 里的钩子调用记在本机状态里，是所有项目共用的一条：任一 Configured Project 里的一次调用，就让所有项目的提示消失，这一步就分不出提示是不是因为本 Session 的服务进程记下了未配置时的调用才消失的。
-- 做：在准备里新建的目录（`git init`、remote 指向准备里那个仓库）里新建会话，发一条消息，打开 Pane。点“配置这个项目”，看输入框，然后发送，照配置技能做完首次配置（Task Source 选 GitHub Issues，就是 remote 指向的那个仓库；Skill Source 选 Codex 找得到的那一份，这个目录里没有 `.agents/skills`，只有 `~/.agents/skills` 和 `~/.codex/skills` 里的算，没有的话随便选一份，这一步不预填）；配置文件写出之后不再回复 agent，点“刷新”。再在这个会话里发一条普通消息，再点“刷新”。最后回到原来那个 Configured Project 的会话，从菜单重新打开 Pane（重启后标签页不恢复，见 7.3），点“刷新”。
-- 应看到：入口和别的项目里一样在；Pane 显示文件夹名、`Session <8 位>`、“此项目未配置。”和“配置这个项目”（#68 第 4 步）。点“配置这个项目”后输入框里是 `$matt-deck-configure`，按钮停用 5 秒，写“已填入”。**要核对**：Codex 认出 install 生成的这份技能，agent 照它那一句话去读 Deck 检出里的配置技能（`plugin/skills/configure/SKILL.md`），配置过程中没有提到写 Claude Code 的权限规则（#79）。
+- 做：在准备里新建的目录（`git init`、remote 指向准备里那个仓库）里新建会话，发一条消息，打开 Pane。点“配置这个项目”，看输入框，然后发送，照配置技能做完首次配置（Task Source 选 GitHub Issues，就是 remote 指向的那个仓库；Skill Source 选配置技能标为 Codex 调得到的那一份，它排在第一、是推荐项；这个目录里没有 `.agents/skills`，只有 `~/.agents/skills` 和 `~/.codex/skills` 里的才可能调得到，一份调得到的也没有的话随便选一份，这一步不预填）；配置文件写出之后不再回复 agent，点“刷新”。再在这个会话里发一条普通消息，再点“刷新”。最后回到原来那个 Configured Project 的会话，从菜单重新打开 Pane（重启后标签页不恢复，见 7.3），点“刷新”。
+- 应看到：入口和别的项目里一样在；Pane 显示文件夹名、`Session <8 位>`、“此项目未配置。”和“配置这个项目”（#68 第 4 步）。点“配置这个项目”后输入框里是 `$matt-deck-configure`，按钮停用 5 秒，写“已填入”。**要核对**：Codex 认出 install 生成的这份技能，agent 照它那一句话去读 Deck 检出里的配置技能（`plugin/skills/configure/SKILL.md`），配置过程中没有提到写 Claude Code 的权限规则（#79）。agent 列出的每份 Skill Source 候选都标出 Codex 调不调得到，调得到的排在前面、第一项作推荐；调不到的照列，并说明选了它 Pane 里技能不能预填，“我现在该做什么”和“执行”也用不了（#86）。
 - 应看到：**要核对**：配置做完、第一次刷新时，Pane 显示项目的内容：抬头是这个目录的名字，Task 是准备里那个仓库的，和 Configured Project 里看到的是同一批（准备里的 Spec 在“地图”里），不是读取失败；橙色提示已经不在：未配置时的钩子调用不写本机状态，但本 Session 的 Deck 服务进程记下了它们（#110）。发过下一条消息再刷新，提示仍然不在；原来那个 Configured Project 的 Pane 上也没有提示，信任之后那里没发过消息，这条消息是在已配置之后发的，记进了本机状态（#77）。
 
 **1.6 Deck 更新之后不用重新信任**
