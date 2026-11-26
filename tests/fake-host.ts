@@ -176,6 +176,27 @@ export const openPage = async ({
   }
   await settled()
 
+  // Moves the page's clock on, running each timer as it comes due.
+  const advanceBy = async (ms: number) => {
+    const until = now + ms
+    for (;;) {
+      const due = [...timers].filter(([, each]) => each.at <= until).sort(([, a], [, b]) => a.at - b.at)[0]
+      if (due === undefined) {
+        break
+      }
+      const [id, each] = due
+      now = each.at
+      if (each.every === undefined) {
+        timers.delete(id)
+      } else {
+        each.at += each.every
+      }
+      each.run()
+    }
+    now = until
+    await settled()
+  }
+
   return {
     document: page.window.document,
     window: page.window,
@@ -197,25 +218,18 @@ export const openPage = async ({
       toPage({ id: request.id, ...answer })
       await settled()
     },
-    // Moves the page's clock on, running each timer as it comes due.
-    advance: async (ms: number) => {
-      const until = now + ms
-      for (;;) {
-        const due = [...timers].filter(([, each]) => each.at <= until).sort(([, a], [, b]) => a.at - b.at)[0]
-        if (due === undefined) {
-          break
+    advance: advanceBy,
+    // The page's clock jumps on with no timer running, as when the machine
+    // sleeps or the tab is frozen; then each timer due runs once, as a
+    // browser runs it on waking.
+    sleep: async (ms: number) => {
+      now += ms
+      for (const each of timers.values()) {
+        if (each.at <= now) {
+          each.at = now
         }
-        const [id, each] = due
-        now = each.at
-        if (each.every === undefined) {
-          timers.delete(id)
-        } else {
-          each.at += each.every
-        }
-        each.run()
       }
-      now = until
-      await settled()
+      await advanceBy(0)
     },
     // The person scrolls the page to `y`, or the test reads where it is.
     scroll: (y: number) => {

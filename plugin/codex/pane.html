@@ -1899,29 +1899,45 @@ body{margin:0;background:var(--ground)}
       return
     }
     const { requestId } = answer
-    asking = { phase: 'waiting', requestId, again: asking.phase === 'waiting' }
+    // Asked again while one waited, or once it stopped, the copy before may
+    // still be in the prompt.
+    asking = { phase: 'waiting', requestId, again: asking.phase === 'waiting' || asking.phase === 'stopped' }
     showNext()
     clearInterval(waitingFor)
     const askedAt = Date.now()
-    waitingFor = setInterval(async () => {
-      if (Date.now() - askedAt >= 600_000) {
-        clearInterval(waitingFor)
-        asking = { phase: 'stopped' }
-        showNext()
+    // The last read, at 10 minutes, once it is asked for.
+    let lastRead
+    const stop = () => {
+      clearInterval(timer)
+      asking = { phase: 'stopped' }
+      showNext()
+    }
+    const timer = (waitingFor = setInterval(async () => {
+      // At 10 minutes, or the first time after, it reads once more, the last
+      // time, and stops waiting where that finds no report; or, not answered
+      // by the next tick, stops then, its answer coming after not shown.
+      if (lastRead !== undefined) {
+        if (asking.requestId === requestId) stop()
         return
       }
+      const isLast = Date.now() - askedAt >= 600_000
+      if (isLast) lastRead = {}
       let read
       try {
         read = await callTool('deck_recommendation', { requestId })
       } catch {
-        return
+        // A read that fails finds no report.
       }
       // Only the request still waited for is answered by its read.
-      if (asking.requestId !== requestId || !read.found) return
-      clearInterval(waitingFor)
-      asking = { phase: 'answered', recommendation: read.recommendation }
-      showNext()
-    }, 2_000)
+      if (asking.requestId !== requestId) return
+      if (read?.found) {
+        clearInterval(timer)
+        asking = { phase: 'answered', recommendation: read.recommendation }
+        showNext()
+      } else if (isLast) {
+        stop()
+      }
+    }, 2_000))
   }
 
   // The Recommendation as the "下一个成就" card: the Task by its number, with
