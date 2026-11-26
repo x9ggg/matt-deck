@@ -8,13 +8,47 @@ import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { parse } from 'smol-toml'
 
 const CODEX = join(import.meta.dirname, '..', 'plugin', 'cli', 'codex.ts')
 const exec = promisify(execFile)
 
 const home = async () => realpath(await mkdtemp(join(tmpdir(), 'deck-home-')))
 
-const run = (user: string, ...args: string[]) => exec(process.execPath, [CODEX, ...args], { env: { ...process.env, HOME: user } })
+// What a Codex config holds as Codex reads it, Deck's registration left out,
+// and mcp_servers too when nothing else is in it.
+const withoutDeck = (text: string) => {
+  const parsed: any = parse(text)
+  delete parsed.mcp_servers?.matt_deck
+  if (parsed.mcp_servers !== undefined && Object.keys(parsed.mcp_servers).length === 0) {
+    delete parsed.mcp_servers
+  }
+
+  return parsed
+}
+
+// A run of the command line in the home of `user`, whether it installs or
+// stops: a config it changed is one Codex reads, holding all it held before
+// but Deck's registration. A config not there before counts as empty.
+const checked = async <T>(user: string, command: () => Promise<T>) => {
+  const config = join(user, '.codex', 'config.toml')
+  const read = () => readFile(config).catch(() => undefined)
+  const before = await read()
+  try {
+    return await command()
+  } finally {
+    const after = await read()
+    if (!(before ?? Buffer.alloc(0)).equals(after ?? Buffer.alloc(0))) {
+      const text = (after ?? '').toString()
+      assert.deepEqual(withoutDeck(text), withoutDeck((before ?? '').toString()), text)
+    }
+  }
+}
+
+const run = (user: string, ...args: string[]) => checked(user, () => exec(process.execPath, [CODEX, ...args], { env: { ...process.env, HOME: user } }))
+
+// A text with each line ending in CRLF.
+const crlf = (text: string) => text.replace(/\r?\n/g, '\r\n')
 
 // A Codex config holding what a person had in it before.
 const BEFORE = `model = "gpt-5"
@@ -37,11 +71,10 @@ const withConfig = async (text: string) => {
 
 // The launch command of Deck's registration, from the table install writes.
 const registration = (text: string) => {
-  const table = text.split(/^(?=\[)/m).filter(part => part.startsWith('[mcp_servers.matt_deck]'))
-  assert.equal(table.length, 1, text)
-  const value = (key: string) => JSON.parse(table[0]!.match(new RegExp(`^${key} = (.*)$`, 'm'))![1]!)
+  const table = (parse(text) as any).mcp_servers?.matt_deck
+  assert.ok(table !== undefined, text)
 
-  return { command: value('command') as string, args: value('args') as string[] }
+  return { command: table.command as string, args: table.args as string[] }
 }
 
 test('install registers the Deck service in the Codex config of the user, keeping what it holds, and says to restart the app', async () => {
@@ -85,7 +118,8 @@ test('install registers the node found on its PATH through a link to the node ru
   const linked = await home()
   await symlink(process.execPath, join(linked, 'node'))
 
-  await exec(process.execPath, [CODEX, 'install'], { env: { ...process.env, HOME: user, PATH: [await otherNode(), linked, process.env.PATH].join(delimiter) } })
+  const PATH = [await otherNode(), linked, process.env.PATH].join(delimiter)
+  await checked(user, () => exec(process.execPath, [CODEX, 'install'], { env: { ...process.env, HOME: user, PATH } }))
 
   assert.equal(registration(await readFile(join(user, '.codex', 'config.toml'), 'utf8')).command, join(linked, 'node'))
 })
@@ -95,7 +129,8 @@ test('install registers the path of the node running it when no node on its PATH
   const linked = await home()
   await symlink(process.execPath, join(linked, 'node'))
 
-  await exec(process.execPath, [CODEX, 'install'], { cwd: linked, env: { ...process.env, HOME: user, PATH: [await otherNode(), await home(), '.'].join(delimiter) } })
+  const PATH = [await otherNode(), await home(), '.'].join(delimiter)
+  await checked(user, () => exec(process.execPath, [CODEX, 'install'], { cwd: linked, env: { ...process.env, HOME: user, PATH } }))
 
   assert.equal(registration(await readFile(join(user, '.codex', 'config.toml'), 'utf8')).command, process.execPath)
 })
@@ -178,10 +213,11 @@ test('uninstall and install read a config written with CRLF, its registration\'s
   }
 })
 
-test('install and uninstall take a line in a multi-line string for text, not a header, however it looks', async () => {
-  for (const [open, close] of [['"""', '"""'], ["'''", "'''"], ['"""Starts here', 'and \\""" ends here"""']]) {
+test('install and uninstall take a line in a multi-line string for text, not a header, however it looks, its lines ending in LF or CRLF', async () => {
+  const strings = [['"""', '"""'], ["'''", "'''"], ['"""Starts here', 'and \\""" ends here"""']]
+  for (const [open, close, eol] of strings.flatMap(([open, close]) => [String, crlf].map(eol => [open!, close!, eol] as const))) {
     // A person's own string holding what looks like Deck's table.
-    const theirs = `${BEFORE}note = ${open}\n[mcp_servers.matt_deck]\ncommand = "in a string"\n${close}\n`
+    const theirs = eol(`${BEFORE}note = ${open}\n[mcp_servers.matt_deck]\ncommand = "in a string"\n${close}\n`)
     const { user, config } = await withConfig(theirs)
 
     await run(user, 'install')
@@ -189,20 +225,24 @@ test('install and uninstall take a line in a multi-line string for text, not a h
     await run(user, 'uninstall')
 
     assert.ok(installed.startsWith(theirs), installed)
-    registration(installed.slice(theirs.length))
+    assert.equal(registration(installed).args.at(-1), 'codex', open)
     assert.equal(await readFile(config, 'utf8'), theirs, open)
   }
 })
 
-test('uninstall removes a multi-line string a person put in Deck\'s table whole, a line in it looking like a header or a comment among the rest', async () => {
+test('uninstall removes a multi-line string a person put in Deck\'s table whole, a line in it looking like a header or a comment among the rest, its lines ending in LF or CRLF', async () => {
   for (const string of ['"""\n[other]\nkey = 1\n"""', '"""\n# c"""']) {
-    const { user, config } = await withConfig(BEFORE)
-    await run(user, 'install')
-    await writeFile(config, `${await readFile(config, 'utf8')}note = ${string}\n[after]\nkey = 2\n`)
+    for (const eol of [String, crlf]) {
+      const { user, config } = await withConfig(eol(BEFORE))
+      await run(user, 'install')
+      await writeFile(config, `${await readFile(config, 'utf8')}${eol(`note = ${string}\n[after]\nkey = 2\n`)}`)
 
-    await run(user, 'uninstall')
+      await run(user, 'uninstall')
 
-    assert.equal(await readFile(config, 'utf8'), `${BEFORE}\n[after]\nkey = 2\n`, string)
+      // Line endings aside: the blank line install set its table apart with
+      // ends in LF in a CRLF config, and stays.
+      assert.equal(eol(await readFile(config, 'utf8')), eol(`${BEFORE}\n[after]\nkey = 2\n`), string)
+    }
   }
 })
 
@@ -237,10 +277,10 @@ const HAND_WRITTEN = [
   "mcp_servers = { a = { command = '''a'b''' }, matt_deck = { command = \"mine\" } }\n",
 ]
 
-test('install and uninstall stop when the Codex config registers the Deck service in a form Deck does not write, and change nothing', async () => {
-  for (const form of HAND_WRITTEN) {
+test('install and uninstall stop when the Codex config registers the Deck service in a form Deck does not write, its lines ending in LF or CRLF, and change nothing', async () => {
+  for (const form of HAND_WRITTEN.flatMap(form => [`${form}\n${BEFORE}`, crlf(`${form}\n${BEFORE}`)])) {
     for (const command of ['install', 'uninstall']) {
-      const { user, config } = await withConfig(`${form}\n${BEFORE}`)
+      const { user, config } = await withConfig(form)
 
       await assert.rejects(run(user, command), (error: any) => {
         assert.equal(error.code, 1, form)
@@ -248,7 +288,7 @@ test('install and uninstall stop when the Codex config registers the Deck servic
         assert.ok(error.stderr.includes(`再运行一次 ${command}`), error.stderr)
         return true
       })
-      assert.equal(await readFile(config, 'utf8'), `${form}\n${BEFORE}`, form)
+      assert.equal(await readFile(config, 'utf8'), form, form)
       assert.deepEqual(await readdir(user), ['.codex'], form)
       assert.deepEqual(await readdir(join(user, '.codex')), ['config.toml'], form)
     }
@@ -260,7 +300,7 @@ test('install stops when the Codex config holds mcp_servers as an inline table, 
     `mcp_servers = { other = { command = "other" } }\n`,
     // Named matt_deck deeper in it, or in a string: no registration.
     `mcp_servers = { a = { matt_deck = 1 }, b = [{ matt_deck = 2 }], c = "{ matt_deck = 3 }" }\n`,
-  ]) {
+  ].flatMap(inline => [inline, crlf(inline)])) {
   const { user, config } = await withConfig(inline)
 
   await assert.rejects(run(user, 'install'), (error: any) => {
@@ -278,17 +318,19 @@ test('install stops when the Codex config holds mcp_servers as an inline table, 
   }
 })
 
-test('install and uninstall take keys only named like the Deck service for what they are: not its registration', async () => {
-  const alike = `${BEFORE}\n[mcp_servers.other.env]\nmatt_deck = "1"\n\n[profiles.matt_deck]\nmodel = "o3"\n\n[mcp_servers."matt_deck_later"]\ncommand = "later"\n`
-  const { user, config } = await withConfig(alike)
+test('install and uninstall take keys only named like the Deck service for what they are: not its registration, its lines ending in LF or CRLF', async () => {
+  for (const eol of [String, crlf]) {
+    const alike = eol(`${BEFORE}\n[mcp_servers.other.env]\nmatt_deck = "1"\n\n[profiles.matt_deck]\nmodel = "o3"\n\n[mcp_servers."matt_deck_later"]\ncommand = "later"\n`)
+    const { user, config } = await withConfig(alike)
 
-  await run(user, 'install')
-  const installed = await readFile(config, 'utf8')
-  await run(user, 'uninstall')
+    await run(user, 'install')
+    const installed = await readFile(config, 'utf8')
+    await run(user, 'uninstall')
 
-  assert.ok(installed.startsWith(alike), installed)
-  registration(installed)
-  assert.equal(await readFile(config, 'utf8'), alike)
+    assert.ok(installed.startsWith(alike), installed)
+    registration(installed)
+    assert.equal(await readFile(config, 'utf8'), alike)
+  }
 })
 
 // The skill install generates where Codex finds the user's skills.
@@ -1107,9 +1149,11 @@ const SANDBOXED = {
     !(await exec('sandbox-exec', ['-p', '(version 1)(allow default)', 'true']).then(() => true, () => false)),
 }
 const runDenying = (user: string, denied: string, ...args: string[]) =>
-  exec('sandbox-exec', ['-p', `(version 1)(allow default)(deny file-write* (literal ${JSON.stringify(denied)}))`, process.execPath, CODEX, ...args], {
-    env: { ...process.env, HOME: user },
-  })
+  checked(user, () =>
+    exec('sandbox-exec', ['-p', `(version 1)(allow default)(deny file-write* (literal ${JSON.stringify(denied)}))`, process.execPath, CODEX, ...args], {
+      env: { ...process.env, HOME: user },
+    }),
+  )
 
 test('install backs the hooks up before it writes Deck\'s hook in: a backup it cannot make leaves the hooks as they were', SANDBOXED, async () => {
   const { user } = await withConfig(BEFORE)
