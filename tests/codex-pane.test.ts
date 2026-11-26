@@ -5163,7 +5163,9 @@ test('a takeover that moved the Occupancy, its Execute Prompt refused by the Hos
 })
 
 test('the result notice stays through the timed reads, the read as the tab is shown again and "刷新"; it goes with another tab, into a detail and back from one, and as the next prefill, takeover or release begins', async t => {
-  const deck = deckThatOccupies()
+  const occupies = deckThatOccupies()
+  const recommends = deckThatRecommends()
+  const deck = { answer: (name: string, args: any) => (['deck_ask', 'deck_recommendation'].includes(name) ? recommends.answer(name, args) : occupies.answer(name, args)) }
   let refusing = true
   // Whether the result notice is shown as the Host is asked to fill in, and
   // as the Deck service is asked to move or release an Occupancy.
@@ -5234,6 +5236,32 @@ test('the result notice stays through the timed reads, the read as the tab is sh
   assert.equal(shownAt.deck_release, false)
   assert.equal(resultShown(page), undefined)
   assert.deepEqual(calledWith(page, 'deck_release'), [{ task: 74, session: SESSION.session }])
+
+  // A prefill from a button the Host takes: gone before the Host is asked.
+  await page.click(tabNamed(document, '技能'))
+  const skill = [...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === IMPLEMENT)!.querySelector('button')!
+  refusing = true
+  await page.click(skill)
+  assert.equal(resultShown(page)?.title, '没有填入输入框')
+  refusing = false
+  await page.click(skill)
+  assert.equal(shownAt.prefill, false)
+  assert.equal(resultShown(page), undefined)
+  assert.deepEqual([text(skill), skill.disabled], ['已填入', true])
+  await page.advance(5_000)
+
+  // "再问一次": gone before the Deck service is asked for the request.
+  await page.click(tabNamed(document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  recommends.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+  refusing = true
+  await page.click(document.querySelector('.dk-rec [data-execute]'))
+  assert.equal(resultShown(page)?.title, '没有填入输入框')
+  refusing = false
+  await page.click(button(page, '再问一次'))
+  assert.equal(shownAt.deck_ask, false)
+  assert.equal(resultShown(page), undefined)
 })
 
 test('"我现在该做什么" the Host refuses does not wait: the 下一步 tab says why in its notice of a request not filled in, and no report is read', async t => {
