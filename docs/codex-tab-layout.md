@@ -35,7 +35,7 @@ Codex 桌面应用的标签页里，Pane 的每个画面怎么排。画面在 [`
 
 从上到下固定是：抬头、标签页、当前标签页的内容。画面见 `#tasks`。
 
-- **抬头和标签页贴在顶上。** 它们包在 `dk-top` 里，内容在下面滚动，四个标签页里都在。
+- **抬头和标签页贴在顶上。** 它们包在 `dk-top` 里，内容在下面滚动，四个标签页里都在。滚动的是页面自己：文档的滚动元素高度等于容器高度，所以 `dk-top` 的 `position: sticky; top: 0` 管用（#68 实测）。
 - **宽度跟着标签页。** 内容铺满，不留固定的窄栏；标签页比 720px 宽时，`dk-pane` 限宽 720px 并居中，两边仍是底色。列表一列；成就墙每张卡片不窄于 152px，638px 时三列。
 - **深色和浅色都有。** `body` 的 `data-theme` 写 `deck`（深色）或 `deck-light`（浅色），跟宿主的外观走。不写在根元素上：宿主自己往页面根元素的 `data-theme` 写 `light` 或 `dark`，首次加载时晚于页面，会盖掉页面写的值；根元素的这个属性归宿主，页面不读也不写。样式里的选择器不带元素名，写在 `body` 上照样匹配。布局稿不在宿主里，仍写在根元素上。颜色只用样式第一段里的变量，不用宿主给的颜色变量拼：这里的颜色各有固定的含义。
 - **不加载外部字体。** 字体栈里 Barlow 和 JetBrains Mono 后面是系统字体，标签页里落在系统字体上。
@@ -185,6 +185,15 @@ Codex 桌面应用的标签页里，Pane 的每个画面怎么排。画面在 [`
 - 它和“执行”不能用的提示同时出现时各画各的：钩子这条在标签页上面，那一条在内容里。
 
 这两种提示和上面“不能用”的提示都不配状态图形：九个图形只说 Task 的状态和读取失败。
+
+## 宿主给页面的
+
+#68 在真实的桌面应用（26.1117.41037）里，从标签页中的页面读到的。页面只用到下面写明的几样。
+
+- **握手结果**的 `hostContext` 里有 `theme`（`light` 或 `dark`）、`displayMode`（`fullscreen`）、`containerDimensions`（那次是宽 638、高 1034）、`locale`、`timeZone` 和 `styles.variables`（76 个颜色和字体变量）。页面只读 `theme`，见“整体”的深色和浅色；宽度跟着标签页走，不读 `containerDimensions`。
+- **宿主声明的能力**有 `openLinks`、`message`、`serverTools`、`serverResources`、`updateModelContext`、`downloadFile`。页面用到三样：`ui/open-link`（“在 GitHub 打开”）、`ui/message`（预填，只放进输入框不发送）、`tools/call`（读取和各个动作）。
+- **页面收到的通知**有 `ui/notifications/tool-input`、`ui/notifications/tool-result` 和 `ui/notifications/host-context-changed`。切换外观时 `host-context-changed` 带的是 `theme` 和 `styles.variables`，页面跟着换深浅；`adr6-thread-tab` 探针见过它只带容器尺寸。回合开始和结束时没有通知，所以 Pane 看不到 Session 忙不忙。
+- **宿主缓存页面**：同一次运行里新开的 Matt Deck 标签页拿到的仍是应用启动后第一次读到的页面，改了 `plugin/codex/pane.html` 要重启桌面应用才看得到。
 
 ## 没有画的
 
