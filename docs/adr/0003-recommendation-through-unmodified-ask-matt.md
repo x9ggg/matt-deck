@@ -10,7 +10,7 @@
 
 ## Consequences
 
-- `/ask-matt` 标了 `disable-model-invocation`，只能以用户输入的方式触发，不能让模型自己去调用。
+- `/ask-matt` 标了 `disable-model-invocation`，只能以用户输入的方式触发，不能让模型自己去调用。这只在 Claude Code 上成立：Codex 不认这个标记，带它的技能照样出现在模型看得到的技能列表里（`codex-cli 0.172.0`，2026-11-26 分诊 #87 时实测，未在桌面应用里核对）。在 Codex 上要拦住，得往技能文件夹里放 `agents/openai.yaml`，那是改用户的技能文件，Deck 不做。推荐请求不靠这条限制：回报的要求写在请求里，模型自己调用技能时不带它。
 - `/ask-matt` 是 Claude Code 的写法。Codex 里技能的显式调用写 `$ask-matt`（`openai/codex` 的 `rust-v0.171.0-alpha.13`，`codex-rs/skills/src/selection.rs`）。两边要紧的都是由用户显式调用。
 - 在 Claude Code 上，会话忙碌时请求由面板自己持有，空闲后再提交，而不是交给宿主排队。宿主排队的请求无法撤回，而且按钮的处理函数等待它返回会超出 Claude Code 的 10 秒预算（2026-11-11 原型实测）。
 - 在 Codex 上，面板把 `$ask-matt` 和任务快照预填进输入框，由用户按发送。页面直接发送的文字会被宿主当成不可信输入，agent 不照办，技能也不触发（ADR-0006 的实验一，2026-11-21）。所以 Codex 上没有持有的请求，会话忙碌时什么时候发由用户决定。

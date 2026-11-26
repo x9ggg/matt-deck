@@ -112,3 +112,7 @@ _Avoid_: 建议、suggestion
 
 **Execute Prompt（执行提示词）**:
 Pane 为开始做某个 Task 预填进输入框的提示词，由用户自己发送。Occupancy 在它真正发出时成立。
+
+**Executable（能执行）**:
+现在可以开始做的 Task：它不是 Spec 也不是 Map，Task Status 是开着，并且要么已有 Occupancy，要么既没有被 Blocking Edge 挡着、也不在等分诊或等补充信息。
+_Avoid_: 可执行（Pane 的一个分组，只含还没有 Occupancy 的 Executable Task）

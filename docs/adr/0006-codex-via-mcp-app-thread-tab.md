@@ -23,6 +23,8 @@ status: accepted
 - 新会话发出第一条消息之前打不开面板，这时宿主的请求还不带会话 ID。
 - Codex 上面板由用户手动打开标签页，自动出现的只是标签页菜单里的入口。官方规范只描述了手动打开。
 - agent 调用入口工具时，宿主会在消息流里内嵌一个面板实例。这不算面板的一种位置，不专门支持，也不专门禁止，工具描述里写明它是给用户从标签页菜单打开的。把入口工具设成只对页面可见能否避免内嵌，没有测过。
+- 只给页面用的工具带 `_meta.ui.visibility: ['app']`。Codex 照这个标记对模型隐藏工具：给模型的工具里没有它们，源码里模型调用不可见的工具会得到“不可用”。钩子调工具走宿主调用的路径，不看可见性，标了的工具钩子照样调得到。
+- Codex 按技能文件 frontmatter 的 `name` 认技能，`name` 为空才用文件夹名。它读用户目录和项目里的 `.agents/skills`、`.codex/skills`，不读 `~/.claude/skills`。两份不同的文件同名时，`$name` 一份都不注入；`$` 后面只认 `[A-Za-z0-9_:-]`。frontmatter 的 `disable-model-invocation` 不起作用；技能文件夹里有 `agents/openai.yaml`、写着 `policy.allow_implicit_invocation: false` 时，技能才不进模型看得到的列表，用户发 `$name` 照常注入。扫几层目录、链接和读不了的条目怎么算，见 #95 的 Agent Brief。
 - 每个会话有自己的服务进程，工作目录是会话的目录，每个标签页是一个独立的页面实例。页面可以经宿主调用服务的工具，会话空闲和忙碌时都行。宿主还会起一些几秒就结束的服务进程，它们收不到工具调用，所以服务启动时不做任何有后果的事。
 - Codex 上会话标识由 Deck 服务从每次工具调用的 `_meta.threadId` 读取，页面调用、agent 调用和钩子调用都带。页面自己拿不到会话标识。
 - 占用由 `UserPromptSubmit` 钩子登记：安装时在 `~/.codex/hooks.json` 里加一个钩子，它直接调 Deck 服务的工具并带上提示词原文，服务从中认出 `$implement` 的调用。让 agent 自己调工具登记被否决，因为手敲的调用覆盖不到，还要靠 agent 照办。
@@ -32,3 +34,4 @@ status: accepted
 - 最初的事实调研于 2026-11-11：本机 `codex-cli` 为 0.165.0，桌面应用自带 0.167.0-alpha；源码依据来自 `openai/codex` 的 main 分支。
 - 实验一做于 2026-11-21，桌面版 26.1117.41037，自带 `codex-cli 0.171.0-alpha.13`。上面关于直接发送、预填、忙碌、注册、重启和内嵌的结论都来自这次实验，见[实验一记录及探针](../research/probes/adr6-thread-tab/README.md)。同日补查的事实对的是 `openai/codex` 的 `rust-v0.171.0-alpha.13`、`openai/mcp-extensions` 的 `docs/spec.md` 和 MCP Apps 规范 2026-01-26。
 - 会话标识、钩子和服务进程的结论来自 2026-11-22 的第二个探针，版本同上，见[钩子和会话标识的探针记录](../research/probes/codex-hooks/README.md)。
+- 工具可见性和技能认法的结论来自 2026-11-26 分诊 #97、#95 和 #87 时的实测：本机 `codex-cli 0.172.0`，临时的 `HOME` 和 `CODEX_HOME`，模型端是本机的假服务；源码对的是 `openai/codex` 的 `rust-v0.172.0` 和 main 的 `af71942309`。未在桌面应用里核对，桌面应用自带的是 `0.171.0-alpha.13`。
