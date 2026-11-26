@@ -1846,6 +1846,133 @@ test('deck_map lists every Spec and Map, open ones first, each with the first se
   assert.deepEqual(maps[5].progress, { closed: 1, inProgress: 0, total: 1 })
 })
 
+test('deck_map takes a goal from the first paragraph of text, past lists, quotes, tables, HTML, lines of images and rules, and none from a body with no such paragraph', async t => {
+  const map = (number: number, body: string) => issue({ number, labels: ['wayfinder:map'], body })
+  const gh = await fakeGh()
+  await gh.issues([
+    map(1, '1. First step. Second.\n2. Next.\n\nThe goal after a list.\n'),
+    map(2, '- one\n- two\n'),
+    map(3, '<!-- note -->\nReal goal here.\n'),
+    map(4, '<!--\nnot. this\n\nnor this.\n-->\nThe goal after a comment.\n'),
+    map(5, '<details>\n<summary>Not this.</summary>\n</details>\n\nThe goal after HTML.\n'),
+    map(6, '![alt](x.png)\nGoal.\n'),
+    map(7, '| a | b |\n|---|---|\n| 1 | 2 |\n'),
+    map(8, '| a | b |\n|---|---|\n| 1 | 2 |\n\nThe goal after a table.\n'),
+    map(9, '> quoted. more\n'),
+    map(10, '> quoted.\nlazily too.\n\n- - -\nThe goal after a quote and a rule.\n'),
+    map(11, `${'x '.repeat(400)}\n`),
+    map(12, '1. First step. Second.\n'),
+    map(13, '<https://example.com> says it. Then.\n'),
+    map(14, '<kbd>K</kbd> opens it. Then.\n'),
+    map(15, '<div class="note">\nNot this.\n\n<img src="x.png">\n\nThe goal after a tag alone.\n'),
+    map(16, 'A heading\n===\n\nAnother heading\n---\n\nThe goal after headings.\n'),
+    map(17, '- an item\n  ```\n  not. this\n\n  nor this.\n  ```\n\nThe goal after a list with code.\n'),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { maps } = (await deck.callTool('deck_map', { session: 'this-session' })).structuredContent
+
+  assert.deepEqual(
+    maps.map(({ number, goal }: any) => [number, goal]),
+    [
+      [1, 'The goal after a list.'],
+      [2, null],
+      [3, 'Real goal here.'],
+      [4, 'The goal after a comment.'],
+      [5, 'The goal after HTML.'],
+      [6, 'Goal.'],
+      [7, null],
+      [8, 'The goal after a table.'],
+      [9, null],
+      [10, 'The goal after a quote and a rule.'],
+      [11, 'x '.repeat(400).trim()],
+      [12, null],
+      [13, '<https://example.com> says it.'],
+      [14, '<kbd>K</kbd> opens it.'],
+      [15, 'The goal after a tag alone.'],
+      [16, 'The goal after headings.'],
+      [17, 'The goal after a list with code.'],
+    ],
+  )
+})
+
+test('deck_map gives a goal as text: emphasis, code and links as what they say, images dropped', async t => {
+  const map = (number: number, body: string) => issue({ number, labels: ['wayfinder:map'], body })
+  const gh = await fakeGh()
+  await gh.issues([
+    map(1, '**Goal** is this. Then.\n'),
+    map(2, 'See [the doc](https://example.com) and `x`. More.\n'),
+    map(3, 'An ![icon](i.png) image goes. More.\n'),
+    map(4, '*One*, __two__ and _three_ stay, as does `a*b*c` and snake_case_name. More.\n'),
+    map(5, 'Code ``a`b`` and `a``b` and ` lone. More.\n'),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { maps } = (await deck.callTool('deck_map', { session: 'this-session' })).structuredContent
+
+  assert.deepEqual(
+    maps.map(({ number, goal }: any) => [number, goal]),
+    [
+      [1, 'Goal is this.'],
+      [2, 'See the doc and x.'],
+      [3, 'An image goes.'],
+      [4, 'One, two and three stay, as does a*b*c and snake_case_name.'],
+      [5, 'Code a`b and a``b and ` lone.'],
+    ],
+  )
+})
+
+test('deck_map reads a goal from a long line of unclosed code, emphasis, links and images about as fast as from plain words', async t => {
+  const gh = await fakeGh()
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+  const timed = async (text: string) => {
+    await gh.issues([issue({ number: 10, labels: ['wayfinder:map'], body: `${text}\n` })])
+    await deck.callTool('deck_tasks', { refresh: true })
+    const start = performance.now()
+    const { structuredContent } = await deck.callTool('deck_map', { session: 'this-session' })
+    return { ms: performance.now() - start, goal: structuredContent.maps[0].goal }
+  }
+  const unit = '*a _a **a __a [a ![a '
+  // A run of backticks no other run as long closes, then the rest.
+  const line = `a ${'`'.repeat(LONG / 2)} ${unit.repeat(Math.floor(LONG / 2 / unit.length)).trim()}`
+  const plain = 'ab '.repeat(Math.ceil(line.length / 3)).slice(0, line.length).trim()
+  // The first read warms the Deck service up.
+  await timed(plain)
+  const plainMs = (await timed(plain)).ms
+  const withLine = await timed(line)
+
+  assert.equal(withLine.goal, line)
+  assert.ok(withLine.ms - plainMs < 1000, `${withLine.ms} ms with the line, ${plainMs} ms without`)
+})
+
+test('deck_map ends a goal\'s sentence at a full stop only before the end or a space and no lower-case letter', async t => {
+  const map = (number: number, body: string) => issue({ number, labels: ['wayfinder:map'], body })
+  const gh = await fakeGh()
+  await gh.issues([
+    map(1, 'See e.g. the doc.\n'),
+    map(2, 'Ask i.e. the owner. Then go.\n'),
+    map(3, 'Fix it. 然后再说。\n'),
+    map(4, 'Done? yes. Then.\n'),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { maps } = (await deck.callTool('deck_map', { session: 'this-session' })).structuredContent
+
+  assert.deepEqual(
+    maps.map(({ number, goal }: any) => [number, goal]),
+    [
+      [1, 'See e.g. the doc.'],
+      [2, 'Ask i.e. the owner.'],
+      [3, 'Fix it.'],
+      [4, 'Done?'],
+    ],
+  )
+})
+
 test('deck_map gives a Pending Closeout Spec the closeout check to prefill, the one Claude Code\'s Pane prefills, and no other Spec or Map one', async t => {
   const gh = await fakeGh()
   await gh.issues([

@@ -9,9 +9,10 @@ import type { Container, Group, SourceRead, Task, TaskList } from './tasks.ts'
 // in the Spec or Map or not, by number.
 export type WallCard = Task & { group: Group; updatedAt: string; blocking: number[] }
 
-// A Spec or Map with its goal, the first sentence of its body or null, its
-// Child Tasks in the order its wall shows them, and, Pending Closeout, the
-// closeout check the Pane prefills, else null.
+// A Spec or Map with its goal, the first sentence of the first paragraph of
+// text in its body or null, its Child Tasks in the order its wall shows
+// them, and, Pending Closeout, the closeout check the Pane prefills, else
+// null.
 export type MapView = Container & { goal: string | null; wall: WallCard[]; closeoutPrompt: string | null }
 
 const GROUPS: Group[] = ['ready', 'inProgress', 'blocked', 'done']
@@ -29,29 +30,102 @@ const closeoutPrompt = ({ number, progress }: Container) =>
   '在本 Session 中说明核对结论、剩余缺口、对应的 Spec 条目和建议下一步。' +
   '本次只核对并报告，不关闭 Spec，也不自动重开或修改任何 Task；是否关闭 Spec 由用户决定。'
 
-// The first sentence of the first paragraph of a body's description that is
-// no heading and no code block; all of the paragraph when it ends no sentence.
+// The first sentence of the first paragraph of text in a body's description,
+// as text: past headings, code blocks, lists, quotes, tables, HTML blocks,
+// lines of images alone and rules; all of the paragraph when it ends no
+// sentence, however long.
 const goalOf = (body: string): string | null => {
   const paragraph: string[] = []
   // The fence that opened the code block a line is in.
   let fence: string | undefined
+  // In a list, quote, table or HTML block, until a blank line ends it; in an
+  // HTML comment, until the line that closes it.
+  let skipping: 'block' | 'comment' | undefined
   for (const line of describe(body).description.split('\n')) {
     const marker = line.match(/^\s*(`{3,}|~{3,})(.*)$/)
     if (fence !== undefined) {
       if (marker !== null && marker[1]!.startsWith(fence) && marker[2]!.trim() === '') fence = undefined
       continue
     }
-    if (marker !== null || line.trim() === '' || /^\s*#{1,6}\s/.test(line)) {
+    if (skipping === 'comment') {
+      if (line.includes('-->')) skipping = undefined
+      continue
+    }
+    if (line.trim() === '') {
+      if (paragraph.length > 0) break
+      skipping = undefined
+      continue
+    }
+    if (skipping === 'block') {
+      // A code block in a list item goes on past blank lines.
+      fence = marker?.[1]
+      continue
+    }
+    // A line of `=` or `-` under a paragraph makes it a heading.
+    if (paragraph.length > 0 && /^\s*(?:=+|-+)\s*$/.test(line)) {
+      paragraph.length = 0
+      continue
+    }
+    // A rule, `- - -` too, is no list.
+    const isRule = /^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)
+    const isComment = /^\s*<!--/.test(line)
+    // HTML as CommonMark begins a block of it: a comment, a declaration or
+    // instruction, a tag that only begins a block, or a tag alone on its
+    // line; an autolink or a tag within a line of text is no block.
+    const isHtml =
+      isComment ||
+      /^\s*<(?:[?!]|\/?(?:script|pre|style|textarea|address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[\s/>]|$))/i.test(line) ||
+      /^\s*<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\/?>\s*$/.test(line)
+    const isBlock = !isRule && (isHtml || /^\s*(?:[-*+]\s|\d{1,9}[.)]\s|>|\|)/.test(line))
+    const isLine = isRule || marker !== null || /^\s*#{1,6}(?:\s|$)/.test(line) || /^\s*(?:!\[[^\]]*\]\([^)]*\)\s*)+$/.test(line)
+    if (isBlock || isLine) {
       if (paragraph.length > 0) break
       fence = marker?.[1]
+      if (isComment) skipping = line.includes('-->', line.indexOf('<!--') + 4) ? undefined : 'comment'
+      else if (isBlock) skipping = 'block'
       continue
     }
     paragraph.push(line.trim())
   }
   if (paragraph.length === 0) return null
-  const text = paragraph.join(' ')
+  // As text: a code span as what it holds, and outside code spans, a link
+  // as its text, emphasis as what it stresses, an image as nothing. An
+  // underscore within a word stresses nothing. None of them reaches past a
+  // mark of its own kind, so a long line of unclosed ones reads in time
+  // that grows with its length, not with its square.
+  const asText = (part: string) =>
+    part
+      .replace(/!\[[^[\]]*\]\([^()]*\)/g, '')
+      .replace(/\[([^[\]]*)\]\([^()]*\)/g, '$1')
+      .replace(/\*\*(?=[^\s*])([^*]*?)(?<=[^\s*])\*\*/g, '$1')
+      .replace(/__(?=[^\s_])([^_]*?)(?<=[^\s_])__/g, '$1')
+      .replace(/\*(?=[^\s*])([^*]*?)(?<=[^\s*])\*/g, '$1')
+      .replace(/(?<![\p{L}\p{N}_])_(?=[^\s_])([^_]*?)(?<=[^\s_])_(?![\p{L}\p{N}_])/gu, '$1')
+  // A run of backticks opens a code span the next run as long closes; one
+  // no run closes is a backtick or more as they are.
+  const joined = paragraph.join(' ')
+  const runs = [...joined.matchAll(/`+/g)].map(run => ({ at: run.index, length: run[0].length }))
+  const closing: (number | undefined)[] = []
+  const nextOfLength = new Map<number, number>()
+  for (let index = runs.length - 1; index >= 0; index--) {
+    closing[index] = nextOfLength.get(runs[index]!.length)
+    nextOfLength.set(runs[index]!.length, index)
+  }
+  let text = ''
+  let from = 0
+  for (let index = 0; index < runs.length; index++) {
+    const close = closing[index]
+    if (close === undefined) continue
+    const { at, length } = runs[index]!
+    text += asText(joined.slice(from, at)) + joined.slice(at + length, runs[close]!.at).trim()
+    from = runs[close]!.at + length
+    index = close
+  }
+  text = (text + asText(joined.slice(from))).replace(/\s+/g, ' ').trim()
 
-  return text.match(/^.*?(?:[。！？]|[.!?](?=\s|$))/)?.[0] ?? text
+  // A full stop before a lower-case letter, as in `e.g. the`, ends no
+  // sentence; one before a capital, as in `Dr. Smith`, does.
+  return text.match(/^.*?(?:[。！？]|[!?](?=\s|$)|\.(?=$|\s[^\s\p{Ll}]))/u)?.[0] ?? text
 }
 
 // Every Spec and Map of `list`, a read of `source`, open ones first, as the

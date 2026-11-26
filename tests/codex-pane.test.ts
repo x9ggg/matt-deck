@@ -2401,6 +2401,23 @@ test('a Map View with no Blocking Edge says nothing of blocking, and shows what 
   assert.equal(page.document.querySelector('#map .dk-spec__title *, #map .dk-card__title *'), null)
 })
 
+test('the Map View holds its card\'s goal to two lines, as it does the title, however long the goal', async t => {
+  const goal = `${'很长的目标，'.repeat(80)}。`
+  const maps = { ...MAPS, maps: [{ ...MAPS.maps[0], goal }, MAPS.maps[1]] }
+  const page = await openPage({ answer: deckAt('/work/matt-deck', true, TASKS, maps) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+  const clamp = (selector: string) => {
+    const style = page.window.getComputedStyle(document.querySelector(selector)!)
+    return [style.display, style.overflow, style.getPropertyValue('-webkit-box-orient'), style.getPropertyValue('-webkit-line-clamp')]
+  }
+
+  assert.equal(document.querySelector('#map .dk-spec__goal')!.textContent, goal)
+  assert.deepEqual(clamp('#map .dk-spec__title'), ['-webkit-box', 'hidden', 'vertical', '2'])
+  assert.deepEqual(clamp('#map .dk-spec__goal'), clamp('#map .dk-spec__title'))
+})
+
 test('the title, goal, Session and Blocking Edges the Deck service gives are put in the Map View as text, and the titles in the list to switch to too', async t => {
   const goal = '<u>目标</u><script>window.injected = true</script>'
   const other = task(93, '<em>占着</em>', { parent: 90, occupant: OTHER_CODEX, occupantHost: 'codex', occupantShort: '<b>77e0aa15</b>' })
