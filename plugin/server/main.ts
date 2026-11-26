@@ -747,6 +747,7 @@ const codexTools = {
       required: ['prompt'],
       additionalProperties: false,
     },
+    _meta: { ui: { visibility: ['app'] } },
     run: async ({ prompt }: any, meta: any): Promise<ToolResult> => {
       const session = meta?.threadId
       try {
@@ -755,9 +756,10 @@ const codexTools = {
           return SILENT
         }
         // The time this tool was called, which the Pane in a tab reads to
-        // tell whether Deck's hook runs. The agent sees this tool and can call
-        // it too, so the time says the tool was called, not that the hook ran.
-        // One that fails to be written stops nothing after it.
+        // tell whether Deck's hook runs. The tool is for the page only, which
+        // Codex hides from the model (seen of codex-cli 0.172.0, not yet of
+        // the desktop app), so the time says Deck's hook called it. One that
+        // fails to be written stops nothing after it.
         try {
           receiveHookCall(homedir(), Date.now())
         } catch {}
@@ -820,11 +822,29 @@ type Tool = {
   run: (args: any, meta: unknown) => Promise<ToolResult>
 }
 
+// The tools both hosts serve that only the Pane calls. Codex hides a tool
+// marked for the page only from the model, and its hooks still call it; the
+// mark decides who sees a tool, and the tool answers whoever calls it. Claude
+// Code's are unmarked: whether it hides them is not known, and its Mod calls
+// them through this same service.
+const FOR_THE_PANE = ['deck_map', 'deck_occupy', 'deck_release', 'deck_heartbeat', 'deck_end_session', 'deck_ask', 'deck_recommendation']
+
 // Only Codex opens the Pane in a tab and runs Deck's hook; Claude Code's
 // Pane is the Mod, and only Claude Code has permission rules to write.
 const served: { tools: Record<string, Tool>; resources: (typeof PANE)[] } =
   host === 'codex'
-    ? { tools: { ...tools, ...codexTools }, resources: [PANE] }
+    ? {
+        tools: {
+          ...Object.fromEntries(
+            Object.entries(tools).map(([name, tool]) => [
+              name,
+              FOR_THE_PANE.includes(name) ? { ...tool, _meta: { ui: { visibility: ['app'] } } } : tool,
+            ]),
+          ),
+          ...codexTools,
+        },
+        resources: [PANE],
+      }
     : { tools: { ...tools, ...claudeCodeTools }, resources: [] }
 
 // The Session this Deck service beats for. In Claude Code the Mod beats; in

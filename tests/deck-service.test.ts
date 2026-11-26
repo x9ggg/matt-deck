@@ -3458,6 +3458,98 @@ test('started for Codex, deck_configure answers the call of the configure skill 
   assert.deepEqual(result.structuredContent, { call: '$matt-deck-configure' })
 })
 
+test('started for Codex, the tools only the Pane calls and the hook\'s tool are for the page only; the agent\'s, the configure skill\'s, the reads and the Pane\'s entry are not', async t => {
+  const deck = startDeck(await workspace(), {}, 'codex')
+  t.after(deck.stop)
+
+  const { result: listed } = await deck.request('tools/list')
+  const forPage = (tool: any) => tool._meta?.ui?.visibility?.join(',') === 'app'
+
+  assert.deepEqual(listed.tools.filter(forPage).map((tool: any) => tool.name).sort(), [
+    'deck_ask',
+    'deck_configure',
+    'deck_end_session',
+    'deck_execute',
+    'deck_heartbeat',
+    'deck_hook',
+    'deck_map',
+    'deck_occupy',
+    'deck_prompt_submitted',
+    'deck_recommendation',
+    'deck_release',
+    'deck_session',
+  ])
+  for (const tool of listed.tools.filter(forPage)) {
+    assert.deepEqual(tool._meta, { ui: { visibility: ['app'] } }, tool.name)
+  }
+  assert.deepEqual(listed.tools.filter((tool: any) => !forPage(tool)).map((tool: any) => tool.name).sort(), [
+    'deck_config',
+    'deck_inspect',
+    'deck_pane',
+    'deck_recommend',
+    'deck_report',
+    'deck_setup_survey',
+    'deck_skill',
+    'deck_skills',
+    'deck_task',
+    'deck_tasks',
+    'deck_write_config',
+  ])
+  for (const tool of listed.tools.filter((tool: any) => !forPage(tool) && tool.name !== 'deck_pane')) {
+    assert.equal(tool._meta, undefined, tool.name)
+  }
+  assert.deepEqual(listed.tools.find((tool: any) => tool.name === 'deck_pane')._meta, {
+    ui: { resourceUri: 'ui://matt-deck/pane.html' },
+    'openai/ui': { entrypoints: [{ type: 'thread' }], preferredModelDisplayMode: 'fullscreen' },
+  })
+})
+
+test('started for Codex, the tools for the page only answer whoever calls them', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  await skillFile(join(user, '.claude', 'skills'), 'ask-matt', '问下一步该做什么。')
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(dir, { ...gh.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  const asked = await callFrom(deck, CODEX_SESSION, 'deck_ask', {})
+  await deck.callTool('deck_recommend', {
+    requestId: asked.structuredContent.requestId,
+    task: 3,
+    nextStep: '先写测试。',
+    skill: '$tdd',
+    reason: '没有挡着的。',
+    blockers: '',
+  })
+  const recommended = await callFrom(deck, CODEX_SESSION, 'deck_recommendation', { requestId: asked.structuredContent.requestId })
+  const mapped = await callFrom(deck, CODEX_SESSION, 'deck_map', { session: CODEX_SESSION })
+  const occupied = await callFrom(deck, CODEX_SESSION, 'deck_occupy', { session: CODEX_SESSION, task: 3 })
+  const released = await callFrom(deck, CODEX_SESSION, 'deck_release', { session: CODEX_SESSION, task: 3 })
+  const hooked = await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$implement #3' })
+  const { occupancies } = (await deck.callTool('deck_inspect')).structuredContent
+  const { receivedAt } = (await deck.callTool('deck_hook')).structuredContent
+  const beaten = await callFrom(deck, CODEX_SESSION, 'deck_heartbeat', { session: CODEX_SESSION })
+  const ended = await callFrom(deck, CODEX_SESSION, 'deck_end_session', { session: CODEX_SESSION })
+
+  assert.equal(asked.structuredContent.ok, true)
+  assert.equal(asked.structuredContent.call, '$ask-matt')
+  assert.deepEqual(recommended.structuredContent, {
+    found: true,
+    recommendation: { task: 3, nextStep: '先写测试。', skill: '$tdd', reason: '没有挡着的。', blockers: '' },
+  })
+  assert.equal(mapped.structuredContent.ok, true)
+  assert.deepEqual(mapped.structuredContent.maps, [])
+  assert.deepEqual([occupied.structuredContent.ok, occupied.structuredContent.occupied], [true, true])
+  assert.deepEqual(released.structuredContent, { ok: true, released: true })
+  assert.deepEqual(hooked, { content: [], isError: false })
+  assert.deepEqual(occupancies.map((each: any) => [each.task, each.session]), [[3, CODEX_SESSION]])
+  assert.equal(typeof receivedAt, 'number')
+  assert.deepEqual([beaten, ended], [
+    { content: [{ type: 'text', text: 'Recorded.' }], isError: false },
+    { content: [{ type: 'text', text: 'Recorded.' }], isError: false },
+  ])
+})
+
 test('started for Codex, deck_session names the Session a call comes from by its _meta.threadId, for the page only', async t => {
   const deck = startDeck(await workspace(), {}, 'codex')
   t.after(deck.stop)
@@ -3885,7 +3977,7 @@ test('started for Codex, deck_report keeps a report sent with no Session under t
   assert.deepEqual(reports.map((report: any) => [report.session, report.result]), [[CODEX_SESSION, '做完了。'], [CODEX_NEIGHBOUR, '旁边的。']])
 })
 
-test('only started for Codex does the Deck service offer the hook\'s tool, which the model sees too, and deck_execute and deck_hook, for the page only', async t => {
+test('only started for Codex does the Deck service offer the hook\'s tool, deck_execute and deck_hook, all for the page only', async t => {
   const claude = startDeck(await configured())
   t.after(claude.stop)
   const codex = startDeck(await configured(), {}, 'codex')
@@ -3904,7 +3996,7 @@ test('only started for Codex does the Deck service offer the hook\'s tool, which
 
   assert.deepEqual([named(forClaude, HOOK_TOOL), named(forClaude, 'deck_execute'), named(forClaude, 'deck_hook')], [undefined, undefined, undefined])
   assert.deepEqual(refused.map(reply => reply.error?.code), [-32602, -32602, -32602])
-  assert.equal(named(forCodex, HOOK_TOOL)._meta, undefined)
+  assert.deepEqual(named(forCodex, HOOK_TOOL)._meta, { ui: { visibility: ['app'] } })
   assert.deepEqual(named(forCodex, 'deck_execute')._meta, { ui: { visibility: ['app'] } })
 })
 

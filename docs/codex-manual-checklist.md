@@ -85,7 +85,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 **2.3 只给页面用的工具**
 
 - 做：在 Configured Project 的会话里问 agent：“列出你能调用的 matt_deck 的工具名，不要调用它们。”
-- 应看到：**要核对**：`deck_session`、`deck_execute`、`deck_hook`、`deck_configure` 不在 agent 看得到的工具里，它们标的是只给页面用（`_meta.ui.visibility: ['app']`）。宿主是否照这个标记做，#66 和 #68 都没有测。别的给页面用的工具 agent 看得到，属于 #97；`deck_prompt_submitted` 对 agent 可见是 #74 定的。
+- 应看到：**要核对**：标了只给页面用（`_meta.ui.visibility: ['app']`）的工具都不在 agent 看得到的工具里：`deck_session`、`deck_execute`、`deck_hook`、`deck_configure`、`deck_map`、`deck_occupy`、`deck_release`、`deck_heartbeat`、`deck_end_session`、`deck_ask`、`deck_recommendation`，以及钩子的工具 `deck_prompt_submitted`（#97）。没标的仍在：`deck_pane`、`deck_recommend`、`deck_report`、`deck_setup_survey`、`deck_write_config`、`deck_config`、`deck_tasks`、`deck_task`、`deck_skills`、`deck_skill`、`deck_inspect`。分诊 #97 时在 `codex-cli 0.172.0` 上实测 Codex 照这个标记对模型隐藏工具，桌面应用里没有核对过。
 
 **2.4 贴顶**
 
@@ -112,7 +112,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 **3.4 手敲 `$implement`**
 
 - 做：不经过 Pane，自己在输入框里敲 `$implement #<编号>` 发送。再分别试 `$implement <编号>`、`$implement` 加 Task 的 issue 链接，以及先写一行别的字、空一行、再写 `$implement #<编号>`。四种写法各用一个“可执行”里的 Task，不用 3.3 已经登记的。每次之后在 Pane 上点“刷新”。
-- 应看到：`$` 不在消息开头也照常触发技能（#68 第 10 步，触发的是探针技能 `$adr6-probe-skill`）。**要核对**：每种写法发出之后，那个 Task 都在“进行中”，写“本 Session”。
+- 应看到：`$` 不在消息开头也照常触发技能（#68 第 10 步，触发的是探针技能 `$adr6-probe-skill`）。**要核对**：每种写法发出之后，那个 Task 都在“进行中”，写“本 Session”。钩子调的 `deck_prompt_submitted` 标了只给页面用（#97），登记到了就说明标了之后钩子照常运行、照样调得到它。
 
 **3.5 输入框里有草稿时执行**
 
