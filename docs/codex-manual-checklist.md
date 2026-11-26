@@ -29,7 +29,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 **1.1 安装的输出**
 
 - 做：运行 `node <检出>/plugin/cli/codex.ts install`。准备里已经退出了桌面应用；别的装了 Deck、开在 Configured Project 里的 Claude Code Session 照 8.9 的说法能退的先退：它们的心跳和 install 争本机状态的写锁，争不到的话 install 忘不掉之前收到的钩子调用，1.2 的橙色提示不出现。
-- 应看到：输出逐行说写了 `~/.codex/config.toml`、`~/.agents/skills/matt-deck-configure/SKILL.md`、`~/.codex/hooks.json`（原来有这个文件时说备份在 `hooks.json.before-matt-deck`；准备里的 uninstall 留下了备份时，即说“安装前的钩子文件备份留在 … 没有删”的那种，这一行前面还有“之前留下的备份 … 已挪到 …”，挪到的名字是后面加上第一个没被占的编号，如 `hooks.json.before-matt-deck.1`；Deck 之后不再碰这份带编号的，确认内容不再需要后可以自己删）；接着是“接下来两步：在终端里运行一次 codex，在钩子审查里信任 Deck 的钩子；再重启 Codex 桌面应用。之后每个 Session 的标签页菜单里出现 Matt Deck，发出的 $implement 会登记占用。”；倒数第二行写明注册指向哪一份插件；最后一行写明注册里的 `node` 是哪个路径，这个路径没了之后要重新运行一次 install。`config.toml` 里 `[mcp_servers.matt_deck]` 的 `command` 是一个 `node` 的绝对路径，和最后一行写的一字不差。
+- 应看到：输出逐行说写了 `~/.codex/config.toml`、`~/.agents/skills/matt-deck-configure/SKILL.md`、它旁边的 `agents/openai.yaml`（这里原来就有一份不是 Deck 写的时，说没有改它）、`~/.codex/hooks.json`（原来有这个文件时说备份在 `hooks.json.before-matt-deck`；准备里的 uninstall 留下了备份时，即说“安装前的钩子文件备份留在 … 没有删”的那种，这一行前面还有“之前留下的备份 … 已挪到 …”，挪到的名字是后面加上第一个没被占的编号，如 `hooks.json.before-matt-deck.1`；Deck 之后不再碰这份带编号的，确认内容不再需要后可以自己删）；接着是“接下来两步：在终端里运行一次 codex，在钩子审查里信任 Deck 的钩子；再重启 Codex 桌面应用。之后每个 Session 的标签页菜单里出现 Matt Deck，发出的 $implement 会登记占用。”；倒数第二行写明注册指向哪一份插件；最后一行写明注册里的 `node` 是哪个路径，这个路径没了之后要重新运行一次 install。`config.toml` 里 `[mcp_servers.matt_deck]` 的 `command` 是一个 `node` 的绝对路径，和最后一行写的一字不差。
 
 **1.2 没信任钩子时**
 
@@ -64,6 +64,12 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 
 - 做：拿 1.1 输出最后一行写的 `node` 路径去对 `config.toml` 里的 `command`，看它是哪种（Homebrew 的链接、版本管理器的路径，还是真实路径）。
 - 应看到：是 Homebrew 的 `bin` 目录里的链接时，重启后桌面应用用这条路径起得来 Deck 服务，Pane 能打开（#68 第 1 步）。别的写法：**要核对**：同样起得来，Pane 能打开（#89）。
+
+**1.8 配置技能只在显式调用时用**
+
+- 前提：1.5 到 1.7 做完之后做。
+- 做：新建一个空目录，在里面 `git init`（不是 Configured Project，用完删掉）。在桌面应用里在这个目录新建会话，发“帮我给这个项目配置 Matt Deck。”，不带 `$matt-deck-configure`；看 agent 做什么，它动手写文件之前就停下它。再在同一个会话里发 `$matt-deck-configure`，看到 agent 开始读配置技能就停下它，不往下配。最后删掉这个目录。
+- 应看到：**要核对**：第一条消息之后，agent 不去读 `~/.agents/skills/matt-deck-configure/SKILL.md`，也不读 Deck 检出里的 `plugin/skills/configure/SKILL.md`：install 在它旁边写的 `agents/openai.yaml` 让 Codex 不把它列给模型（`codex-cli` 0.172.0 在终端里测过，桌面应用里没有，#87）。发 `$matt-deck-configure` 之后照常触发，agent 去读 Deck 检出里的配置技能。
 
 ## 2. 入口和打开 Pane
 
@@ -246,7 +252,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 ## 10. 卸载，再装
 
 - 做：运行 `node <检出>/plugin/cli/codex.ts uninstall`，退出并重新打开桌面应用，在一个会话里打开标签页菜单。
-- 应看到：输出逐行说移除了注册、生成的配置技能和 Deck 的钩子；安装之后没改过 `hooks.json` 时，它和安装前逐字节相同，备份不在了。**要核对**：重启后菜单里没有 Matt Deck。
+- 应看到：输出逐行说移除了注册、Deck 写的 `agents/openai.yaml`、生成的配置技能和 Deck 的钩子；安装之后没改过 `hooks.json` 时，它和安装前逐字节相同，备份不在了。**要核对**：重启后菜单里没有 Matt Deck。
 - 做：再运行一次 install，重启桌面应用，不去终端。回到丙（已经发过消息的会话：新会话发第一条消息之前打不开 Pane，发了消息钩子又可能已经记下一次调用），不发消息，从菜单打开 Pane（重启后不发消息也打得开，#68 第 6 步；橙色提示出现的话，在这时做 8.8 里钩子提示那一项，做完关掉旁白），再发一条 `$implement #<编号>`（另一个可执行的 Task），然后点“刷新”。
 - 应看到：**要核对**：发消息之前，Pane 上的橙色提示重新出现（install 写回钩子时忘掉之前收到的调用，#77）。Codex 的信任记录是否还认：认的话钩子照常运行，刷新后 Task 在“进行中”、提示消失；不认的话 Task 不登记、提示还在，这时终端里的 `codex` 应要求再审查一次（#77、#110）。
 - 做：不认的话，最后在终端里运行一次 `codex`，在钩子审查里再信任 Deck 的钩子，重启桌面应用，免得走完清单之后钩子不跑。

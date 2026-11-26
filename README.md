@@ -52,10 +52,11 @@ git clone https://github.com/x9ggg/matt-deck.git
 node matt-deck/plugin/cli/codex.ts install
 ```
 
-它最多改三个用户全局的文件（Deck 的钩子已经在 `hooks.json` 里时不改它），另在改 `hooks.json` 之前写一份它的备份（见下面第三项），每改一个都在输出里说一句；真把钩子写进 `hooks.json` 时，还会忘掉本机状态里记下的钩子调用（见下面“钩子未生效的提示”）：
+它最多改四个用户全局的文件（Deck 的钩子已经在 `hooks.json` 里时不改它），另在改 `hooks.json` 之前写一份它的备份（见下面第四项），每改一个都在输出里说一句；真把钩子写进 `hooks.json` 时，还会忘掉本机状态里记下的钩子调用（见下面“钩子未生效的提示”）：
 
 - `~/.codex/config.toml`：追加 `[mcp_servers.matt_deck]`，把 Deck 服务注册进 Codex，原有内容保留。注册写的是运行 install 的那个 `node` 的绝对路径（`PATH` 里第一个绝对路径的、解开链接后就是这个 `node` 的条目：通常是指向它的链接，例如 Homebrew 的 `bin` 目录里的那个；真实路径所在的目录排在链接前面时，写的是真实路径；`PATH` 里没有哪个绝对路径的条目解开链接后是它时，也写真实路径，即 `process.execPath`；fnm 这类版本管理器给每个 shell 一个 `PATH` 目录、经一个目录链接指到版本目录时，写的是经过这个目录链接的路径），和这份检出里 `plugin/server/main.ts` 的路径。install 的输出最后一行写明注册里的 `node` 是哪个路径，和 `config.toml` 里的 `command` 一字不差。
-- `~/.agents/skills/matt-deck-configure/SKILL.md`：生成配置技能 `matt-deck-configure`，内容只有一句，让 agent 照这份检出里的配置技能做。这个位置已有一份不是 Deck 生成的同名技能时，install 什么都不改，以退出码 1 结束。
+- `~/.agents/skills/matt-deck-configure/SKILL.md`：生成配置技能 `matt-deck-configure`，内容只有一句，让 agent 照这份检出里的配置技能做。这个位置已有一份不是 Deck 生成的同名技能时，install 什么都不改，以退出码 1 结束。它带一行 Deck 的标记，Deck 认出它是自己生成的，Skill Source 里有它时也不把它当成 Skill Source 的技能：Pane 的技能列表里没有它，`deck_skills` 不列，`deck_skill` 说没有这个技能，两个宿主都一样（#87）。
+- `~/.agents/skills/matt-deck-configure/agents/openai.yaml`：写上 `policy.allow_implicit_invocation: false`，Codex 只在你发 `$matt-deck-configure` 时用配置技能，不自己挑它来用；Codex 不认技能文件里的 `disable-model-invocation`。这里已有一份不是 Deck 写的（没有 Deck 那行注释）时，install 不改它，照常装好别的，在输出里说一句；这时 Codex 照那份文件决定什么时候用这个技能。早先装过、这里还没有这份文件的，重跑一次 install 就补上。
 - `~/.codex/hooks.json`：在 `UserPromptSubmit` 上加 Deck 的钩子，排在原有的钩子后面。改之前把原文件备份成 `~/.codex/hooks.json.before-matt-deck`，权限不比原文件宽；原来没有这个文件就不备份。
 
 注册是用户全局的，Matt Deck 的入口出现在这个用户的所有项目里；在未配置的项目里打开，Pane 只提示此项目未配置。项目自己的 `.codex/config.toml` 不能用来注册，见 [ADR-0006](docs/adr/0006-codex-via-mcp-app-thread-tab.md)。
@@ -103,7 +104,7 @@ node matt-deck/plugin/cli/codex.ts uninstall
 ```
 
 - `config.toml`：只移除 `[mcp_servers.matt_deck]` 和它下面的子表，别的内容不动。install 写这张表、隔开它的空行和原文件结尾补的换行时，跟着 Deck 的注册以外的第一个换行用 CRLF 或 LF，CRLF 和 LF 混用的也只看它；文件不存在、为空或 Deck 的注册以外没有换行时用 LF（#113）。Deck 的表在文件末尾时，隔开它的空行一起移除，文件逐字节还原，只是原文件结尾没有换行时，卸载后结尾多一个换行（#66）；表后面还有内容时，这行空行留下，成了和下一张表之间的空行，因为 Deck 分不清后来加的内容自带没带空行。
-- 配置技能：只删 Deck 生成的那个 `SKILL.md`，目录空了才删目录；不是 Deck 生成的，不动。
+- 配置技能：只删 Deck 生成的那个 `SKILL.md` 和 Deck 写的 `agents/openai.yaml`，`agents` 目录和技能目录空了才删；不是 Deck 生成或写的，不动。
 - `hooks.json`：安装之后没改过（按解析后的内容比，只改了空白和换行的也算没改过），就逐字节还原成备份并删掉备份。改过，就只摘掉 Deck 的钩子，备份留着，输出写明在哪里。没有备份时（安装前没有这个文件，或者备份后来没了，或者 Deck 的钩子是手写进去的），Deck 证明不了文件是它建的，只摘掉 Deck 的钩子、写回剩下的内容，不删文件：安装前没有 `hooks.json` 的，卸载后留下一个 `{}`（#109）。比较时键的顺序也算在内：只调换了键的顺序也算改过。
 
 卸载之后重启桌面应用。卸载后入口是否消失，列在[手动检查清单](docs/codex-manual-checklist.md)里待核对。安装前没有 `config.toml` 时，卸载后会留下一个空的，`hooks.json` 也一样留下；`~/.agents/skills` 这类安装时新建的上级目录也会留下。

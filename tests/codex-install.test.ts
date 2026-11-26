@@ -487,6 +487,20 @@ test('install generates the skill matt-deck-configure, which points at the confi
   assert.ok(removed.includes(join(user, '.agents', 'skills', 'matt-deck-configure')), removed)
 })
 
+// The policy install writes beside the skill it generates.
+const configurePolicy = (user: string) => join(user, '.agents', 'skills', 'matt-deck-configure', 'agents', 'openai.yaml')
+
+test('install writes beside the skill it generates a policy by which Codex uses the skill only when the user calls it, and says so', async () => {
+  const user = await home()
+
+  const { stdout } = await run(user, 'install')
+
+  assert.deepEqual(await readdir(join(user, '.agents', 'skills', 'matt-deck-configure')), ['SKILL.md', 'agents'])
+  assert.deepEqual(await readdir(join(user, '.agents', 'skills', 'matt-deck-configure', 'agents')), ['openai.yaml'])
+  assert.match(await readFile(configurePolicy(user), 'utf8'), /^policy:\n {2}allow_implicit_invocation: false\n/m)
+  assert.ok(stdout.includes(configurePolicy(user)), stdout)
+})
+
 test('install stops when a skill named matt-deck-configure is there that Deck did not generate, and leaves it and the Codex config as they are', async () => {
   const { user, config } = await withConfig(BEFORE)
   const theirs = '---\nname: matt-deck-configure\ndescription: mine\n---\n\nMy own.\n'
@@ -526,6 +540,55 @@ test('uninstall removes only the file install generated: what else the directory
   assert.deepEqual(await readdir(dir), ['notes.md'])
   assert.equal(await readFile(join(dir, 'notes.md'), 'utf8'), 'mine\n')
   assert.deepEqual(await readdir(target), [])
+})
+
+test('uninstall removes the policy install wrote beside the skill, and its agents directory only when nothing else is in it', async () => {
+  const user = await home()
+  const agents = join(user, '.agents', 'skills', 'matt-deck-configure', 'agents')
+  await mkdir(agents, { recursive: true })
+  await writeFile(join(agents, 'icon.svg'), '<svg/>\n')
+  const alone = await home()
+
+  for (const each of [user, alone]) {
+    await run(each, 'install')
+    await run(each, 'uninstall')
+  }
+
+  assert.deepEqual(await readdir(join(user, '.agents', 'skills', 'matt-deck-configure')), ['agents'])
+  assert.deepEqual(await readdir(agents), ['icon.svg'])
+  assert.deepEqual(await readdir(join(alone, '.agents', 'skills')), [])
+})
+
+test('installed again where an install before the policy generated the skill alone, install writes the policy and the skill as it was', async () => {
+  const user = await home()
+  await run(user, 'install')
+  const generated = await readFile(configureSkill(user), 'utf8')
+  // As the install before the policy left it.
+  await rm(join(user, '.agents', 'skills', 'matt-deck-configure', 'agents'), { recursive: true, force: true })
+
+  await run(user, 'install')
+
+  assert.match(await readFile(configurePolicy(user), 'utf8'), /allow_implicit_invocation: false/)
+  assert.equal(await readFile(configureSkill(user), 'utf8'), generated)
+})
+
+test('a policy beside the generated skill that Deck did not write is neither overwritten by install nor removed by uninstall, and each says so', async () => {
+  const user = await home()
+  const theirs = 'policy:\n  allow_implicit_invocation: true\n'
+  await mkdir(join(user, '.agents', 'skills', 'matt-deck-configure', 'agents'), { recursive: true })
+  await writeFile(configurePolicy(user), theirs)
+
+  const { stdout: installed } = await run(user, 'install')
+
+  assert.equal(await readFile(configurePolicy(user), 'utf8'), theirs)
+  assert.ok(installed.includes(`${configurePolicy(user)} 不是 Deck 写的，没有改它`), installed)
+  assert.ok((await readFile(configureSkill(user), 'utf8')).includes(PLUGIN_CONFIGURE))
+
+  const { stdout: removed } = await run(user, 'uninstall')
+
+  assert.equal(await readFile(configurePolicy(user), 'utf8'), theirs)
+  assert.ok(removed.includes(`${configurePolicy(user)} 不是 Deck 写的，没有动它`), removed)
+  assert.deepEqual(await readdir(join(user, '.agents', 'skills', 'matt-deck-configure')), ['agents'])
 })
 
 test('the Codex command line takes install or uninstall', async () => {
@@ -1345,6 +1408,21 @@ test('install stops before writing anything when the Codex config or the configu
     assert.deepEqual(await readdir(elsewhere), [], which)
     assert.equal(await lstat(hooksFile(user)).catch(() => undefined), undefined, which)
   }
+})
+
+test('install stops before writing anything when a file is where it would make the directory of the policy beside the skill', async () => {
+  const { user } = await withConfig(BEFORE)
+  const agents = join(user, '.agents', 'skills', 'matt-deck-configure', 'agents')
+  await mkdir(join(agents, '..'), { recursive: true })
+  await writeFile(agents, 'mine\n')
+
+  await assert.rejects(run(user, 'install'), (error: any) => {
+    assert.equal(error.code, 1)
+    assert.ok(error.stderr.includes(`${configurePolicy(user)} 写不进去（ENOTDIR），没有安装，什么都没改。`), error.stderr)
+    return true
+  })
+  await unchanged(user, ['config.toml'], 'agents is a file')
+  assert.equal(await readFile(agents, 'utf8'), 'mine\n')
 })
 
 test('install stops before writing anything when it cannot make the backup beside the hooks', AS_ROOT, async () => {

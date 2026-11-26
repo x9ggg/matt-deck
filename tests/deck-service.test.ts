@@ -2435,6 +2435,39 @@ test('deck_skill reads one skill\'s file under its frontmatter, and says so of a
   assert.equal(await readFile(join(skills, 'ask-matt', 'SKILL.md'), 'utf8'), before)
 })
 
+test('deck_skills and deck_skill leave out the configure skill Codex install generated in the Skill Source, for either host; one of that name without its mark is a skill like any', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const skills = join(user, '.agents', 'skills')
+  await skillFile(skills, 'ask-matt', '问下一步该做什么。')
+  await exec(process.execPath, [join(import.meta.dirname, '..', 'plugin', 'cli', 'codex.ts'), 'install'], { env: { ...process.env, HOME: user } })
+  const generated = join(skills, 'matt-deck-configure', 'SKILL.md')
+
+  for (const host of ['claude-code', 'codex']) {
+    const deck = startDeck(dir, { HOME: user }, host)
+    t.after(deck.stop)
+
+    const listed = await deck.callTool('deck_skills')
+    const read = await deck.callTool('deck_skill', { name: 'matt-deck-configure' })
+
+    assert.deepEqual(listed.structuredContent.skills.map(({ name }: any) => name), ['ask-matt'], host)
+    assert.deepEqual(read.structuredContent, {
+      ok: false,
+      failure: { kind: 'unknown-skill', message: 'the Skill Source has no skill named matt-deck-configure' },
+    })
+  }
+
+  // A person's own skill of that name: the generated one with its mark taken out.
+  await writeFile(generated, (await readFile(generated, 'utf8')).replace(/^<!--.*-->\n/m, ''))
+  const deck = startDeck(dir, { HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  const listed = await deck.callTool('deck_skills')
+  const read = await deck.callTool('deck_skill', { name: 'matt-deck-configure' })
+
+  assert.deepEqual(listed.structuredContent.skills.map(({ name }: any) => name), ['ask-matt', 'matt-deck-configure'])
+  assert.equal(read.structuredContent.ok, true)
+})
+
 // A Recommendation Request's arguments, as deck_ask writes them for the
 // request `id` and the Task Snapshot `snapshot`.
 const askArgs = (id: string, snapshot: string) =>
