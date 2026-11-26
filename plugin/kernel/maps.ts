@@ -32,16 +32,18 @@ const closeoutPrompt = ({ number, progress }: Container) =>
 
 // The first sentence of the first paragraph of text in a body's description,
 // as text: past headings, code blocks, lists, quotes, tables, HTML blocks,
-// lines of images alone and rules; all of the paragraph when it ends no
-// sentence, however long.
+// lines of images alone, rules, and paragraphs with no text left once read
+// as text; all of the paragraph when it ends no sentence, however long.
 const goalOf = (body: string): string | null => {
   const paragraph: string[] = []
+  // The paragraph read as text, which is nothing until it ends.
+  let text = ''
   // The fence that opened the code block a line is in.
   let fence: string | undefined
   // In a list, quote, table or HTML block, until a blank line ends it; in an
   // HTML comment, until the line that closes it.
   let skipping: 'block' | 'comment' | undefined
-  for (const line of describe(body).description.split('\n')) {
+  for (const line of [...describe(body).description.split('\n'), '']) {
     const marker = line.match(/^\s*(`{3,}|~{3,})(.*)$/)
     if (fence !== undefined) {
       if (marker !== null && marker[1]!.startsWith(fence) && marker[2]!.trim() === '') fence = undefined
@@ -51,12 +53,7 @@ const goalOf = (body: string): string | null => {
       if (line.includes('-->')) skipping = undefined
       continue
     }
-    if (line.trim() === '') {
-      if (paragraph.length > 0) break
-      skipping = undefined
-      continue
-    }
-    if (skipping === 'block') {
+    if (skipping === 'block' && line.trim() !== '') {
       // A code block in a list item goes on past blank lines.
       fence = marker?.[1]
       continue
@@ -78,54 +75,72 @@ const goalOf = (body: string): string | null => {
       /^\s*<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\/?>\s*$/.test(line)
     const isBlock = !isRule && (isHtml || /^\s*(?:[-*+]\s|\d{1,9}[.)]\s|>|\|)/.test(line))
     const isLine = isRule || marker !== null || /^\s*#{1,6}(?:\s|$)/.test(line) || /^\s*(?:!\[[^\]]*\]\([^)]*\)\s*)+$/.test(line)
-    if (isBlock || isLine) {
-      if (paragraph.length > 0) break
-      fence = marker?.[1]
-      if (isComment) skipping = line.includes('-->', line.indexOf('<!--') + 4) ? undefined : 'comment'
-      else if (isBlock) skipping = 'block'
+    if (line.trim() !== '' && !isBlock && !isLine) {
+      paragraph.push(line.trim())
       continue
     }
-    paragraph.push(line.trim())
+    // The paragraph, if any, ends here.
+    if (paragraph.length > 0) {
+      text = asText(paragraph.join(' '))
+      if (text !== '') break
+      paragraph.length = 0
+    }
+    if (line.trim() === '') {
+      skipping = undefined
+      continue
+    }
+    fence = marker?.[1]
+    if (isComment) skipping = line.includes('-->', line.indexOf('<!--') + 4) ? undefined : 'comment'
+    else if (isBlock) skipping = 'block'
   }
-  if (paragraph.length === 0) return null
-  // As text: a code span as what it holds, and outside code spans, a link
-  // as its text, emphasis as what it stresses, an image as nothing. An
-  // underscore within a word stresses nothing. None of them reaches past a
-  // mark of its own kind, so a long line of unclosed ones reads in time
-  // that grows with its length, not with its square.
-  const asText = (part: string) =>
-    part
-      .replace(/!\[[^[\]]*\]\([^()]*\)/g, '')
-      .replace(/\[([^[\]]*)\]\([^()]*\)/g, '$1')
-      .replace(/\*\*(?=[^\s*])([^*]*?)(?<=[^\s*])\*\*/g, '$1')
-      .replace(/__(?=[^\s_])([^_]*?)(?<=[^\s_])__/g, '$1')
-      .replace(/\*(?=[^\s*])([^*]*?)(?<=[^\s*])\*/g, '$1')
-      .replace(/(?<![\p{L}\p{N}_])_(?=[^\s_])([^_]*?)(?<=[^\s_])_(?![\p{L}\p{N}_])/gu, '$1')
-  // A run of backticks opens a code span the next run as long closes; one
-  // no run closes is a backtick or more as they are.
-  const joined = paragraph.join(' ')
-  const runs = [...joined.matchAll(/`+/g)].map(run => ({ at: run.index, length: run[0].length }))
+  if (text === '') return null
+
+  // A full stop before a lower-case letter, as in `e.g. the`, ends no
+  // sentence; one before a capital, as in `Dr. Smith`, does.
+  return text.match(/^.*?(?:[。！？]|[!?](?=\s|$)|\.(?=$|\s[^\s\p{Ll}]))/u)?.[0] ?? text
+}
+
+// A paragraph as text: a code span as what it holds, and outside code spans,
+// a link as its text, emphasis as what it stresses, an image as nothing. An
+// underscore within a word stresses nothing. None of them reaches past a mark
+// of its own kind, so a long line of unclosed ones reads in time that grows
+// with its length, not with its square.
+const asText = (paragraph: string) => {
+  // A run of backticks opens a code span the next run as long closes; one no
+  // run closes is a backtick or more as they are. Each code span stands as a
+  // mark of its number while links and emphasis are read, so a link whose
+  // text is code reads as that code.
+  const marked = paragraph.replace(/[\uE000\uE001]/g, '')
+  const runs = [...marked.matchAll(/`+/g)].map(run => ({ at: run.index, length: run[0].length }))
   const closing: (number | undefined)[] = []
   const nextOfLength = new Map<number, number>()
   for (let index = runs.length - 1; index >= 0; index--) {
     closing[index] = nextOfLength.get(runs[index]!.length)
     nextOfLength.set(runs[index]!.length, index)
   }
-  let text = ''
+  const spans: string[] = []
+  let withMarks = ''
   let from = 0
   for (let index = 0; index < runs.length; index++) {
     const close = closing[index]
     if (close === undefined) continue
     const { at, length } = runs[index]!
-    text += asText(joined.slice(from, at)) + joined.slice(at + length, runs[close]!.at).trim()
+    withMarks += `${marked.slice(from, at)}\uE000${spans.length}\uE001`
+    spans.push(marked.slice(at + length, runs[close]!.at).trim())
     from = runs[close]!.at + length
     index = close
   }
-  text = (text + asText(joined.slice(from))).replace(/\s+/g, ' ').trim()
 
-  // A full stop before a lower-case letter, as in `e.g. the`, ends no
-  // sentence; one before a capital, as in `Dr. Smith`, does.
-  return text.match(/^.*?(?:[。！？]|[!?](?=\s|$)|\.(?=$|\s[^\s\p{Ll}]))/u)?.[0] ?? text
+  return (withMarks + marked.slice(from))
+    .replace(/!\[[^[\]]*\]\([^()]*\)/g, '')
+    .replace(/\[([^[\]]*)\]\([^()]*\)/g, '$1')
+    .replace(/\*\*(?=[^\s*])([^*]*?)(?<=[^\s*])\*\*/g, '$1')
+    .replace(/__(?=[^\s_])([^_]*?)(?<=[^\s_])__/g, '$1')
+    .replace(/\*(?=[^\s*])([^*]*?)(?<=[^\s*])\*/g, '$1')
+    .replace(/(?<![\p{L}\p{N}_])_(?=[^\s_])([^_]*?)(?<=[^\s_])_(?![\p{L}\p{N}_])/gu, '$1')
+    .replace(/\uE000(\d+)\uE001/g, (_, number) => spans[Number(number)]!)
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 // Every Spec and Map of `list`, a read of `source`, open ones first, as the

@@ -1867,6 +1867,10 @@ test('deck_map takes a goal from the first paragraph of text, past lists, quotes
     map(15, '<div class="note">\nNot this.\n\n<img src="x.png">\n\nThe goal after a tag alone.\n'),
     map(16, 'A heading\n===\n\nAnother heading\n---\n\nThe goal after headings.\n'),
     map(17, '- an item\n  ```\n  not. this\n\n  nor this.\n  ```\n\nThe goal after a list with code.\n'),
+    // A paragraph with no text left once read as text is none.
+    map(18, '[![CI](https://x/badge.svg)](https://x/actions)\n\nGoal after one badge. More.\n'),
+    map(19, '[![a](a.svg)](https://x) [![b](b.svg)](https://y)\n\nGoal after badges. More.\n'),
+    map(20, '[](https://x)\n'),
   ])
   const deck = startDeck(await configured(), gh.env)
   t.after(deck.stop)
@@ -1893,6 +1897,9 @@ test('deck_map takes a goal from the first paragraph of text, past lists, quotes
       [15, 'The goal after a tag alone.'],
       [16, 'The goal after headings.'],
       [17, 'The goal after a list with code.'],
+      [18, 'Goal after one badge.'],
+      [19, 'Goal after badges.'],
+      [20, null],
     ],
   )
 })
@@ -1906,6 +1913,7 @@ test('deck_map gives a goal as text: emphasis, code and links as what they say, 
     map(3, 'An ![icon](i.png) image goes. More.\n'),
     map(4, '*One*, __two__ and _three_ stay, as does `a*b*c` and snake_case_name. More.\n'),
     map(5, 'Code ``a`b`` and `a``b` and ` lone. More.\n'),
+    map(6, 'See [`deck_map`](https://x/y) for the tool.\n'),
   ])
   const deck = startDeck(await configured(), gh.env)
   t.after(deck.stop)
@@ -1920,6 +1928,7 @@ test('deck_map gives a goal as text: emphasis, code and links as what they say, 
       [3, 'An image goes.'],
       [4, 'One, two and three stay, as does a*b*c and snake_case_name.'],
       [5, 'Code a`b and a``b and ` lone.'],
+      [6, 'See deck_map for the tool.'],
     ],
   )
 })
