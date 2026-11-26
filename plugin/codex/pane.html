@@ -314,15 +314,25 @@ body{margin:0;background:var(--ground)}
 .dk-raw{white-space:pre-wrap;overflow-wrap:anywhere}
 /* Text the Task Source gives keeps its lines as written. */
 .dk-prose p{white-space:pre-wrap}
+/* Words for a screen reader alone. */
+.dk-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 /* A checked acceptance criterion: its box filled. */
 .dk-prose li.is-checked::before{border-color:var(--pass);background:var(--pass)}
 /* The Spec or Map a Task belongs to opens its Map View in the page, not as
    a link: drawn as the layout draws its link. */
 .dk-parent__link{min-width:0;padding:0;border:0;background:none;color:var(--progress);font:inherit;text-align:left;text-decoration:underline;text-overflow:ellipsis;text-underline-offset:3px;white-space:nowrap;overflow:hidden;cursor:pointer}
-/* A Task blocking the one shown goes on into it. */
+/* A Task blocking the one shown goes on into it; it, and a row of the list
+   to switch to, is a button drawn as the layout draws the row. */
 .dk-edge{cursor:pointer}
+button.dk-edge,button.dk-row{width:100%;font:inherit;text-align:left}
+button.dk-edge{padding:0;border:0;background:none}
+button.dk-row{color:inherit}
 /* A read that is late says so in place of the line saying it reads. */
 #late:not([hidden]) ~ #loading,#late:not([hidden]) ~ [data-panel] #tasks-loading,#late:not([hidden]) ~ [data-panel] #map-loading{display:none}
+/* A row's or card's "详情" shows under the mouse or with the focus in it,
+   and takes the focus while unseen. */
+.dk-reveal{opacity:0}
+.dk-row:hover .dk-reveal,.dk-row:focus-within .dk-reveal,.dk-row.is-selected .dk-reveal,.dk-card:hover .dk-reveal,.dk-card:focus-within .dk-reveal{opacity:1}
 /* A badge's words are in its colours, whatever their row gives them. */
 .dk-pane .dk-badge span{color:inherit}
 </style>
@@ -589,13 +599,38 @@ body{margin:0;background:var(--ground)}
       ? task.isOrphaned ? 'orphaned' : task.occupant === session.session ? 'running' : 'other'
       : { ready: 'ready', blocked: 'blocked', done: 'closed' }[group]
 
+  // A control as the focus knows it across the drawings of what holds it:
+  // its own name, else its words in the row, card or Spec it is in.
+  const focusKey = element => {
+    if (element.dataset.focus !== undefined) return element.dataset.focus
+    const holder = element.parentElement?.closest('[data-focus]')
+    const label = element.dataset.label ?? element.textContent
+    return holder ? `${holder.dataset.focus}/${label}` : `${element.tagName}/${label}`
+  }
+  // Drawing `scope` anew, the focus in it goes back on the same control; on
+  // its Task's row or card where that control is gone or off; else on the
+  // first control of the tab. Focus outside it, or the asking to take a
+  // Task over and its closing, which place the focus themselves, it leaves;
+  // so too while the window has given the focus to the Host.
+  const keepFocus = (scope, draw) => {
+    const from = document.activeElement
+    const key = from !== null && from !== scope && scope.contains(from) && !away && takeover === undefined && refocus === undefined ? focusKey(from) : undefined
+    draw()
+    if (key === undefined || scope.contains(document.activeElement)) return
+    const controls = [...scope.querySelectorAll('button, [data-focus]')].filter(each => each.closest('[hidden]') === null)
+    const same = controls.find(each => focusKey(each) === key && !each.disabled)
+    const holder = controls.find(each => each.dataset.focus === key.split('/')[0] && /^(row|card):/.test(each.dataset.focus))
+    ;(same ?? holder ?? controls.find(each => !each.disabled))?.focus({ preventScroll: true })
+  }
+
   // A row: the glyph, the number and title, then what it says of itself. It
   // takes the focus, as a closed asking may leave it there.
-  const row = (task, state, className, before, after, meta, aside) => {
-    const element = el('li', `dk-row is-${state}${className}`, plate(state), el('div', 'dk-row__main',
+  const row = (task, state, className, before, after, meta, aside, tag = 'li') => {
+    const element = el(tag, `dk-row is-${state}${className}`, plate(state), el('div', 'dk-row__main',
       el('div', 'dk-row__line', ...before, el('span', `dk-id is-${state}`, `#${task.number}`), el('span', 'dk-row__title heading', task.title), ...after),
       el('div', 'dk-row__line', el('span', 'dk-row__meta caption', ...meta), ...aside)))
     element.tabIndex = 0
+    element.dataset.focus = `row:${task.number}`
     return element
   }
 
@@ -626,6 +661,17 @@ body{margin:0;background:var(--ground)}
     : state === 'orphaned' ? [takeOverButton(task.number, place), releaseButton(task.number, task.occupant)]
     : []
 
+  // A row's or card's "详情", which enters the detail as `open` does; not a
+  // click on the row or card it is in.
+  const detailsButton = open => {
+    const button = smallButton('详情', 'dk-reveal')
+    button.addEventListener('click', event => {
+      event.stopPropagation()
+      open()
+    })
+    return button
+  }
+
   const taskRow = (task, group) => {
     const state = stateOf(task, group)
     // Asked to take it over, the row's place holds the asking.
@@ -635,10 +681,12 @@ body{margin:0;background:var(--ground)}
     const label = labelOf(task, state)
     const meta = [...status, ...(label === undefined ? [] : [el('span', 'dk-tag', label)])]
     const actions = state === 'ready' ? [executeButton(task.number, '执行', 'dk-btn dk-btn--sm dk-btn--go')] : heldActions(task, state, 'tasks')
-    const aside =
-      state === 'closed' && task.closedAt !== null ? [el('span', 'dk-row__aside caption', shortTime(task.closedAt))]
-      : actions.length > 0 ? [el('span', 'dk-row__actions', ...actions)]
-      : []
+    const aside = [
+      ...(state === 'closed' && task.closedAt !== null ? [el('span', 'dk-row__aside caption', shortTime(task.closedAt))]
+        : actions.length > 0 ? [el('span', 'dk-row__actions', ...actions)]
+        : []),
+      el('span', 'dk-row__actions', detailsButton(() => openTask(task.number))),
+    ]
     const element = row(task, state, '', [], [], meta, aside)
     element.addEventListener('click', () => openTask(task.number))
     return element
@@ -668,7 +716,7 @@ body{margin:0;background:var(--ground)}
 
   // A Spec or Map: its glyph, its progress, its Child Tasks by group, then
   // the actions given; clicked, its detail unless told otherwise.
-  const containerRow = (container, actions, onClick = () => openTask(container.number)) => {
+  const containerRow = (container, actions, onClick = () => openTask(container.number), tag = 'li') => {
     const children = childrenOf(container)
     const inGroup = group => children.filter(([, each]) => each === group).map(([child]) => child)
     const state = containerState(container)
@@ -678,7 +726,8 @@ body{margin:0;background:var(--ground)}
     const meta = container.isPendingCloseout
       ? [el('span', 'is-unlock', '待收尾核对')]
       : [el('span', '', ['ready', 'inProgress', 'blocked'].map(group => `${inGroup(group).length} ${GROUP_TITLE[group]}`).join(' · '))]
-    const element = row(container, state, ' dk-row--container', [el('span', 'dk-kind label', container.kind === 'spec' ? 'Spec' : 'Map')], [ring], meta, actions)
+    const element = row(container, state, ' dk-row--container', [el('span', 'dk-kind label', container.kind === 'spec' ? 'Spec' : 'Map')], [ring], meta, actions, tag)
+    if (tag === 'button') element.type = 'button'
     element.addEventListener('click', onClick)
     return element
   }
@@ -686,7 +735,7 @@ body{margin:0;background:var(--ground)}
   // The list as the filter shows it: under "all", the open Specs and Maps,
   // then each group that has Tasks, past five rows its first five and a
   // button to the rest; one group alone, all of it.
-  const showTasks = () => {
+  const showTasks = () => keepFocus($('tasks'), () => {
     for (const chip of $('filter').children) {
       const chosen = chip.dataset.filter
       chip.setAttribute('aria-pressed', String(chosen === filter))
@@ -704,7 +753,7 @@ body{margin:0;background:var(--ground)}
           openMap(container.number)
         })
         const closeout = container.isPendingCloseout ? [closeoutButton(container.number, closeoutOf(container.number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
-        return containerRow(container, [el('span', 'dk-row__actions', ...closeout, open)])
+        return containerRow(container, [el('span', 'dk-row__actions', ...closeout, open), el('span', 'dk-row__actions', detailsButton(() => openTask(container.number)))])
       }),
     )
     $('containers').hidden = containers.length === 0
@@ -721,6 +770,7 @@ body{margin:0;background:var(--ground)}
         if (shown.length < tasks.length) {
           const more = el('button', 'dk-group__more caption', `还有 ${tasks.length - shown.length} 个`)
           more.type = 'button'
+          more.dataset.focus = `more:${group}`
           more.addEventListener('click', () => {
             filter = group
             showTasks()
@@ -738,7 +788,7 @@ body{margin:0;background:var(--ground)}
       $('tasks-empty').children[1].textContent = where
     }
     $('filter').hidden = false
-  }
+  })
   for (const chip of $('filter').children) {
     chip.addEventListener('click', () => {
       filter = chip.dataset.filter
@@ -1021,7 +1071,8 @@ body{margin:0;background:var(--ground)}
       const glyph = glyphed(el('span', ''), PLATE[itsState][1])
       glyph.setAttribute('role', 'img')
       glyph.setAttribute('aria-label', PLATE[itsState][0])
-      const edge = el('div', `dk-edge is-${itsState}`, glyph, el('span', `dk-id is-${itsState}`, `#${blocker.number}`), el('span', '', blocker.title))
+      const edge = el('button', `dk-edge is-${itsState}`, glyph, el('span', `dk-id is-${itsState}`, `#${blocker.number}`), el('span', '', blocker.title))
+      edge.type = 'button'
       edge.addEventListener('click', () => openTask(blocker.number))
       return edge
     })
@@ -1058,7 +1109,7 @@ body{margin:0;background:var(--ground)}
         // Each criterion is a line: what is in it, not a heading or a list.
         section(['验收条件'], task.acceptance.length === 0
           ? why('正文里没有验收条件。')
-          : el('div', 'dk-prose', el('ul', '', ...task.acceptance.map(item => made('li', item.isChecked ? 'is-checked' : '', inline(item.text)))))),
+          : el('div', 'dk-prose', el('ul', '', ...task.acceptance.map(item => made('li', item.isChecked ? 'is-checked' : '', [el('span', 'dk-sr', item.isChecked ? '已勾 ' : '未勾 '), ...inline(item.text)]))))),
         ...(blockers.length === 0 ? [] : [section(['被阻塞', el('span', 'mono', String(blockers.length))], ...blockers)]),
         section(['执行记录'], reports.length === 0
           ? why('还没有 Session 执行过这个 Task。')
@@ -1169,16 +1220,18 @@ body{margin:0;background:var(--ground)}
         ...(card.kind !== undefined ? []
           : state === 'ready' ? [executeButton(card.number, '执行', 'dk-btn dk-btn--sm dk-btn--go')]
           : state === 'orphaned' ? [takeOverButton(card.number, 'map')]
-          : heldActions(card, state, 'map'))))
+          : heldActions(card, state, 'map')),
+        detailsButton(() => openTask(card.number, [`#${map.number}`]))))
     // It takes the focus, as a closed asking may leave it there.
     element.tabIndex = 0
+    element.dataset.focus = `card:${card.number}`
     element.addEventListener('click', () => openTask(card.number, [`#${map.number}`]))
     return element
   }
 
   // The "地图" tab: the Map View shown, its blocked Child Tasks past three
   // behind a button, or the Specs and Maps to switch to.
-  const showMap = () => {
+  const showMap = () => keepFocus($('map'), () => {
     const map = maps.find(each => each.number === mapShown) ?? maps[0]
     // The one drawn is the one shown from now on, chosen or not; one gone
     // from the answer gives way to the first, its wall closed.
@@ -1196,22 +1249,23 @@ body{margin:0;background:var(--ground)}
         showMap()
       })
       const choices = maps.map(each => {
-        const choice = containerRow(each, [], () => openMap(each.number))
+        const choice = containerRow(each, [], () => openMap(each.number), 'button')
         choice.classList.toggle('is-selected', each === map)
-        return choice
+        return el('li', '', choice)
       })
       $('map-view').replaceChildren(el('div', 'dk-bar', back, el('span', 'dk-crumbs', '地图 /', el('b', '', '切换'))), el('ul', 'dk-list', ...choices))
     } else {
       const unshown = isWallOpen ? [] : map.wall.filter(card => card.group === 'blocked').slice(3)
       const more = el('button', 'dk-group__more caption', `还有 ${unshown.length} 个被阻塞`)
       more.type = 'button'
+      more.dataset.focus = 'more:wall'
       more.addEventListener('click', () => {
         isWallOpen = true
         showMap()
       })
       $('map-view').replaceChildren(mapCard(map), el('div', 'dk-wall', ...map.wall.filter(card => !unshown.includes(card)).map(card => wallCard(card, map))), ...(unshown.length === 0 ? [] : [more]))
     }
-  }
+  })
 
   // Into a Map View, from a row of "任务" or from the list to switch to: the
   // "地图" tab shows the Spec or Map `number`. Back from it is the "任务" tab,
@@ -2199,11 +2253,14 @@ body{margin:0;background:var(--ground)}
   // The 下一步 tab as the request stands and the skills say: a read of the
   // skills that found them otherwise draws it again. A read of the Tasks
   // draws the Recommendation's card again, from the list it read.
-  const showNext = () => {
+  const showNext = () => keepFocus($('next'), () => {
     const why = askMatt && askMatt.copy !== 'same' ? UNASKABLE[askMatt.copy] : undefined
     const askButton = (label, className) => {
       const button = el('button', className, label)
       button.type = 'button'
+      // "我现在该做什么" and "再问一次" are one control to the focus: one
+      // takes the other's place.
+      button.dataset.focus = 'ask'
       button.disabled = askMatt === undefined || why !== undefined || askOut !== undefined
       button.addEventListener('click', () => ask(button))
       return button
@@ -2252,11 +2309,10 @@ body{margin:0;background:var(--ground)}
       shown.push(el('div', 'dk-next__line', el('span', 'dk-why caption', why), rerun))
     }
     $('next').replaceChildren(el('div', 'dk-next', ...shown), ...(asking.phase === 'answered' ? [askButton('再问一次', 'dk-btn')] : []))
-  }
+  })
 
-  const showRecommendation = () => {
-    $('next').querySelector('.dk-rec')?.replaceWith(recommendationCard(asking.recommendation))
-  }
+  const showRecommendation = () =>
+    keepFocus($('next'), () => $('next').querySelector('.dk-rec')?.replaceWith(recommendationCard(asking.recommendation)))
 
   // The 下一步 tab. It goes by the skills, to know whether Codex runs this
   // ask-matt: opened before the read of the Pane has read them, it reads them.

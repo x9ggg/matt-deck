@@ -301,6 +301,10 @@ button.dk-group__more:hover{color:var(--ink);text-decoration:underline}
 /* ==== 3. 页面自己：铺满标签页，超过 720px 时居中 ==== */
 body{margin:0;background:var(--ground)}
 .dk-pane{max-width:720px;margin:0 auto}
+/* 行和卡片的“详情”：鼠标所在或有焦点时显出来。只给读屏的字看不见。 */
+.dk-reveal{opacity:0}
+.dk-row:hover .dk-reveal,.dk-row:focus-within .dk-reveal,.dk-row.is-selected .dk-reveal,.dk-card:hover .dk-reveal,.dk-card:focus-within .dk-reveal{opacity:1}
+.dk-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
 /* ==== 4. 这份稿子自己的排版，不属于页面 ==== */
 html{background:var(--surface-sunken)}
@@ -518,11 +522,11 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
           <div class="dk-row__line"><span class="dk-row__meta caption"><span>进行中 · Claude Code <span class="mono">3f9c21d0</span></span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">接管</button></span></div>
         </div>
       </li>
-      <li class="dk-row is-orphaned" tabindex="0">
+      <li class="dk-row is-orphaned is-selected" tabindex="0">
         <span class="dk-plate is-orphaned" role="img" aria-label="Orphaned"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 14.6 13.5H1.4z" fill="currentColor"/></svg></span>
         <div class="dk-row__main">
           <div class="dk-row__line"><span class="dk-id is-orphaned">#75</span><span class="dk-row__title heading">心跳与 Orphaned</span></div>
-          <div class="dk-row__line"><span class="dk-row__meta caption"><span class="is-warn">Orphaned</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">接管</button><button class="dk-btn dk-btn--sm" type="button">释放</button></span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span class="is-warn">Orphaned</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm" type="button">接管</button><button class="dk-btn dk-btn--sm" type="button">释放</button></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-reveal" type="button">详情</button></span></div>
         </div>
       </li>
         </ul>
@@ -1083,9 +1087,9 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
         <section class="dk-section">
           <header class="dk-section__head label">验收条件</header>
           <div class="dk-prose"><ul>
-            <li>对已被占用的 Task 点执行时先出现接管确认，不确认就不转移、不预填</li>
-            <li>确认后 Occupancy 转给当前 Session，然后预填 Execute Prompt</li>
-            <li>可以手动释放一个 Occupancy，释放后 Task 回到它该在的分组</li>
+            <li class="is-checked"><span class="dk-sr">已勾</span>对已被占用的 Task 点执行时先出现接管确认，不确认就不转移、不预填</li>
+            <li><span class="dk-sr">未勾</span>确认后 Occupancy 转给当前 Session，然后预填 Execute Prompt</li>
+            <li><span class="dk-sr">未勾</span>可以手动释放一个 Occupancy，释放后 Task 回到它该在的分组</li>
           </ul></div>
         </section>
         <section class="dk-section">

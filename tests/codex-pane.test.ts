@@ -476,21 +476,21 @@ test('the "任务" tab shows the Tasks in the four groups the Deck service puts 
   const { document } = page
 
   assert.deepEqual(groupsShown(document), [
-    ['可执行 1', '#70 Task 详情 可执行 ready-for-agent 执行'],
+    ['可执行 1', '#70 Task 详情 可执行 ready-for-agent 执行 详情'],
     [
       '进行中 4',
-      '#74 执行与 Occupancy 登记 进行中 · 本 Session ready-for-agent 释放',
-      '#72 Matt 技能 进行中 · 77e0aa15 ready-for-agent 接管',
-      '#69 任务列表 进行中 · Claude Code 3f9c21d0 ready-for-agent 接管',
-      '#75 心跳与 Orphaned Orphaned ready-for-agent 接管 释放',
+      '#74 执行与 Occupancy 登记 进行中 · 本 Session ready-for-agent 释放 详情',
+      '#72 Matt 技能 进行中 · 77e0aa15 ready-for-agent 接管 详情',
+      '#69 任务列表 进行中 · Claude Code 3f9c21d0 ready-for-agent 接管 详情',
+      '#75 心跳与 Orphaned Orphaned ready-for-agent 接管 释放 详情',
     ],
-    ['阻塞 2', '#73 推荐：我现在该做什么 被 #72 #70 阻塞 ready-for-agent', '#19 等分诊 needs-triage'],
-    ['已完成 2', '#66 骨架 已解锁 验收证据 ready-for-agent 11-22 01:40', '#65 预先重构 已解锁 ready-for-agent 11-21 22:10'],
+    ['阻塞 2', '#73 推荐：我现在该做什么 被 #72 #70 阻塞 ready-for-agent 详情', '#19 等分诊 needs-triage 详情'],
+    ['已完成 2', '#66 骨架 已解锁 验收证据 ready-for-agent 11-22 01:40 详情', '#65 预先重构 已解锁 ready-for-agent 11-21 22:10 详情'],
   ])
   // The open Spec, with its Child Tasks counted from the same read; the
   // closed Map is not listed.
   assert.deepEqual([...document.querySelectorAll('.dk-row--container')].map(text), [
-    'Spec #64 规格：里程碑二 2/9 1 可执行 · 4 进行中 · 2 阻塞 地图',
+    'Spec #64 规格：里程碑二 2/9 1 可执行 · 4 进行中 · 2 阻塞 地图 详情',
   ])
   // This Session's Task is drawn apart from another Session's; an Orphaned
   // Child Task marks its Spec.
@@ -525,7 +525,7 @@ test('the filter shows one group alone, all of it, and a group past five rows sh
 
   assert.deepEqual(filterShown(document), [['全部 14', '可执行 1', '进行中 4', '阻塞 7', '已完成 2'], ['全部 14']])
   const blockedGroup = document.querySelectorAll('.dk-group')[2]!
-  assert.deepEqual(groupsShown(document)[2], ['阻塞 7', ...[80, 81, 82, 83, 84].map(number => `#${number} 被挡 ${number} 被 #70 阻塞 ready-for-agent`)])
+  assert.deepEqual(groupsShown(document)[2], ['阻塞 7', ...[80, 81, 82, 83, 84].map(number => `#${number} 被挡 ${number} 被 #70 阻塞 ready-for-agent 详情`)])
   assert.equal(text(blockedGroup.querySelector('button.dk-group__more')), '还有 2 个')
 
   await page.click(chip('进行中'))
@@ -533,10 +533,10 @@ test('the filter shows one group alone, all of it, and a group past five rows sh
   assert.deepEqual(groupsShown(document), [
     [
       undefined,
-      '#74 执行与 Occupancy 登记 进行中 · 本 Session ready-for-agent 释放',
-      '#72 Matt 技能 进行中 · 77e0aa15 ready-for-agent 接管',
-      '#69 任务列表 进行中 · Claude Code 3f9c21d0 ready-for-agent 接管',
-      '#75 心跳与 Orphaned Orphaned ready-for-agent 接管 释放',
+      '#74 执行与 Occupancy 登记 进行中 · 本 Session ready-for-agent 释放 详情',
+      '#72 Matt 技能 进行中 · 77e0aa15 ready-for-agent 接管 详情',
+      '#69 任务列表 进行中 · Claude Code 3f9c21d0 ready-for-agent 接管 详情',
+      '#75 心跳与 Orphaned Orphaned ready-for-agent 接管 释放 详情',
     ],
   ])
   assert.equal(document.querySelector('.dk-row--container'), null)
@@ -546,7 +546,7 @@ test('the filter shows one group alone, all of it, and a group past five rows sh
   await page.click(document.querySelectorAll('.dk-group')[2]!.querySelector('button.dk-group__more'))
   assert.deepEqual(filterShown(document)[1], ['阻塞 7'])
   assert.deepEqual(groupsShown(document), [
-    [undefined, ...[80, 81, 82, 83, 84, 85, 86].map(number => `#${number} 被挡 ${number} 被 #70 阻塞 ready-for-agent`)],
+    [undefined, ...[80, 81, 82, 83, 84, 85, 86].map(number => `#${number} 被挡 ${number} 被 #70 阻塞 ready-for-agent 详情`)],
   ])
   assert.equal(document.querySelector('button.dk-group__more'), null)
 
@@ -649,7 +649,7 @@ test('until the first read of the Tasks comes back, the "任务" tab says it is 
 
   assert.deepEqual(whileReading, [['正在读取 Task…'], true])
   assert.deepEqual([...page.document.querySelectorAll('.dk-why')].filter(each => shown(page, each)).map(text), [])
-  assert.deepEqual(groupsShown(page.document)[0], ['可执行 1', '#70 Task 详情 可执行 ready-for-agent 执行'])
+  assert.deepEqual(groupsShown(page.document)[0], ['可执行 1', '#70 Task 详情 可执行 ready-for-agent 执行 详情'])
 })
 
 test('when the Task Source cannot be read the Pane says why, over the list it read before', async t => {
@@ -683,7 +683,7 @@ test('when the Task Source cannot be read the Pane says why, over the list it re
   await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(notice(), ['读取 Task 失败', '这个 Workspace 没有指向 GitHub 的 remote，读不到 Issues。', []])
   assert.equal(text(document.querySelector('.dk-head__fresh')), '读取失败')
-  assert.deepEqual(groupsShown(document)[0], ['可执行 1', '#70 Task 详情 可执行 ready-for-agent 执行'])
+  assert.deepEqual(groupsShown(document)[0], ['可执行 1', '#70 Task 详情 可执行 ready-for-agent 执行 详情'])
 
   failure = { kind: 'failed', message: 'HTTP 502' }
   await page.click(document.querySelector('.dk-head > button'))
@@ -876,10 +876,10 @@ test('a Task waiting on a person, blocked by no Task, shows the label it waits o
 
   assert.deepEqual(groupsShown(page.document)[2], [
     '阻塞 3',
-    '#5 waits needs-info',
-    '#6 triage needs-triage',
+    '#5 waits needs-info 详情',
+    '#6 triage needs-triage 详情',
     // Blocked by a Task, it says so, beside its first triage label.
-    '#7 blocked too 被 #70 阻塞 ready-for-agent',
+    '#7 blocked too 被 #70 阻塞 ready-for-agent 详情',
   ])
 })
 
@@ -1881,7 +1881,7 @@ test('the detail shows the Task\'s state, triage label, assignees and time, its 
     meta: ['可执行', 'ready-for-human', 'x9ggg, someone', '更新 11-21'],
     sections: [
       ['描述', '从任务列表点开一个 Task。 再返回列表。'],
-      ['验收条件', '返回到原来的位置 来路变长'],
+      ['验收条件', '已勾 返回到原来的位置 未勾 来路变长'],
       ['执行记录', '还没有 Session 执行过这个 Task。'],
     ],
   })
@@ -2353,18 +2353,18 @@ test('the "地图" tab shows the Map View of a Spec: its card, then its Child Ta
   assert.deepEqual(mapShown(page), {
     card: ['Spec #64 切换 规格：里程碑二 在 Codex 桌面应用的标签页里放一个 Pane。 可执行 1 进行中 6 阻塞 2 已解锁 2 解锁进度 2 / 9 22%'],
     wall: [
-      '#70 可执行 Task 详情 挡着 #73 更新 11-22 执行',
-      '#74 进行中 执行与 Occupancy 登记 更新 11-22 释放',
-      '#69 进行中 任务列表 Claude Code 3f9c21d0 更新 11-22 接管',
-      '#72 进行中 Matt 技能 77e0aa15 更新 11-22 接管',
-      '#75 Orphaned 心跳与 Orphaned Session 已结束 更新 11-22 接管',
-      '#76 进行中 接管 挡着 #77 更新 11-22 接管',
-      '#78 Orphaned 失联 挡着 #79 更新 11-22 接管',
+      '#70 可执行 Task 详情 挡着 #73 更新 11-22 执行 详情',
+      '#74 进行中 执行与 Occupancy 登记 更新 11-22 释放 详情',
+      '#69 进行中 任务列表 Claude Code 3f9c21d0 更新 11-22 接管 详情',
+      '#72 进行中 Matt 技能 77e0aa15 更新 11-22 接管 详情',
+      '#75 Orphaned 心跳与 Orphaned Session 已结束 更新 11-22 接管 详情',
+      '#76 进行中 接管 挡着 #77 更新 11-22 接管 详情',
+      '#78 Orphaned 失联 挡着 #79 更新 11-22 接管 详情',
       // Blocked by no Task, it says the label it waits on.
-      '#19 阻塞 等分诊 needs-triage 更新 11-22',
-      '#73 阻塞 推荐：我现在该做什么 被 #72 #70 阻塞 · 挡着 #99 #100 更新 11-22',
-      '#66 已解锁 骨架 验收证据 11-22 01:40',
-      '#65 已解锁 预先重构 没有验收证据 11-21 22:10',
+      '#19 阻塞 等分诊 needs-triage 更新 11-22 详情',
+      '#73 阻塞 推荐：我现在该做什么 被 #72 #70 阻塞 · 挡着 #99 #100 更新 11-22 详情',
+      '#66 已解锁 骨架 验收证据 11-22 01:40 详情',
+      '#65 已解锁 预先重构 没有验收证据 11-21 22:10 详情',
     ],
     more: [],
   })
@@ -2402,7 +2402,7 @@ test('a Map View with no Blocking Edge says nothing of blocking, and shows what 
   // One Map only: nothing to switch to. No goal: none is drawn.
   assert.deepEqual(mapShown(page), {
     card: ['Map #90 <i>示例</i> 可执行 1 进行中 0 阻塞 0 已解锁 1 解锁进度 1 / 2 50%'],
-    wall: ['#91 可执行 <b>一个</b> 更新 11-21 执行', '#92 已解锁 关了 没有验收证据 11-20 10:00'],
+    wall: ['#91 可执行 <b>一个</b> 更新 11-21 执行 详情', '#92 已解锁 关了 没有验收证据 11-20 10:00 详情'],
     more: [],
   })
   assert.equal(page.document.querySelector('#map .dk-spec__goal'), null)
@@ -2445,8 +2445,8 @@ test('the title, goal, Session and Blocking Edges the Deck service gives are put
   assert.equal(text(document.querySelector('#map .dk-spec__title')), '<i>规格</i>')
   assert.equal(document.querySelector('#map .dk-spec__goal')!.textContent, goal)
   assert.deepEqual(mapShown(page).wall, [
-    '#93 进行中 <em>占着</em> <b>77e0aa15</b> 更新 11-22 接管',
-    '#94 阻塞 被挡 被 #<s>93</s> 阻塞 · 挡着 #<q>95</q> 更新 11-22',
+    '#93 进行中 <em>占着</em> <b>77e0aa15</b> 更新 11-22 接管 详情',
+    '#94 阻塞 被挡 被 #<s>93</s> 阻塞 · 挡着 #<q>95</q> 更新 11-22 详情',
   ])
   assert.equal(
     document.querySelector('#map .dk-spec__title *, #map .dk-spec__goal *, #map .dk-card__title *, #map .dk-card__meta .mono *'),
@@ -2513,7 +2513,7 @@ test('a wall shows three blocked Child Tasks and puts the rest behind "还有 N 
   assert.deepEqual(numbersShown(), [70, 80, 81, 82, 65])
   assert.deepEqual(mapShown(page).more, ['还有 2 个被阻塞'])
   // Blocked by one Task, a card names it.
-  assert.equal(mapShown(page).wall[1], '#80 阻塞 被挡 80 被 #70 阻塞 更新 11-22')
+  assert.equal(mapShown(page).wall[1], '#80 阻塞 被挡 80 被 #70 阻塞 更新 11-22 详情')
 
   await page.click(document.querySelector('#map button.dk-group__more'))
   assert.deepEqual(numbersShown(), [70, 80, 81, 82, 83, 84, 65])
@@ -3065,10 +3065,10 @@ test('a Pending Closeout Spec\'s row offers a gold "收尾核对" before "地图
   t.after(page.close)
   const [pending, open] = [rowOf(page.document, 64), rowOf(page.document, 80)]
 
-  assert.deepEqual(buttonsOf(pending), [['收尾核对', 'dk-btn dk-btn--sm dk-btn--unlock'], ['地图', 'dk-btn dk-btn--sm']])
+  assert.deepEqual(buttonsOf(pending), [['收尾核对', 'dk-btn dk-btn--sm dk-btn--unlock'], ['地图', 'dk-btn dk-btn--sm'], ['详情', 'dk-btn dk-btn--sm dk-reveal']])
   assert.ok(pending.classList.contains('is-closeout'))
   assert.equal(text(pending.querySelector('.dk-row__meta')), '待收尾核对')
-  assert.deepEqual(buttonsOf(open), [['地图', 'dk-btn dk-btn--sm']])
+  assert.deepEqual(buttonsOf(open), [['地图', 'dk-btn dk-btn--sm'], ['详情', 'dk-btn dk-btn--sm dk-reveal']])
   assert.equal(open.classList.contains('is-closeout'), false)
   assert.equal(text(open.querySelector('.dk-row__meta')), '1 可执行 · 0 进行中 · 0 阻塞')
   assert.doesNotMatch(text(page.document.querySelector('#tasks'))!, /已完成 · |验收通过/)
@@ -3160,13 +3160,13 @@ test('each read draws the closeout anew: a Child Task reopened takes "收尾核�
 
   project = closeoutProject(false)
   await page.advance(60_000)
-  assert.deepEqual(offered(), { row: ['地图'], card: [], detail: ['返回', '在 GitHub 打开'] })
+  assert.deepEqual(offered(), { row: ['地图', '详情'], card: [], detail: ['返回', '在 GitHub 打开'] })
   assert.equal(document.querySelector('#map .dk-spec')!.classList.contains('is-closeout'), false)
 
   project = closeoutProject(true, 2)
   await page.show(false)
   await page.show(true)
-  assert.deepEqual(offered(), { row: ['收尾核对', '地图'], card: ['收尾核对'], detail: ['返回', '收尾核对', '在 GitHub 打开'] })
+  assert.deepEqual(offered(), { row: ['收尾核对', '地图', '详情'], card: ['收尾核对'], detail: ['返回', '收尾核对', '在 GitHub 打开'] })
   await page.click([...document.querySelectorAll('#into-end button')].find(each => text(each) === '收尾核对')!)
   await page.advance(5_000)
   await page.click(document.querySelector('#back'))
@@ -4121,7 +4121,7 @@ test('a Task another Session holds has "接管" on its row, an Orphaned one "接
     [74, 72, 69, 75].map(number => buttonsIn(rowOf(document, number).querySelector('.dk-row__actions'))),
     [['释放'], ['接管'], ['接管'], ['接管', '释放']],
   )
-  for (const each of rowOf(document, 75).querySelectorAll('button')) assert.deepEqual([...each.classList], ['dk-btn', 'dk-btn--sm'])
+  for (const each of rowOf(document, 75).querySelectorAll('.dk-row__actions button:not(.dk-reveal)')) assert.deepEqual([...each.classList], ['dk-btn', 'dk-btn--sm'])
 
   for (const [number, bar] of [
     [74, ['返回', '释放', '在 GitHub 打开']],
@@ -4137,7 +4137,7 @@ test('a Task another Session holds has "接管" on its row, an Orphaned one "接
   await page.click(tabNamed(document, '地图'))
   assert.deepEqual(
     [74, 69, 72, 75, 76, 78].map(number => buttonsIn(wallCard(document, number)!.querySelector('.dk-card__foot'))),
-    [['释放'], ['接管'], ['接管'], ['接管'], ['接管'], ['接管']],
+    [['释放', '详情'], ['接管', '详情'], ['接管', '详情'], ['接管', '详情'], ['接管', '详情'], ['接管', '详情']],
   )
   assert.deepEqual([...wallCard(document, 75)!.querySelector('button')!.classList], ['dk-btn', 'dk-btn--sm'])
 })
@@ -4322,14 +4322,14 @@ test('on the wall, "接管" asks in the card\'s place and "释放" releases; tak
   assert.deepEqual(prefills(page), [prefilled(executePromptOf(72))])
   assert.equal(askShown(page), undefined)
   assert.ok(shown(page, document.querySelector('#map .dk-wall')))
-  assert.deepEqual(buttonsIn(wallCard(document, 72)!.querySelector('.dk-card__foot')), ['释放'])
+  assert.deepEqual(buttonsIn(wallCard(document, 72)!.querySelector('.dk-card__foot')), ['释放', '详情'])
 
   await page.click(wallCard(document, 72)!.querySelector('button'))
   assert.deepEqual(calledWith(page, 'deck_release'), [{ task: 72, session: SESSION.session }])
   // Its Execute Prompt filled in 5 seconds ago at most, its "执行" is off.
-  assert.deepEqual(buttonsIn(wallCard(document, 72)!.querySelector('.dk-card__foot')), ['已填入（停用）'])
+  assert.deepEqual(buttonsIn(wallCard(document, 72)!.querySelector('.dk-card__foot')), ['已填入（停用）', '详情'])
   await page.advance(5_000)
-  assert.deepEqual(buttonsIn(wallCard(document, 72)!.querySelector('.dk-card__foot')), ['执行'])
+  assert.deepEqual(buttonsIn(wallCard(document, 72)!.querySelector('.dk-card__foot')), ['执行', '详情'])
 
   // An Orphaned card asks in its own place too, its glyph the small one.
   await page.click(wallCard(document, 75)!.querySelector('button'))
@@ -4361,7 +4361,7 @@ test('a card the Map View, read just after the Tasks, finds this Session\'s is d
   await page.advance(60_000)
 
   assert.equal(askShown(page), undefined)
-  assert.deepEqual(buttonsIn(wallCard(document, 72)!.querySelector('.dk-card__foot')), ['释放'])
+  assert.deepEqual(buttonsIn(wallCard(document, 72)!.querySelector('.dk-card__foot')), ['释放', '详情'])
 })
 
 test('in a Task\'s detail, "接管" asks under the way back, and taken over the bar has "释放"; "释放" there releases and the bar has "执行"', async t => {
@@ -4455,7 +4455,7 @@ test('when Codex does not run this implement, every "接管" is off, the confirm
   assert.deepEqual(buttonsIn(document.querySelector('.dk-bar')), ['返回', '接管（停用）', '在 GitHub 打开'])
   await page.click(barButton(document, '返回'))
   await page.click(tabNamed(document, '地图'))
-  assert.deepEqual(buttonsIn(wallCard(document, 75)!.querySelector('.dk-card__foot')), ['接管（停用）'])
+  assert.deepEqual(buttonsIn(wallCard(document, 75)!.querySelector('.dk-card__foot')), ['接管（停用）', '详情'])
 })
 
 test('a confirmation asked as implement is read the same has "接管" off once a read finds it is not, and on again once it is', async t => {
@@ -4647,7 +4647,7 @@ test('a takeover that moved nothing, read again as the Deck service fails, says 
   // The button the confirmation had, clicked as it was left: nothing is
   // asked, moved or filled in, and the row's "接管" stays on.
   confirm.click()
-  assert.deepEqual(buttonsIn(rowOf(document, 72)), ['接管'])
+  assert.deepEqual(buttonsIn(rowOf(document, 72)), ['接管', '详情'])
   await page.advance(0)
   assert.equal(askShown(page), undefined)
   assert.equal(calledWith(page, 'deck_occupy').length, 1)
@@ -4675,7 +4675,7 @@ test('a takeover that moved the Occupancy, read again as the Deck service fails,
   // Read again, the row is this Session's.
   breaking.state.broken = false
   await page.advance(60_000)
-  assert.deepEqual(buttonsIn(rowOf(document, 72)), ['释放'])
+  assert.deepEqual(buttonsIn(rowOf(document, 72)), ['释放', '详情'])
 })
 
 test('a takeover that moved nothing has "接管" on again, the focus on it, before the Tasks read again have answered; behind a timed read under way too', async t => {
@@ -5583,7 +5583,7 @@ test('closed, an asking whose Task is closed by now, its place without a button,
   await page.click(rowButton(document, 72, '接管'))
   await page.click(askButton(document, '接管'))
   assert.equal(askShown(page), undefined)
-  assert.deepEqual(buttonsIn(rowOf(document, 72)), [])
+  assert.deepEqual(buttonsIn(rowOf(document, 72)), ['详情'])
   assert.equal((rowOf(document, 72) as HTMLElement).tabIndex, 0)
   assert.equal(document.activeElement, rowOf(document, 72))
 
@@ -5594,7 +5594,7 @@ test('closed, an asking whose Task is closed by now, its place without a button,
   await page.click(cardButton(document, 72, '接管'))
   await page.click(askButton(document, '接管'))
   assert.equal(askShown(page), undefined)
-  assert.deepEqual(buttonsIn(wallCard(document, 72)), [])
+  assert.deepEqual(buttonsIn(wallCard(document, 72)), ['详情'])
   assert.equal((wallCard(document, 72) as HTMLElement).tabIndex, 0)
   assert.equal(document.activeElement, wallCard(document, 72))
 })
@@ -6814,8 +6814,8 @@ test('inline Markdown is read in a description and in each acceptance criterion:
   ])
   assert.equal(description.textContent, '用 deck_task 读，粗、斜、也斜，snake_case_name 照旧。')
   assert.deepEqual([...criteria.querySelectorAll('li')].map(shapeOf), [
-    ['li', '有 ', ['code', 'code'], ' 和 ', ['strong', '粗'], ' 和 ', ['em', '斜'], '，见 ', ['button', '说明']],
-    ['li', '# x'],
+    ['li', ['span', '已勾 '], '有 ', ['code', 'code'], ' 和 ', ['strong', '粗'], ' 和 ', ['em', '斜'], '，见 ', ['button', '说明']],
+    ['li', ['span', '未勾 '], '# x'],
   ])
   // Checked and not, drawn as before.
   assert.deepEqual([...criteria.querySelectorAll('li')].map(each => each.className), ['is-checked', ''])
@@ -7140,4 +7140,170 @@ test('the "重跑配置" of the notice that "执行" cannot be used keeps the fo
   await page.advance(2_000)
   await page.click(document.querySelector('[data-panel="next"] .dk-notice.is-warn button'))
   assert.deepEqual(prefills(page).at(-1), prefilled(CONFIGURE_CALL))
+})
+
+// The "详情" of a Task's row or card.
+const detailsOf = (holder: Element) => [...holder.querySelectorAll('button')].find(each => text(each) === '详情')
+
+test('every row of 任务 and every card of the wall takes the focus and has a "详情", shown only under the mouse or with the focus, that enters its detail as the row or card does', async t => {
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_task' ? answered(detail(args.number, `详情 ${args.number}`)) : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document, window } = page
+  const rows = [...document.querySelectorAll('#tasks .dk-row')] as HTMLElement[]
+  assert.ok(rows.length >= 10)
+  for (const each of rows) {
+    assert.equal(each.tabIndex, 0, text(each.querySelector('.dk-id')))
+    assert.notEqual(detailsOf(each), undefined, text(each.querySelector('.dk-id')))
+  }
+  // Shown with the focus in its row, not otherwise.
+  const orphaned = rowOf(document, 75) as HTMLElement
+  assert.equal(window.getComputedStyle(detailsOf(orphaned)!).opacity, '0')
+  orphaned.focus()
+  assert.equal(window.getComputedStyle(detailsOf(orphaned)!).opacity, '1')
+
+  await page.click(detailsOf(orphaned)!)
+  assert.equal(detailShown(page)?.crumbs, '任务 / #75')
+  await page.click(barButton(document, '返回'))
+  await page.click(detailsOf(rowOf(document, 64))!)
+  assert.equal(detailShown(page)?.crumbs, '任务 / #64')
+  await page.click(barButton(document, '返回'))
+
+  await page.click(tabNamed(document, '地图'))
+  const cards = [...document.querySelectorAll('#map .dk-card')] as HTMLElement[]
+  assert.equal(cards.length, 11)
+  for (const each of cards) {
+    assert.equal(each.tabIndex, 0)
+    assert.notEqual(detailsOf(each), undefined)
+  }
+  await page.click(detailsOf(wallCard(document, 76)!)!)
+  assert.equal(detailShown(page)?.crumbs, '地图 / #64 / #76')
+})
+
+test('the rows under a detail\'s "被阻塞" and the rows of the list to switch to are buttons, clicked as the rows were', async t => {
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_task' ? answered(detail(args.number, `详情 ${args.number}`)) : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 73))
+  const edges = [...document.querySelectorAll('.dk-edge')]
+  assert.deepEqual(edges.map(each => [each.tagName, text(each.querySelector('.dk-id'))]), [['BUTTON', '#72'], ['BUTTON', '#70']])
+  await page.click(edges[1]!)
+  assert.equal(detailShown(page)?.crumbs, '任务 / #73 / #70')
+
+  await page.click(tabNamed(document, '地图'))
+  await page.click([...document.querySelectorAll('#map button')].find(each => text(each) === '切换')!)
+  const choices = [...document.querySelectorAll('#map .dk-row')]
+  assert.deepEqual(choices.map(each => each.tagName), ['BUTTON', 'BUTTON'])
+  await page.click(choices[1]!)
+  assert.equal(text(document.querySelector('#map .dk-spec .dk-id')), '#50')
+})
+
+test('each acceptance criterion says to a screen reader alone whether it is checked; its box is drawn as before', async t => {
+  const page = await openPage({
+    answer: (name, args: any) =>
+      name === 'deck_task'
+        ? answered(detail(70, 'Task 详情', { acceptance: [{ text: '勾了的 3n8q', isChecked: true }, { text: '没勾的 6t2w', isChecked: false }] }))
+        : deckWithSkills()(name, args),
+  })
+  t.after(page.close)
+  const { document, window } = page
+  await page.click(rowOf(document, 70))
+  const items = [...document.querySelectorAll('.dk-prose li')]
+  assert.deepEqual(items.map(text), ['已勾 勾了的 3n8q', '未勾 没勾的 6t2w'])
+  assert.deepEqual(items.map(each => each.classList.contains('is-checked')), [true, false])
+  // Unseen: out of the flow, one pixel, clipped.
+  for (const said of items.map(each => each.firstElementChild!)) {
+    const style = window.getComputedStyle(said)
+    assert.deepEqual([style.position, style.width, style.height, style.overflow], ['absolute', '1px', '1px', 'hidden'])
+  }
+})
+
+// Where the person's focus is, as they would name it: the Task's row or card
+// it is on, and its words.
+const focusIs = (document: Document) => {
+  const at = document.activeElement as HTMLElement
+  const holder = at.closest('.dk-row, .dk-card')
+  return [holder === null ? undefined : text(holder.querySelector('.dk-id')), at === holder ? '（行）' : at.dataset.label ?? text(at)]
+}
+
+test('the focus on a control of 任务 or of the wall stays on that control through the timed read and "刷新"', async t => {
+  // Seven blocked, five shown and "还有 2 个".
+  const blocked = [80, 81, 82, 83, 84].map(number => task(number, `被挡 ${number}`, { blockers: [70], blockedBy: [70] }))
+  const tasks = { ...TASKS, groups: { ...TASKS.groups, blocked: [...TASKS.groups.blocked, ...blocked] } }
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' ? answered(tasks) : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const keeps = async (find: () => Element | null | undefined, then: [string | undefined, string]) => {
+    ;(find() as HTMLElement).focus()
+    assert.deepEqual(focusIs(document), then)
+    await page.advance(60_000)
+    assert.deepEqual(focusIs(document), then)
+    ;(document.querySelector('.dk-head > button') as HTMLElement).click()
+    await page.settled()
+    ;(find() as HTMLElement).focus()
+    await page.advance(60_000)
+    assert.deepEqual(focusIs(document), then)
+  }
+  await keeps(() => document.querySelector('#groups button.dk-group__more'), [undefined, '还有 2 个'])
+  await keeps(() => rowExecute(document, 70), ['#70', '执行'])
+  await keeps(() => rowButton(document, 72, '接管'), ['#72', '接管'])
+  await keeps(() => rowButton(document, 74, '释放'), ['#74', '释放'])
+  await keeps(() => detailsOf(rowOf(document, 73)), ['#73', '详情'])
+  await keeps(() => rowOf(document, 66), ['#66', '（行）'])
+  await keeps(() => [...document.querySelectorAll('#filter button')][2], [undefined, '进行中4'])
+
+  await page.click(tabNamed(document, '地图'))
+  await keeps(() => wallCard(document, 70)!.querySelector('[data-execute]'), ['#70', '执行'])
+  await keeps(() => cardButton(document, 72, '接管'), ['#72', '接管'])
+  await keeps(() => detailsOf(wallCard(document, 76)!), ['#76', '详情'])
+  await keeps(() => cardButton(document, 74, '释放'), ['#74', '释放'])
+  await keeps(() => wallCard(document, 65), ['#65', '（行）'])
+  await page.click([...document.querySelectorAll('#map button')].find(each => text(each) === '切换')!)
+  await keeps(() => [...document.querySelectorAll('#map button.dk-row')][1], ['#50', '（行）'])
+})
+
+test('the focus on a button whose Task changed state goes on its row; on a row filtered away, on the first control of the tab; outside what is drawn again, it stays', async t => {
+  let tasks: any = TASKS
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' ? answered(tasks) : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+
+  ;(rowExecute(document, 70) as HTMLElement).focus()
+  tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [], blocked: [...TASKS.groups.blocked, { ...TASKS.groups.ready[0]!, blockers: [19] }] } }
+  await page.advance(60_000)
+  assert.deepEqual(focusIs(document), ['#70', '（行）'])
+
+  await page.click([...document.querySelectorAll('#filter button')][2]!)
+  ;(rowButton(document, 72, '接管') as HTMLElement).focus()
+  tasks = { ...TASKS, groups: { ...TASKS.groups, inProgress: TASKS.groups.inProgress.filter(each => each.number !== 72) } }
+  await page.advance(60_000)
+  assert.equal(document.activeElement, document.querySelector('#filter button'))
+
+  const refresh = document.querySelector<HTMLElement>('.dk-head > button')!
+  refresh.focus()
+  await page.advance(60_000)
+  assert.equal(document.activeElement, refresh)
+})
+
+test('"我现在该做什么" clicked leaves the focus on "再问一次", which keeps it as it is clicked', async t => {
+  const deck = deckThatRecommends()
+  const page = await openNext(deck)
+  t.after(page.close)
+  const { document } = page
+  ;(button(page, '我现在该做什么') as HTMLElement).focus()
+  await page.click(button(page, '我现在该做什么'))
+  assert.equal(document.activeElement, button(page, '再问一次'))
+  await page.click(button(page, '再问一次'))
+  assert.equal(document.activeElement, button(page, '再问一次'))
+})
+
+test('the focus left on a row\'s button as the person went to the Host is not put back as the list is drawn again', async t => {
+  const page = await openPage({ answer: deckWithSkills() })
+  t.after(page.close)
+  const { document, window } = page
+  ;(rowExecute(document, 70) as HTMLElement).focus()
+  window.dispatchEvent(new window.FocusEvent('blur'))
+
+  await page.advance(60_000)
+
+  assert.equal(document.activeElement, document.body)
 })
