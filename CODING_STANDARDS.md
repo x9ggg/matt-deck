@@ -12,6 +12,8 @@
 
 行为的测试只通过对外接口写：任务内核的行为经 Deck 服务的 `deck_*` 工具验证，Claude Code 上 Pane 的行为经引擎测试工具下的 Mod 验证，Codex 标签页里 Pane 的行为经假宿主下的页面验证。内核新增的行为因此先成为一个 `deck_*` 工具。别的入口（例如命令行）只测自己那一层：参数、输出、退出状态，以及它写的文件。
 
+命令行写文件失败的路径也在这一层测，失败在临时目录里造：`chmod` 造写不进去；`chflags uchg` 造“目录能写、预检通过，删这个文件却失败”；`sandbox-exec` 的 `deny file-write*` 规则造“预检通过，新建这个文件却失败”，规则里的路径先用 `realpath` 解开 `/var` → `/private/var`。权限类的在 root 下跳过，后两种不在 darwin 或 `sandbox-exec` 起不来时也跳过；测试结束前撤掉 `uchg`，不然临时目录删不掉。例子在 `tests/codex-install.test.ts`。
+
 假宿主下的页面（`tests/fake-host.ts`）：页面 `plugin/codex/pane.html` 原样载入 jsdom，`runScripts: 'dangerously'` 执行它唯一的内联脚本。页面窗口的 `parent` 换成另一个 jsdom 窗口，它扮演宿主：回应 `ui/initialize`，把页面的 `tools/call` 交给测试给的回答（回答还拿到页面的 `document`，测试由此读到调用还没回答时页面显示的内容），对预填用的 `ui/message` 和打开链接的 `ui/open-link` 回答成功（`{}`，#68 在桌面应用里测到的），记下页面发出的每条消息。`show()` 扮演宿主显示或隐藏标签页：改写页面 `document` 的 `visibilityState` 和 `hidden`，再派发 `visibilitychange`。这是照浏览器的页面可见性扮演的，Codex 实际怎么隐藏标签页还没有在桌面应用里核对。页面在标签页里自己滚动（#68 测到的），jsdom 不排版，所以滚动的位置由测试给：`scroll(y)` 是人把页面滚到哪里，`scrolled()` 读页面现在滚在哪里，页面的 `scrollY` 和 `scrollTo` 都落在这个位置上。假宿主不排版，不会像浏览器那样在页面内容的末尾截住滚动，所以 `onScroll` 在页面每次自己滚动时把当时的 `document` 交给测试，测试由此看出页面是不是先画出内容再滚。宿主的通知用 `MessageEvent` 发给页面，`source` 是这个宿主窗口。它像 Codex 一样把自己的外观（`light` 或 `dark`）写在页面根元素的 `data-theme` 上：握手完成之后写一次，外观变化时在发变更通知之前先写。jsdom 发出的请求（样式表、`@import`、脚本、框架、XHR、WebSocket）都经一个拦截器记下，不出网；它不请求图片，也不请求样式里 `url()` 的地址，这两样靠查页面源码守：源码里不出现 `src`、`srcset`、`href` 的赋值，也不出现 `url(`、`@import`、`@font-face` 和 `http:`、`https:`。测试读页面显示的文字和它发出的消息，看不到布局：贴顶这类只能读计算后的样式，真实的滚动在桌面应用里核对。jsdom 是仓库根目录的开发依赖，新检出先运行 `npm install`；插件本身仍不装任何包。
 
 引擎测试工具的 `find` 按文档顺序给出第一个匹配。查询的 `in` 选的是另一个 Client 画的树，不能限定在一个已找到的节点下面。Pane 顶部各分组计数的图形排在动作栏前面，所以读动作栏里的某个节点，先按 `type` 和 `text` 找到动作栏，再走它的 `children`。
