@@ -5565,8 +5565,10 @@ test('closed, an asking leaves the focus where it is once the person has gone to
   assert.deepEqual(executeShown(recommended()), ['执行这个 Task', true])
   assert.equal(document.activeElement, document.body)
 
-  // Asked while "接管" was on, cancelled once a read found implement not the
-  // same: the row's "接管" stays off, and the focus goes on the row.
+  // Back in the page, asked while "接管" was on, cancelled once a read found
+  // implement not the same: the row's "接管" stays off, and the focus goes
+  // on the row.
+  window.dispatchEvent(new window.FocusEvent('focus'))
   await page.click(tabNamed(document, '任务'))
   await page.click(rowButton(document, 72, '接管'))
   implement = 'different'
@@ -5574,4 +5576,72 @@ test('closed, an asking leaves the focus where it is once the person has gone to
   await page.click(askButton(document, '取消'))
   assert.deepEqual(executeShown(rowButton(document, 72, '接管')), ['接管', false])
   assert.equal(document.activeElement, rowOf(document, 72))
+})
+
+test('closed by a takeover answered after the person went to the Host, the asking leaves the focus where it is', async t => {
+  let answer: () => void = () => {}
+  const deck: ReturnType<typeof deckThatOccupies> = deckThatOccupies(undefined, args => new Promise(resolve => (answer = () => resolve(deck.occupyAsIs(args)))))
+  const page = await openPage({ answer: deck.answer })
+  t.after(page.close)
+  const { document, window } = page
+  await page.click(rowButton(document, 72, '接管'))
+  ;(askButton(document, '接管') as HTMLElement).click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  // The person goes to the Host's prompt before the move is answered.
+  window.dispatchEvent(new window.FocusEvent('blur'))
+
+  answer()
+  await page.settled()
+
+  assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'])
+  assert.equal(document.activeElement, document.body)
+})
+
+test('closed, an asking leaves the focus where it is once the person has gone to another tab, or into a detail, before it is placed, and come back', async t => {
+  const occupies = deckThatOccupies()
+  const recommends = deckThatRecommends()
+  // While `held`, the Tasks' read waits for it.
+  let held: Promise<void> | undefined
+  let release = () => {}
+  const page = await openPage({
+    answer: (name, args: any) =>
+      name === 'deck_tasks' && held !== undefined ? held.then(() => occupies.answer(name, args))
+      : ['deck_ask', 'deck_recommendation'].includes(name) ? recommends.answer(name, args)
+      : occupies.answer(name, args),
+  })
+  t.after(page.close)
+  const { document } = page
+  const moment = () => new Promise(resolve => setTimeout(resolve, 20))
+
+  // Taken over from a Recommendation, its button off for 5 seconds: the
+  // person goes to another tab and back meanwhile.
+  await page.click(tabNamed(document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  recommends.reported.set('request-1', { ...RECOMMENDATION, task: 69 })
+  await page.advance(2_000)
+  await page.click(document.querySelector('.dk-rec [data-execute]'))
+  await page.click(askButton(document, '接管'))
+  await page.click(tabNamed(document, '任务'))
+  await page.click(tabNamed(document, '下一步'))
+  await page.advance(5_000)
+  assert.deepEqual(executeShown(document.querySelector('.dk-rec [data-execute]')), ['执行这个 Task', true])
+  assert.equal(document.activeElement, document.body)
+  await page.click(tabNamed(document, '任务'))
+
+  // Taken over from a row, the Tasks not read again yet: the person goes
+  // into a detail and back meanwhile.
+  held = new Promise(resolve => (release = resolve))
+  await page.click(rowButton(document, 72, '接管'))
+  ;(askButton(document, '接管') as HTMLElement).click()
+  await moment()
+  ;(rowOf(document, 70) as HTMLElement).click()
+  await moment()
+  ;(barButton(document, '返回') as HTMLElement).click()
+  await moment()
+  held = undefined
+  release()
+  await page.settled()
+  assert.equal(detailShown(page), undefined)
+  assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'])
+  assert.equal(document.activeElement, document.body)
 })

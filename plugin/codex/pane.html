@@ -748,7 +748,6 @@ body{margin:0;background:var(--ground)}
   }
   const back = () => {
     closeResult()
-    refocus = undefined
     const { left } = into.steps.pop()
     if (into.steps.length === 0) into = undefined
     showPanel()
@@ -1062,7 +1061,6 @@ body{margin:0;background:var(--ground)}
       showMap()
     }
     showRecommendation()
-    placeFocus()
     return failure === undefined
   }
 
@@ -1294,8 +1292,16 @@ body{margin:0;background:var(--ground)}
   // meanwhile, in the page or out of it to the Host, or the place left, it
   // stays where it is.
   let refocus
+  // Whether the page's window gave the focus away, to the Host, and has not
+  // had it back since.
+  let away = false
   const placeFocus = () => {
-    if (refocus === undefined || refocus.until !== undefined) return
+    if (refocus === undefined) return
+    if (away) {
+      refocus = undefined
+      return
+    }
+    if (refocus.until !== undefined) return
     const { number, place } = refocus
     const holder = place === 'tasks' || place === 'map'
       ? [...document.querySelectorAll(place === 'tasks' ? '#tasks .dk-row' : '#map .dk-card')].find(each => each.querySelector('.dk-id')?.textContent === `#${number}`)
@@ -1313,7 +1319,11 @@ body{margin:0;background:var(--ground)}
     refocus = undefined
   })
   window.addEventListener('blur', () => {
+    away = true
     refocus = undefined
+  })
+  window.addEventListener('focus', () => {
+    away = false
   })
   // Whether the Task, in the state it is in, is asked to be taken over in
   // the place: only while another Session holds it, or it is Orphaned.
