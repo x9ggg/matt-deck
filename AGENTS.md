@@ -11,3 +11,7 @@ Default five-role vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Running Deck by hand
+
+Every manual run of the Deck service, `plugin/cli/end-session.ts`, the command line or the Codex install and uninstall gets a throwaway home: `HOME=$(mktemp -d) node …`. The real `~/.matt-deck`, `~/.codex` and `~/.agents` hold the person's live sessions. `npm test` already gives each Deck service its own.
