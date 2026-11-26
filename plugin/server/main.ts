@@ -681,6 +681,13 @@ const IMPLEMENT = 'implement'
 // Codex to put in the conversation.
 const SILENT: ToolResult = { content: [], isError: false }
 
+// When this Deck service last received a call from Deck's hook while its
+// project was not configured. Kept in this process alone, no local state
+// being written outside a Configured Project; in Codex the Session's own
+// Deck service serves both its hook and its Pane, so the Session that
+// configures its project with its hook running sees no notice after.
+let unconfiguredHookCallAt: number | undefined
+
 // The tools only Codex is served: the Pane in a tab's, and the hook's.
 const codexTools = {
   deck_pane: {
@@ -751,8 +758,10 @@ const codexTools = {
     run: async ({ prompt }: any, meta: any): Promise<ToolResult> => {
       const session = meta?.threadId
       try {
-        // Outside a Configured Project, Codex's own Sessions included, at once.
+        // Outside a Configured Project, Codex's own Sessions included, the call
+        // is noted in this process alone, and the tool returns at once.
         if (!(await readProjectConfig(workspace)).configured) {
+          unconfiguredHookCallAt = Math.max(unconfiguredHookCallAt ?? 0, Date.now())
           return SILENT
         }
         // The time this tool was called, which the Pane in a tab reads to
@@ -793,11 +802,13 @@ const codexTools = {
   },
   deck_hook: {
     description:
-      'For the Pane in a tab: when a Deck service of this machine last received a call from Deck\'s hook on UserPromptSubmit in a Configured Project, as receivedAt in milliseconds since the epoch; null where none ever did. Codex runs the hook only once the person trusted it.',
+      'For the Pane in a tab: when a Deck service of this machine last received a call from Deck\'s hook on UserPromptSubmit in a Configured Project, or this Deck service did before its project was configured, as receivedAt in milliseconds since the epoch; null where none ever did. Codex runs the hook only once the person trusted it.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     _meta: { ui: { visibility: ['app'] } },
     run: async (): Promise<ToolResult> => {
-      const result = { receivedAt: hookReceivedAt(homedir()) }
+      // The later of the local state's time and this process's own.
+      const times = [hookReceivedAt(homedir()), unconfiguredHookCallAt].filter(time => typeof time === 'number')
+      const result = { receivedAt: times.length === 0 ? null : Math.max(...times) }
 
       return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
     },

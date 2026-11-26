@@ -3872,6 +3872,59 @@ test('started for Codex, deck_hook answers when a hook\'s tool of this machine l
   assert.deepEqual(again.structuredContent, { receivedAt: Date.UTC(2026, 10, 26, 9, 5) })
 })
 
+// The Session that configures its project calls the hook's tool before the
+// project is configured, on the prompt calling the configure skill.
+test('a hook\'s call this Deck service received before its project was configured counts for its deck_hook once configured, in no other Deck service and in no local state', async t => {
+  const dir = await workspace()
+  const user = await home()
+  const clock = await fakeClock(Date.UTC(2026, 10, 27, 9, 0))
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 3 })])
+  const deck = startDeck(dir, { ...gh.env, ...clock.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+  const other = startDeck(dir, { ...gh.env, ...clock.env, HOME: user }, 'codex')
+  t.after(other.stop)
+
+  const sent = await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: '$matt-deck-configure\n$implement #3' })
+  const stateBefore = await readdir(user)
+  const readsBefore = await gh.calls()
+  await clock.set(Date.UTC(2026, 10, 27, 9, 2))
+  await callFrom(deck, CODEX_SESSION, 'deck_write_config', {
+    config: { taskSource: { type: 'github-issues' }, skillSource: { type: 'plugin', name: 'mattpocock-skills' } },
+  })
+  const received = await callFrom(deck, CODEX_SESSION, 'deck_hook', {})
+  const elsewhere = await callFrom(other, CODEX_NEIGHBOUR, 'deck_hook', {})
+
+  assert.deepEqual(sent, { content: [], isError: false })
+  assert.deepEqual(stateBefore, [])
+  assert.deepEqual(readsBefore, [])
+  assert.deepEqual(received.structuredContent, { receivedAt: Date.UTC(2026, 10, 27, 9, 0) })
+  assert.deepEqual(elsewhere.structuredContent, { receivedAt: null })
+})
+
+test('deck_hook answers the later of the time in the local state and the time of the hook\'s last call this Deck service received before its project was configured', async t => {
+  const user = await home()
+  const clock = await fakeClock(Date.UTC(2026, 10, 27, 9, 0))
+  const unconfigured = startDeck(await workspace(), { ...clock.env, HOME: user }, 'codex')
+  t.after(unconfigured.stop)
+  const configuredDeck = startDeck(await configured(), { ...clock.env, HOME: user }, 'codex')
+  t.after(configuredDeck.stop)
+
+  await callFrom(unconfigured, CODEX_SESSION, HOOK_TOOL, { prompt: '只是问问 h4w2' })
+  await clock.set(Date.UTC(2026, 10, 27, 9, 5))
+  await callFrom(configuredDeck, CODEX_NEIGHBOUR, HOOK_TOOL, { prompt: '只是问问 h4w2' })
+  const stateLater = await callFrom(unconfigured, CODEX_SESSION, 'deck_hook', {})
+  await clock.set(Date.UTC(2026, 10, 27, 9, 10))
+  await callFrom(unconfigured, CODEX_SESSION, HOOK_TOOL, { prompt: '只是问问 h4w2' })
+  const processLater = await callFrom(unconfigured, CODEX_SESSION, 'deck_hook', {})
+
+  assert.deepEqual(stateLater.structuredContent, { receivedAt: Date.UTC(2026, 10, 27, 9, 5) })
+  assert.deepEqual(processLater.structuredContent, { receivedAt: Date.UTC(2026, 10, 27, 9, 10) })
+  assert.deepEqual((await callFrom(configuredDeck, CODEX_NEIGHBOUR, 'deck_hook', {})).structuredContent, {
+    receivedAt: Date.UTC(2026, 10, 27, 9, 5),
+  })
+})
+
 // The command line that installs Deck into Codex, run in the test's home.
 const CODEX_CLI = join(import.meta.dirname, '..', 'plugin', 'cli', 'codex.ts')
 const codexCli = (user: string, command: string) => exec(process.execPath, [CODEX_CLI, command], { env: { ...process.env, HOME: user } })
