@@ -862,7 +862,8 @@ button.dk-row{color:inherit}
     if (into === undefined) return
     const step = into.steps.at(-1)
     const way = [tabs.find(tab => tab.dataset.tab === into.tab).textContent, ...into.via, ...into.steps.slice(0, -1).map(each => each.crumb)]
-    $('crumbs').replaceChildren(`${way.join(' / ')} / `, el('b', '', step.crumb))
+    // The same way as shown is left as it is.
+    if ($('crumbs').textContent !== `${way.join(' / ')} / ${step.crumb}`) $('crumbs').replaceChildren(`${way.join(' / ')} / `, el('b', '', step.crumb))
     if (shownDrawn !== step.drawn) showStep(step)
     const drawing = (step.drawing = {})
     const answer = await step.draw(step.read?.key)

@@ -7307,3 +7307,59 @@ test('the focus left on a row\'s button as the person went to the Host is not pu
 
   assert.equal(document.activeElement, document.body)
 })
+
+test('a detail read again the same is not touched: its bar and content see no change at all', async t => {
+  const page = await openPage({ answer: deckWithDetail(() => answered(DETAILS[70]!)) })
+  t.after(page.close)
+  const { document, window } = page
+  await page.click(rowOf(document, 70))
+  const changes: unknown[] = []
+  const observer = new window.MutationObserver((records: unknown[]) => changes.push(...records))
+  for (const part of [document.querySelector('.dk-bar')!, document.querySelector('.dk-detail')!.parentElement!]) {
+    observer.observe(part, { subtree: true, childList: true, attributes: true, characterData: true })
+  }
+
+  await page.advance(60_000)
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  observer.disconnect()
+  assert.deepEqual(changes, [])
+})
+
+test('a detail covered by another and gone back to has its prefills drawn as they stand by then', async t => {
+  const project = () => {
+    const read = closeoutProject(true)
+    ;(read.tasks as any).containers[0].blockers = [81]
+    return read
+  }
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_task' ? answered(detail(args.number, `详情 ${args.number}`)) : deckOfCloseout(project)(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 64))
+  await page.click(barButton(document, '收尾核对'))
+  assert.equal((barButton(document, '已填入') as HTMLButtonElement).disabled, true)
+
+  await page.click(document.querySelector('.dk-edge'))
+  assert.equal(detailShown(page)?.crumbs, '任务 / #64 / #81')
+  await page.advance(5_000)
+  await page.click(barButton(document, '返回'))
+
+  assert.equal((barButton(document, '收尾核对') as HTMLButtonElement).disabled, false)
+})
+
+test('"收尾核对" of one Spec leaves another Spec\'s on', async t => {
+  const project = () => {
+    const read: any = closeoutProject(true)
+    read.tasks.containers[1] = { ...read.tasks.containers[1], isPendingCloseout: true }
+    read.maps.maps[1] = { ...read.maps.maps[1], isPendingCloseout: true, closeoutPrompt: '收尾核对 #80 as the Deck service words it 3k5m' }
+    return read
+  }
+  const page = await openPage({ answer: deckOfCloseout(project) })
+  t.after(page.close)
+  const { document } = page
+  const closeout = (number: number) => rowOf(document, number).querySelector<HTMLButtonElement>('.dk-btn--unlock')!
+
+  await page.click(closeout(64))
+  assert.deepEqual([text(closeout(64)), closeout(64).disabled], ['已填入', true])
+  assert.deepEqual([text(closeout(80)), closeout(80).disabled], ['收尾核对', false])
+})
