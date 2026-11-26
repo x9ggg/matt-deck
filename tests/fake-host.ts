@@ -18,14 +18,23 @@ export const answered = (structuredContent: object) => ({
 // The Host's context as it gives it to the page; `theme` is its appearance.
 type HostContext = { theme?: 'light' | 'dark'; [key: string]: unknown }
 
+// The Host's answer to a request the page makes of it: a result, or a
+// JSON-RPC error.
+type HostAnswer = { result: object } | { error: { code: number; message: string } }
+
 export const openPage = async ({
   answer,
+  answerMessage = () => ({ result: {} }),
   hostContext = {},
   onScroll = () => {},
 }: {
   // What the Deck service answers a tool call the Host passes on; the page's
   // document is there to read what the page shows while the call is open.
   answer: (name: string, args: object, document: Document) => object | Promise<object>
+  // What the Host answers a prefill, `ui/message`: {} as Codex does (#68)
+  // unless the test says otherwise, an error where it refuses one. The page's
+  // document is there to read what the page shows while the prefill is open.
+  answerMessage?: (params: object, document: Document) => HostAnswer
   hostContext?: HostContext
   // Told each time the page scrolls itself, with what the page shows as it
   // does: a browser stops a scroll at the end of what is shown then.
@@ -124,8 +133,8 @@ export const openPage = async ({
       toPage({ id: data.id, result: {} })
     } else if (data.method === 'ui/message') {
       // A message the page puts in the Session's prompt, or sends; the test
-      // reads it from `sent`.
-      toPage({ id: data.id, result: {} })
+      // reads it from `sent`, and may say what the Host answers it.
+      toPage({ id: data.id, ...answerMessage(data.params, page.window.document) })
     } else {
       toPage({ id: data.id, error: { code: -32601, message: `Method not found: ${data.method}` } })
     }

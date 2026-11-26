@@ -595,6 +595,52 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       </section>
     </div></div>
   </section>
+  <section class="shot" id="tasks-refused">
+    <h3>宿主拒绝预填<code>#tasks-refused</code></h3>
+    <p>结果提示在贴顶的那一块的最下面，标签页下面。按钮马上换回原来的字、恢复可点。下一次预填、接管或释放开始时，换标签页、进入或退出详情时收起。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span></span>
+        <span class="dk-head__fresh caption">刚刚</span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">技能</button>
+      </div>
+      <div class="dk-notice is-danger" role="status">
+        <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+        <div class="dk-notice__body">
+          <span class="dk-notice__title heading">没有填入输入框</span>
+          <span class="dk-notice__text">宿主拒绝了这次预填：the composer is busy。再点“执行”重试。</span>
+        </div>
+      </div>
+      </div>
+      <section class="dk-group">
+        <header class="dk-group__head"><span class="label">可执行</span><span class="dk-group__count mono">2</span></header>
+        <ul class="dk-list">
+      <li class="dk-row is-ready" tabindex="0">
+        <span class="dk-plate is-ready" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-ready">#70</span><span class="dk-row__title heading">Task 详情</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>可执行</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button">执行</button></span></div>
+        </div>
+      </li>
+      <li class="dk-row is-ready" tabindex="0">
+        <span class="dk-plate is-ready" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+        <div class="dk-row__main">
+          <div class="dk-row__line"><span class="dk-id is-ready">#71</span><span class="dk-row__title heading">Map View</span></div>
+          <div class="dk-row__line"><span class="dk-row__meta caption"><span>可执行</span><span class="dk-tag">ready-for-agent</span></span><span class="dk-row__actions"><button class="dk-btn dk-btn--sm dk-btn--go" type="button">执行</button></span></div>
+        </div>
+      </li>
+        </ul>
+      </section>
+    </div></div>
+  </section>
   <section class="shot" id="tasks-takeover">
     <h3>接管确认<code>#tasks-takeover</code><span class="shot__part">只画变化的部分</span></h3>
     <p>对其他 Session 占用的或 Orphaned 的 Task 点“接管”（行上、卡片上、详情的返回栏里），或者在 Recommendation 里对它点“执行这个 Task”。提示出现在点的那个位置上，这里画的是行的位置。</p>
