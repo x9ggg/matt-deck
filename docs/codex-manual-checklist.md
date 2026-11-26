@@ -29,7 +29,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 **1.1 安装的输出**
 
 - 做：运行 `node <检出>/plugin/cli/codex.ts install`。准备里已经退出了桌面应用；别的装了 Deck、开在 Configured Project 里的 Claude Code Session 照 8.9 的说法能退的先退：它们的心跳和 install 争本机状态的写锁，争不到的话 install 忘不掉之前收到的钩子调用，1.2 的橙色提示不出现。
-- 应看到：输出逐行说写了 `~/.codex/config.toml`、`~/.agents/skills/matt-deck-configure/SKILL.md`、`~/.codex/hooks.json`（原来有这个文件时说备份在 `hooks.json.before-matt-deck`；准备里的 uninstall 留下了备份时，即说“安装前的钩子文件备份留在 … 没有删”的那种，这一行前面还有“之前留下的备份 … 已挪到 …”，挪到的名字是后面加上第一个没被占的编号，如 `hooks.json.before-matt-deck.1`；Deck 之后不再碰这份带编号的，确认内容不再需要后可以自己删）；接着是“接下来两步：在终端里运行一次 codex，在钩子审查里信任 Deck 的钩子；再重启 Codex 桌面应用。之后每个 Session 的标签页菜单里出现 Matt Deck，发出的 $implement 会登记占用。”；最后一行写明注册指向哪一份插件。`config.toml` 里 `[mcp_servers.matt_deck]` 的 `command` 是一个 `node` 的绝对路径。
+- 应看到：输出逐行说写了 `~/.codex/config.toml`、`~/.agents/skills/matt-deck-configure/SKILL.md`、`~/.codex/hooks.json`（原来有这个文件时说备份在 `hooks.json.before-matt-deck`；准备里的 uninstall 留下了备份时，即说“安装前的钩子文件备份留在 … 没有删”的那种，这一行前面还有“之前留下的备份 … 已挪到 …”，挪到的名字是后面加上第一个没被占的编号，如 `hooks.json.before-matt-deck.1`；Deck 之后不再碰这份带编号的，确认内容不再需要后可以自己删）；接着是“接下来两步：在终端里运行一次 codex，在钩子审查里信任 Deck 的钩子；再重启 Codex 桌面应用。之后每个 Session 的标签页菜单里出现 Matt Deck，发出的 $implement 会登记占用。”；倒数第二行写明注册指向哪一份插件；最后一行写明注册里的 `node` 是哪个路径，这个路径没了之后要重新运行一次 install。`config.toml` 里 `[mcp_servers.matt_deck]` 的 `command` 是一个 `node` 的绝对路径，和最后一行写的一字不差。
 
 **1.2 没信任钩子时**
 
@@ -62,7 +62,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 
 **1.7 注册里的 node**
 
-- 做：看 `config.toml` 里 `command` 写的是哪个 `node`（Homebrew 的链接、版本管理器的路径，还是真实路径）。
+- 做：拿 1.1 输出最后一行写的 `node` 路径去对 `config.toml` 里的 `command`，看它是哪种（Homebrew 的链接、版本管理器的路径，还是真实路径）。
 - 应看到：是 Homebrew 的 `bin` 目录里的链接时，重启后桌面应用用这条路径起得来 Deck 服务，Pane 能打开（#68 第 1 步）。别的写法：**要核对**：同样起得来，Pane 能打开（#89）。
 
 ## 2. 入口和打开 Pane
@@ -252,7 +252,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 - 做：不认的话，最后在终端里运行一次 `codex`，在钩子审查里再信任 Deck 的钩子，重启桌面应用，免得走完清单之后钩子不跑。
 - 应看到：终端里出现 Deck 的钩子的审查，信任之后 `config.toml` 的 `[hooks.state]` 里有它的记录（同 1.3）。
 - 做：在平常用的那份检出里运行一次 `node <平常的检出>/plugin/cli/codex.ts install`，重启桌面应用。走到这里，注册和 `~/.agents/skills/matt-deck-configure` 指的都是专门的检出，不换回来的话，删掉专门的检出之后 Codex 就起不来 Deck 服务。钩子已经在，install 不动它，信任不受影响。走完之后 Deck 是装着的；准备之前它不在 Codex 里的话，想恢复原样就再运行一次 `node <平常的检出>/plugin/cli/codex.ts uninstall`。
-- 应看到：install 说“Deck 的钩子已经在 … 里，没有改动。”，最后一行写的注册指向平常的那份检出。
+- 应看到：install 说“Deck 的钩子已经在 … 里，没有改动。”，倒数第二行写的注册指向平常的那份检出。
 - 做：准备里重跑过配置、换了 Skill Source 的话，把它改回原来那份：在 Configured Project 里新建会话，发 `$matt-deck-configure`，配置技能问是否修改时选修改，Task Source 照原样，Skill Source 选准备里抄下的那一份（本机找到的插件和目录都在候选里）。候选里没有它的话，手工把 `.matt-deck/config.json` 里的 `skillSource` 改回抄下的那一段。没重跑过就跳过这一步。
 - 应看到：`.matt-deck/config.json` 里的 `skillSource` 和准备里抄下的那一段一样，`taskSource` 没变。这之后 Claude Code 里“执行”预填的又是改之前的写法，Codex 的 Pane 里“执行”等照准备里说的停用，都和走清单之前一样。
 - 做：删掉准备里放的链接：`~/.agents/skills/<技能名>` 或 `~/.agents/skills/<技能名>/SKILL.md` 上为各个技能各放的一个（放在 `SKILL.md` 上的，链接删掉后留下的空目录也删掉），和 `~/.claude/skills/implement`。只删清单放的，原来就有的不动，`~/.agents/skills/matt-deck-configure` 也不动：它是 install 写的实目录，不是链接。不删的话，`~/.agents/skills` 里的留在这台机器上所有 Codex 项目里，`~/.claude/skills/implement` 让所有项目的 Claude Code 都多出一个 `/implement`。删掉之后，项目的 Skill Source 靠这些链接才是 Codex 找得到的那一份的，Codex 的 Pane 里“执行”等又会停用（见准备）；Skill Source 原本就是目录的，Claude Code 里点“执行”预填的 `/implement #<编号>` 又不登记 Occupancy，和走清单之前一样。

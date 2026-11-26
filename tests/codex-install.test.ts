@@ -135,6 +135,28 @@ test('install registers the path of the node running it when no node on its PATH
   assert.equal(registration(await readFile(join(user, '.codex', 'config.toml'), 'utf8')).command, process.execPath)
 })
 
+test('install says which node the registration starts, as config.toml writes it: the link on its PATH, or the path of the node running it where none is', async () => {
+  const linked = await home()
+  await symlink(process.execPath, join(linked, 'node'))
+  for (const [PATH, node] of [
+    [[await otherNode(), linked, process.env.PATH].join(delimiter), join(linked, 'node')],
+    [[await otherNode(), await home()].join(delimiter), process.execPath],
+  ]) {
+    const user = await home()
+
+    const { stdout } = await checked(user, () => exec(process.execPath, [CODEX, 'install'], { env: { ...process.env, HOME: user, PATH } }))
+
+    assert.equal(registration(await readFile(join(user, '.codex', 'config.toml'), 'utf8')).command, node)
+    assert.ok(stdout.includes(`注册里的 node 是 ${node}，`), stdout)
+  }
+})
+
+test('install says that once the node the registration starts is gone, Codex cannot start the Deck service and install is to run again', async () => {
+  const { stdout } = await run(await home(), 'install')
+
+  assert.match(stdout, /注册里的 node 是 [^\n]*没了之后[^\n]*Codex 起不来 Deck 服务[^\n]*要重新运行一次 install/)
+})
+
 test('install says which copy of the plugin the registration and the configure skill point at, and to run it again once that copy moves or is updated', async () => {
   const { stdout } = await run(await home(), 'install')
 

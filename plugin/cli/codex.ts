@@ -519,7 +519,7 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
         ? `Deck 的钩子已经在 ${hooksFile} 里，没有改动。`
         : `${moved === undefined ? '' : `之前留下的备份 ${backup} 已挪到 ${moved}。`}已在 ${hooksFile} 里加上 Deck 的钩子${hooksBytes === undefined ? '' : `，原来的文件备份在 ${backup}`}。`
       process.stdout.write(
-        `已把 Deck 服务注册进 ${config}。\n已生成配置技能 ${join(skillDir, 'SKILL.md')}，在 Codex 里用 $${CODEX_CONFIGURE_SKILL} 调用。\n${hooked}\n接下来两步：在终端里运行一次 codex，在钩子审查里信任 Deck 的钩子；再重启 Codex 桌面应用。之后每个 Session 的标签页菜单里出现 Matt Deck，发出的 $implement 会登记占用。\n注册和配置技能指向的是 ${PLUGIN} 这一份插件，它挪了位置或更新之后要重新运行一次 install。\n`,
+        `已把 Deck 服务注册进 ${config}。\n已生成配置技能 ${join(skillDir, 'SKILL.md')}，在 Codex 里用 $${CODEX_CONFIGURE_SKILL} 调用。\n${hooked}\n接下来两步：在终端里运行一次 codex，在钩子审查里信任 Deck 的钩子；再重启 Codex 桌面应用。之后每个 Session 的标签页菜单里出现 Matt Deck，发出的 $implement 会登记占用。\n注册和配置技能指向的是 ${PLUGIN} 这一份插件，它挪了位置或更新之后要重新运行一次 install。\n注册里的 node 是 ${node}，即 config.toml 里的 command；这个路径没了之后（例如版本管理器换掉或卸掉了这个版本），Codex 起不来 Deck 服务、Pane 打不开，要重新运行一次 install。\n`,
       )
     } else {
       if (before === undefined || kept === before) {

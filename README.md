@@ -54,7 +54,7 @@ node matt-deck/plugin/cli/codex.ts install
 
 它最多改三个用户全局的文件（Deck 的钩子已经在 `hooks.json` 里时不改它），另在改 `hooks.json` 之前写一份它的备份（见下面第三项），每改一个都在输出里说一句；真把钩子写进 `hooks.json` 时，还会忘掉本机状态里记下的钩子调用（见下面“钩子未生效的提示”）：
 
-- `~/.codex/config.toml`：追加 `[mcp_servers.matt_deck]`，把 Deck 服务注册进 Codex，原有内容保留。注册写的是运行 install 的那个 `node` 的绝对路径（`PATH` 里第一个绝对路径的、解开链接后就是这个 `node` 的条目：通常是指向它的链接，例如 Homebrew 的 `bin` 目录里的那个；真实路径所在的目录排在链接前面时，写的是真实路径；`PATH` 里没有哪个绝对路径的条目解开链接后是它时，也写真实路径，即 `process.execPath`），和这份检出里 `plugin/server/main.ts` 的路径。
+- `~/.codex/config.toml`：追加 `[mcp_servers.matt_deck]`，把 Deck 服务注册进 Codex，原有内容保留。注册写的是运行 install 的那个 `node` 的绝对路径（`PATH` 里第一个绝对路径的、解开链接后就是这个 `node` 的条目：通常是指向它的链接，例如 Homebrew 的 `bin` 目录里的那个；真实路径所在的目录排在链接前面时，写的是真实路径；`PATH` 里没有哪个绝对路径的条目解开链接后是它时，也写真实路径，即 `process.execPath`；fnm 这类版本管理器给每个 shell 一个 `PATH` 目录、经一个目录链接指到版本目录时，写的是经过这个目录链接的路径），和这份检出里 `plugin/server/main.ts` 的路径。install 的输出最后一行写明注册里的 `node` 是哪个路径，和 `config.toml` 里的 `command` 一字不差。
 - `~/.agents/skills/matt-deck-configure/SKILL.md`：生成配置技能 `matt-deck-configure`，内容只有一句，让 agent 照这份检出里的配置技能做。这个位置已有一份不是 Deck 生成的同名技能时，install 什么都不改，以退出码 1 结束。
 - `~/.codex/hooks.json`：在 `UserPromptSubmit` 上加 Deck 的钩子，排在原有的钩子后面。改之前把原文件备份成 `~/.codex/hooks.json.before-matt-deck`，权限不比原文件宽；原来没有这个文件就不备份。
 
@@ -62,8 +62,8 @@ node matt-deck/plugin/cli/codex.ts install
 
 再运行一次 install，注册和配置技能重写一遍，已经在的钩子不动。下面几种情况要重跑：
 
-- 这份检出挪了位置或更新了。注册和配置技能指向的是运行 install 的那一份，输出的最后一行写明是哪一份。
-- 注册里的 `node` 路径没了，例如用 nvm 这类版本管理器装的 node 换了版本。这时 Codex 起不来 Deck 服务，Pane 打不开。
+- 这份检出挪了位置或更新了。注册和配置技能指向的是运行 install 的那一份，输出的倒数第二行写明是哪一份。
+- 注册里的 `node` 路径没了，例如用 nvm 这类版本管理器装的 node 换了版本，或者注册经过的是 fnm 这类每个 shell 一份的目录链接、这个链接被清掉了。这时 Codex 起不来 Deck 服务，Pane 打不开。
 - 早先装过、`~/.agents/skills` 里还没有 `matt-deck-configure` 的。
 
 更新 Deck 之后还要重启桌面应用：宿主在一次运行里缓存 Pane 的页面，不重启拿到的仍是旧的。
