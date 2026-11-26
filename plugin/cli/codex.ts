@@ -4,7 +4,7 @@
 // there, started for Codex. Install also generates the configure skill as
 // Codex names it, in the user's own Codex skills, and adds Deck's hook to the
 // user's own Codex hooks.
-import { lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises'
+import { access, constants, lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises'
 import { isUtf8 } from 'node:buffer'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
@@ -16,7 +16,7 @@ const USAGE = `Usage: node <matt-deck>/cli/codex.ts <install|uninstall>
 
 install：把 Deck 服务注册进 Codex 的用户全局配置 ~/.codex/config.toml，原有内容保留；在 ~/.agents/skills 里生成配置技能 ${CODEX_CONFIGURE_SKILL}；在 ~/.codex/hooks.json 里加上 Deck 的钩子，原有的钩子保留，改之前先备份。装完要在终端里运行一次 codex 信任这个钩子，再重启 Codex 桌面应用。注册和配置技能指向运行 install 的这一份插件，它挪了位置或更新之后要重新运行一次 install。
 uninstall：从 ~/.codex/config.toml 移除 Deck 服务的注册，别的内容不动；移除 Deck 生成的 ${CODEX_CONFIGURE_SKILL}；从 ~/.codex/hooks.json 移除 Deck 的钩子。
-退出码：0 成功，1 读写失败、config.toml 里的 Deck 服务注册不是 [mcp_servers.matt_deck] 表头的写法、install 时 mcp_servers 写成了内联表、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
+退出码：0 成功，1 读写失败、要写的位置写不进去或是链到不存在的文件的链接、config.toml 里有不是 UTF-8 的字节或 Deck 服务注册不是 [mcp_servers.matt_deck] 表头的写法、install 时 mcp_servers 写成了内联表、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
 `
 const SERVER = 'matt_deck'
 const TABLE = `mcp_servers.${SERVER}`
@@ -49,6 +49,64 @@ const readIfThere = async (path: string) => {
   }
 }
 
+// The quote a TOML string opens with at i in a line, if one opens there.
+const quoteAt = (line: string, i: number) => ['"""', "'''", '"', "'"].find(quote => line.startsWith(quote, i))
+
+// Where a string opened with `quote` ends in a line, read from i: just past
+// its closing quote, or -1 when the line ends first. A basic string's
+// backslash escapes the character after it; a multi-line one's closing
+// quote may follow up to two quotes more, its content.
+const stringEnd = (line: string, i: number, quote: string) => {
+  while (i < line.length) {
+    if (quote[0] === '"' && line[i] === '\\') {
+      i += 2
+    } else if (line.startsWith(quote, i)) {
+      i += quote.length
+      while (quote.length === 3 && line[i] === quote[0]) {
+        i++
+      }
+      return i
+    } else {
+      i++
+    }
+  }
+
+  return -1
+}
+
+// The lines of a config, by index, that start inside a multi-line string:
+// text, however they look, never a header, a key or a comment. Each line is
+// read from where the last left off, its strings and comments skipped.
+const inStrings = (lines: string[]) => {
+  const inside = new Set<number>()
+  let open: string | undefined
+  lines.forEach((line, n) => {
+    let i = 0
+    if (open !== undefined) {
+      inside.add(n)
+      i = stringEnd(line, 0, open)
+      if (i === -1) {
+        return
+      }
+      open = undefined
+    }
+    while (i < line.length && line[i] !== '#') {
+      const quote = quoteAt(line, i)
+      if (quote === undefined) {
+        i++
+        continue
+      }
+      i = stringEnd(line, i + quote.length, quote)
+      if (i === -1) {
+        open = quote.length === 3 ? quote : undefined
+        break
+      }
+    }
+  })
+
+  return inside
+}
+
 // The config without Deck's registration: its table, and the tables under it,
 // each from its header to the next table's. The comment lines just above that
 // next header stay: Deck writes no comment, they are about the table after.
@@ -58,8 +116,10 @@ const unregistered = (text: string) => {
   let ours = false
   let above: string[] = []
 
-  for (const line of text.split(/(?<=\n)/)) {
-    const header = line.match(/^\s*\[\[?\s*([^\]]*?)\s*\]\]?\s*(?:#.*)?\r?\n?$/)
+  const lines = text.split(/(?<=\n)/)
+  const inside = inStrings(lines)
+  for (const [n, line] of lines.entries()) {
+    const header = inside.has(n) ? null : line.match(/^\s*\[\[?\s*([^\]]*?)\s*\]\]?\s*(?:#.*)?\r?\n?$/)
     if (header !== null) {
       const isOurs = header[1] === TABLE || header[1]!.startsWith(`${TABLE}.`)
       if (ours && !isOurs) {
@@ -71,7 +131,7 @@ const unregistered = (text: string) => {
     if (!ours) {
       kept.push(line)
     } else if (header === null) {
-      above = /^\s*#/.test(line) ? [...above, line] : []
+      above = /^\s*#/.test(line) && !inside.has(n) ? [...above, line] : []
     }
   }
   // Deck's table ran to the end: the blank line install set it apart with
@@ -93,16 +153,19 @@ const keyAt = (text: string) => {
     if (part === null) {
       return undefined
     }
-    // A TOML basic string is a JSON string but for its 8-digit escape,
-    // \UXXXXXXXX, written here as the JSON escape of that character.
+    // A TOML basic string is a JSON string but for its escapes \UXXXXXXXX
+    // and, since TOML 1.1, \xHH, written here as the JSON escape of that
+    // character.
     let basic = part[2]
     try {
       basic =
         basic === undefined
           ? undefined
           : JSON.parse(
-              `"${basic.replace(/\\(U([0-9A-Fa-f]{8})|.)/g, (escape, _, hex) =>
-                hex === undefined ? escape : JSON.stringify(String.fromCodePoint(parseInt(hex, 16))).slice(1, -1),
+              `"${basic.replace(/\\(?:U([0-9A-Fa-f]{8})|x([0-9A-Fa-f]{2})|.)/g, (escape, long, short) =>
+                long === undefined && short === undefined
+                  ? escape
+                  : JSON.stringify(String.fromCodePoint(parseInt(long ?? short, 16))).slice(1, -1),
               )}"`,
             )
     } catch {}
@@ -119,13 +182,18 @@ const keyAt = (text: string) => {
 // holds that install cannot add its table after: a registration of the Deck
 // service in another form (under [mcp_servers], with spaces or quotes in its
 // header, as dotted keys, in an inline table), or mcp_servers as an inline
-// table. Read line by line, not parsed: a multi-line string that looks like
-// one of them is taken for it, so Deck stops rather than writes a config
-// Codex cannot read.
+// table. Read line by line, not parsed, the lines in multi-line strings
+// left out: what it cannot tell apart, it takes for one of them, so Deck
+// stops rather than writes a config Codex cannot read.
 const handWritten = (text: string) => {
   let table: string[] = []
   let found: 'inline' | undefined
-  for (const line of text.split(/\r?\n/)) {
+  const lines = text.split(/\r?\n/)
+  const inside = inStrings(lines)
+  for (const [n, line] of lines.entries()) {
+    if (inside.has(n)) {
+      continue
+    }
     const header = line.match(/^\s*\[\[?(.*)$/)
     const key = keyAt(header === null ? line : header[1]!)
     if (key === undefined || !key.rest.startsWith(header === null ? '=' : ']')) {
@@ -139,8 +207,28 @@ const handWritten = (text: string) => {
       return 'registration'
     }
     if (header === null && path.length === 1 && path[0] === 'mcp_servers') {
-      if (new RegExp(`[{,]\\s*(?:${SERVER}|"${SERVER}"|'${SERVER}')\\s*[.=]`).test(key.rest)) {
-        return 'registration'
+      // A key of the inline table itself: one right after its opening brace
+      // or a comma in it, not in a table or an array within, nor a string.
+      const value = key.rest
+      let depth = 0
+      for (let i = 1; i < value.length; ) {
+        const quote = quoteAt(value, i)
+        if (quote !== undefined) {
+          i = stringEnd(value, i + quote.length, quote)
+          if (i === -1) {
+            break
+          }
+          continue
+        }
+        if (value[i] === '{' || value[i] === '[') {
+          depth++
+        } else if (value[i] === '}' || value[i] === ']') {
+          depth--
+        }
+        if (depth === 1 && (value[i] === '{' || value[i] === ',') && keyAt(value.slice(i + 1))?.parts[0] === SERVER) {
+          return 'registration'
+        }
+        i++
       }
       found = 'inline'
     }
@@ -225,6 +313,32 @@ const withoutDeckHook = (config: Record<string, any>, before: Record<string, any
   return Object.keys(hooks).length > 0 || before.hooks !== undefined ? { ...config, hooks } : rest
 }
 
+// Why a file cannot be written where it is, or made there, as a code; or
+// undefined when it can. A file there is written in place, so it must take
+// writing, a link the file it reaches; a file not there is made, so the
+// nearest directory that is there must take a new entry. A link reaching no
+// file is 'dangling': writing through it would make a file elsewhere, which
+// nothing then shows is Deck's. Asked of a directory, it is whether entries
+// can be made in it, removed or renamed. Checked before Deck writes anything,
+// so that a run stopping for it leaves everything as it was.
+const unwritable = async (path: string): Promise<string | undefined> => {
+  const there = await lstat(path).catch(() => undefined)
+  if (there?.isSymbolicLink() && (await stat(path).catch(() => undefined)) === undefined) {
+    return 'dangling'
+  }
+  let reached = path
+  if (there === undefined) {
+    do {
+      reached = dirname(reached)
+    } while ((await lstat(reached).catch(() => undefined)) === undefined)
+  }
+  try {
+    await access(reached, constants.W_OK)
+  } catch (error: any) {
+    return error.code ?? String(error)
+  }
+}
+
 const writeJson = (path: string, value: object) => writeFile(path, `${JSON.stringify(value, null, 2)}\n`)
 
 const args = process.argv.slice(2)
@@ -235,7 +349,8 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
 } else {
   try {
     const config = join(homedir(), '.codex', 'config.toml')
-    const before = (await readIfThere(config))?.toString('utf8')
+    const configBytes = await readIfThere(config)
+    const before = configBytes?.toString('utf8')
     const kept = unregistered(before ?? '')
     const skillDir = join(homedir(), '.agents', 'skills', CODEX_CONFIGURE_SKILL)
     const skill = (await readIfThere(join(skillDir, 'SKILL.md')))?.toString('utf8')
@@ -248,7 +363,52 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
 
     const handwritten = handWritten(kept)
 
-    if (handwritten === 'registration') {
+    // What install does with the hooks: a backup already there moves aside
+    // unless it holds the hooks as they are, as an install that failed after
+    // backing them up leaves it; that one is this install's backup already.
+    const left = await lstat(backup).catch(() => undefined)
+    const beforeBytes = left === undefined ? undefined : await readFile(backup).catch(() => Buffer.alloc(0))
+    const isLeft = left !== undefined && !(hooksBytes !== undefined && left.isFile() && hooksBytes.equals(beforeBytes!))
+    // What uninstall does with them. Unchanged since install, the hooks are
+    // as they were before it: the backup, as written, and the backup goes.
+    // Changed, they lose Deck's hook alone, and the backup stays. A backup
+    // that holds no hooks Deck handles, or cannot be read at all, a link
+    // reaching no file among them, is not what install wrote: the hooks are
+    // taken for changed, and it stays as it is. With no backup, nothing shows
+    // the file is Deck's: there may have been none before install, or one
+    // whose backup is gone since, or Deck's hook was written in by hand. The
+    // file stays, without Deck's hook.
+    const beforeHooks = beforeBytes === undefined ? 'unreadable' : hooksIn(beforeBytes)
+    const isRestored = typeof beforeHooks !== 'string' && typeof hooks !== 'string' && JSON.stringify(withDeckHook(beforeHooks)) === JSON.stringify(hooks)
+
+    // Every place the run writes, makes or removes a file in, as it will.
+    const skillFile = join(skillDir, 'SKILL.md')
+    const touched =
+      args[0] === 'install'
+        ? [config, skillFile, ...(isHooked ? [] : [hooksFile, ...(isLeft || (hooksBytes !== undefined && left === undefined) ? [dirname(backup)] : [])])]
+        : [
+            ...(before !== undefined && kept !== before ? [config] : []),
+            ...(isOurs ? [skillDir] : []),
+            ...(isOurs && !(await lstat(skillDir)).isSymbolicLink() && (await readdir(skillDir)).length === 1 ? [dirname(skillDir)] : []),
+            ...(isHooked ? [hooksFile, ...(isRestored ? [dirname(backup)] : [])] : []),
+          ]
+    let blocked: { path: string; why: string } | undefined
+    for (const path of touched) {
+      const why = await unwritable(path)
+      if (why !== undefined) {
+        blocked = { path, why }
+        break
+      }
+    }
+
+    if (configBytes !== undefined && !isUtf8(configBytes)) {
+      // Deck writes the config back as text: a byte that is not UTF-8,
+      // decoded, would come back as another.
+      process.stderr.write(
+        `${config} 里有不是 UTF-8 的字节，Deck 改写它时会把这些字节换掉，没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。改好它之后再运行一次 ${args[0]}。\n`,
+      )
+      process.exitCode = 1
+    } else if (handwritten === 'registration') {
       process.stderr.write(
         `${config} 里的 Deck 服务注册不是 Deck 认得的写法（Deck 只认单独一行的 [${TABLE}] 表头和它下面的子表，不认 [mcp_servers] 下的 ${SERVER} = { ... }、带空格或引号的表头、点分键或内联表），没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。把它改成 [${TABLE}] 表头或者删掉之后，再运行一次 ${args[0]}。\n`,
       )
@@ -259,7 +419,7 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
       )
       process.exitCode = 1
     } else if (typeof hooks === 'string') {
-      const problem = hooks === 'unreadable' ? '不是 Deck 能读懂的钩子文件' : '里有 Deck 改写时会变样的写法（超出双精度的数、1.0 或 1e400 这样的数、重复的键、\\u、\\/ 这样的转义，或像序号的键）'
+      const problem = hooks === 'unreadable' ? '不是 Deck 能读懂的钩子文件' : '里有 Deck 改写时会变样的写法（超出双精度的数、1.0 或 1e400 这样重写后写法会变的数、重复的键、\\u0041、\\/ 这样重写后会变样的转义，或没有全部按数值升序排在最前面的像序号的键）'
       process.stderr.write(
         `${hooksFile} ${problem}，没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。改好它之后再运行一次 ${args[0]}。\n`,
       )
@@ -267,6 +427,11 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
     } else if (args[0] === 'install' && skill !== undefined && !isOurs) {
       process.stderr.write(
         `${skillDir} 里已有一份不是 Deck 生成的技能 ${CODEX_CONFIGURE_SKILL}，没有安装，什么都没改。移走它之后再运行一次 install。\n`,
+      )
+      process.exitCode = 1
+    } else if (blocked !== undefined) {
+      process.stderr.write(
+        `${blocked.path} ${blocked.why === 'dangling' ? '是一个链接，链到的文件不存在' : `写不进去（${blocked.why}）`}，没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。${blocked.why === 'dangling' ? '换成文件或者删掉它' : '改好权限'}之后再运行一次 ${args[0]}。\n`,
       )
       process.exitCode = 1
     } else if (args[0] === 'install') {
@@ -292,11 +457,11 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
       await writeFile(join(skillDir, 'SKILL.md'), configureSkill)
       let moved: string | undefined
       if (!isHooked) {
-        // The backup is the hooks before this install. One already there, an
+        // The backup is the hooks before this install. One left there, an
         // earlier uninstall's or left when Deck's hook was taken out by hand,
         // may hold the only copy of the person's hooks: it moves first to the
         // first numbered name no file has.
-        if ((await lstat(backup).catch(() => undefined)) !== undefined) {
+        if (isLeft) {
           let n = 1
           while ((await lstat(`${backup}.${n}`).catch(() => undefined)) !== undefined) {
             n++
@@ -304,8 +469,10 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
           moved = `${backup}.${n}`
           await rename(backup, moved)
         }
-        // The backup is open to whom the hooks are, and to no one more.
-        if (hooksBytes !== undefined) {
+        // The backup is open to whom the hooks are, and to no one more. One
+        // left holding the hooks as they are is written already, and stays
+        // as it is.
+        if (hooksBytes !== undefined && (left === undefined || isLeft)) {
           await writeFile(backup, hooksBytes, { mode: (await stat(hooksFile)).mode & 0o777 })
         }
         await writeJson(hooksFile, withDeckHook(hooks))
@@ -335,7 +502,7 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
         // Only the file Deck generated goes. The directory goes after it
         // when nothing else is in it, unless it is a link: the link, and
         // what it reaches, are not Deck's.
-        await rm(join(skillDir, 'SKILL.md'))
+        await rm(skillFile)
         if ((await readdir(skillDir)).length === 0 && !(await lstat(skillDir)).isSymbolicLink()) {
           await rmdir(skillDir)
         }
@@ -344,26 +511,13 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
         process.stdout.write(`${skillDir} 不是 Deck 生成的，没有动它。\n`)
       }
       if (isHooked) {
-        // Unchanged since install, the hooks are as they were before it: the
-        // backup, as written, or no file where there was none. Changed, they
-        // lose Deck's hook alone, and the backup stays. A backup that holds
-        // no hooks Deck handles, or cannot be read at all, a link reaching no
-        // file among them, is not what install wrote: the hooks are taken for
-        // changed, and it stays as it is.
-        const isBackedUp = (await lstat(backup).catch(() => undefined)) !== undefined
-        const beforeBytes = isBackedUp ? await readFile(backup).catch(() => Buffer.alloc(0)) : undefined
-        const beforeHooks = hooksIn(beforeBytes)
-        let said = `已从 ${hooksFile} 移除 Deck 的钩子。`
-        if (typeof beforeHooks === 'string' || JSON.stringify(withDeckHook(beforeHooks)) !== JSON.stringify(hooks)) {
-          await writeJson(hooksFile, withoutDeckHook(hooks, typeof beforeHooks === 'string' ? {} : beforeHooks))
-        } else if (beforeBytes === undefined) {
-          await rm(hooksFile)
-          said = `已删掉 Deck 加的 ${hooksFile}，安装前没有这个文件。`
-        } else {
-          await writeFile(hooksFile, beforeBytes)
+        if (isRestored) {
+          await writeFile(hooksFile, beforeBytes!)
           await rm(backup)
+        } else {
+          await writeJson(hooksFile, withoutDeckHook(hooks, typeof beforeHooks === 'string' ? {} : beforeHooks))
         }
-        process.stdout.write(`${said}\n`)
+        process.stdout.write(`已从 ${hooksFile} 移除 Deck 的钩子。\n`)
       }
       // A backup uninstall leaves, the hooks changed since install or gone,
       // is said, so the person can give back the hooks before install.

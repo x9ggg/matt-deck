@@ -178,6 +178,34 @@ test('uninstall and install read a config written with CRLF, its registration\'s
   }
 })
 
+test('install and uninstall take a line in a multi-line string for text, not a header, however it looks', async () => {
+  for (const [open, close] of [['"""', '"""'], ["'''", "'''"], ['"""Starts here', 'and \\""" ends here"""']]) {
+    // A person's own string holding what looks like Deck's table.
+    const theirs = `${BEFORE}note = ${open}\n[mcp_servers.matt_deck]\ncommand = "in a string"\n${close}\n`
+    const { user, config } = await withConfig(theirs)
+
+    await run(user, 'install')
+    const installed = await readFile(config, 'utf8')
+    await run(user, 'uninstall')
+
+    assert.ok(installed.startsWith(theirs), installed)
+    registration(installed.slice(theirs.length))
+    assert.equal(await readFile(config, 'utf8'), theirs, open)
+  }
+})
+
+test('uninstall removes a multi-line string a person put in Deck\'s table whole, a line in it looking like a header or a comment among the rest', async () => {
+  for (const string of ['"""\n[other]\nkey = 1\n"""', '"""\n# c"""']) {
+    const { user, config } = await withConfig(BEFORE)
+    await run(user, 'install')
+    await writeFile(config, `${await readFile(config, 'utf8')}note = ${string}\n[after]\nkey = 2\n`)
+
+    await run(user, 'uninstall')
+
+    assert.equal(await readFile(config, 'utf8'), `${BEFORE}\n[after]\nkey = 2\n`, string)
+  }
+})
+
 test('uninstall without a Codex config writes none', async () => {
   const user = await home()
 
@@ -203,6 +231,10 @@ const HAND_WRITTEN = [
   '[mcp_servers.matt_deck]\r\ncommand = "mine"\r\n[mcp_servers."matt_deck".env]\r\nDEBUG = "1"\r\n',
   '[mcp_servers]\n"matt\\U0000005Fdeck" = { command = "mine" }\n',
   '[mcp_servers."matt\\u005Fdeck"]\ncommand = "mine"\n',
+  '[mcp_servers]\n"matt\\x5Fdeck" = { command = "mine" }\n',
+  '[mcp_servers."matt\\x5f\\x64eck"]\ncommand = "mine"\n',
+  'mcp_servers = { a = { command = """x"y""" }, matt_deck = { command = "mine" } }\n',
+  "mcp_servers = { a = { command = '''a'b''' }, matt_deck = { command = \"mine\" } }\n",
 ]
 
 test('install and uninstall stop when the Codex config registers the Deck service in a form Deck does not write, and change nothing', async () => {
@@ -224,7 +256,11 @@ test('install and uninstall stop when the Codex config registers the Deck servic
 })
 
 test('install stops when the Codex config holds mcp_servers as an inline table, which no table can be added to; uninstall finds no registration there', async () => {
-  const inline = `mcp_servers = { other = { command = "other" } }\n`
+  for (const inline of [
+    `mcp_servers = { other = { command = "other" } }\n`,
+    // Named matt_deck deeper in it, or in a string: no registration.
+    `mcp_servers = { a = { matt_deck = 1 }, b = [{ matt_deck = 2 }], c = "{ matt_deck = 3 }" }\n`,
+  ]) {
   const { user, config } = await withConfig(inline)
 
   await assert.rejects(run(user, 'install'), (error: any) => {
@@ -239,6 +275,7 @@ test('install stops when the Codex config holds mcp_servers as an inline table, 
 
   assert.match(stdout, /没有 Deck 服务的注册/)
   assert.equal(await readFile(config, 'utf8'), inline)
+  }
 })
 
 test('install and uninstall take keys only named like the Deck service for what they are: not its registration', async () => {
@@ -379,7 +416,7 @@ test('install adds Deck\'s hook on UserPromptSubmit to the user\'s Codex hooks a
   assert.ok(removed.includes(hooksFile(user)), removed)
 })
 
-test('without Codex hooks before, install writes the file with Deck\'s hook alone, backing up none, and uninstall removes it', async () => {
+test('without Codex hooks before, install writes the file with Deck\'s hook alone, backing up none, and uninstall takes the hook out and keeps the file', async () => {
   const user = await home()
 
   const { stdout } = await run(user, 'install')
@@ -393,8 +430,28 @@ test('without Codex hooks before, install writes the file with Deck\'s hook alon
 
   const { stdout: removed } = await run(user, 'uninstall')
 
-  assert.deepEqual(await readdir(join(user, '.codex')), ['config.toml'])
-  assert.ok(removed.includes(`已删掉 Deck 加的 ${hooksFile(user)}，安装前没有这个文件。`), removed)
+  // With no backup, nothing shows Deck wrote the file: it stays.
+  assert.deepEqual((await readdir(join(user, '.codex'))).sort(), ['config.toml', 'hooks.json'])
+  assert.equal(await readFile(hooksFile(user), 'utf8'), '{}\n')
+  assert.ok(removed.includes(`已从 ${hooksFile(user)} 移除 Deck 的钩子。`), removed)
+})
+
+test('uninstall with no backup keeps the hooks file whatever it held before, and takes out only Deck\'s hook: the backup gone, or a Deck hook a person wrote in', async () => {
+  // Hooks of { } before install, their backup gone since.
+  const gone = await withConfig(BEFORE)
+  await writeFile(hooksFile(gone.user), '{ }')
+  await run(gone.user, 'install')
+  await rm(BACKUP(gone.user))
+  // Deck's hook written in by hand, or synced from elsewhere, never backed up.
+  const written = await withConfig(BEFORE)
+  const mine = { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'mine stop' }] }], UserPromptSubmit: [{ hooks: [DECK_HOOK] }] } }
+  await writeFile(hooksFile(written.user), JSON.stringify(mine))
+
+  for (const [user, kept] of [[gone.user, {}], [written.user, { hooks: { Stop: mine.hooks.Stop } }]] as const) {
+    await run(user, 'uninstall')
+
+    assert.deepEqual(JSON.parse(await readFile(hooksFile(user), 'utf8')), kept)
+  }
 })
 
 test('uninstall takes out only Deck\'s hook from hooks changed since install, and keeps the rest', async () => {
@@ -425,7 +482,20 @@ test('uninstall takes out only Deck\'s hook from hooks changed since install, an
 })
 
 test('install stops when the Codex hooks are not JSON it can add a hook to, and changes nothing', async () => {
-  for (const hooks of ['{ not json', '[]', 'null', '"hooks"', '{ "hooks": [] }', '{ "hooks": null }', '{ "hooks": { "UserPromptSubmit": {} } }']) {
+  for (const hooks of [
+    '{ not json',
+    '',
+    ' \n\t',
+    '\ufeff{}',
+    '{} // mine',
+    '{ /* mine */ }',
+    '[]',
+    'null',
+    '"hooks"',
+    '{ "hooks": [] }',
+    '{ "hooks": null }',
+    '{ "hooks": { "UserPromptSubmit": {} } }',
+  ]) {
     const { user, config } = await withConfig(BEFORE)
     await writeFile(hooksFile(user), hooks)
 
@@ -470,6 +540,35 @@ test('install and uninstall stop when the Codex hooks hold a byte that is not UT
   }
 })
 
+// A Codex config holding a byte that is not UTF-8: Deck writes the config
+// back as text, so it could not keep that byte as it was.
+const CONFIG_NOT_UTF8 = Buffer.concat([Buffer.from(BEFORE), Buffer.from('note = "caf\xe9"\n', 'latin1')])
+
+test('install and uninstall stop when the Codex config holds a byte that is not UTF-8, and change nothing', async () => {
+  for (const command of ['install', 'uninstall']) {
+    const user = await home()
+    if (command === 'uninstall') {
+      await run(user, 'install')
+    }
+    await mkdir(join(user, '.codex'), { recursive: true })
+    const registered = command === 'uninstall' ? Buffer.from(await readFile(join(user, '.codex', 'config.toml'))) : Buffer.alloc(0)
+    const config = Buffer.concat([CONFIG_NOT_UTF8, registered])
+    await writeFile(join(user, '.codex', 'config.toml'), config)
+    const codex = (await readdir(join(user, '.codex'))).sort()
+    const skill = await readFile(configureSkill(user), 'utf8').catch(() => undefined)
+
+    await assert.rejects(run(user, command), (error: any) => {
+      assert.equal(error.code, 1, command)
+      assert.ok(error.stderr.includes(`${join(user, '.codex', 'config.toml')} 里有不是 UTF-8 的字节`), error.stderr)
+      assert.ok(error.stderr.includes(`再运行一次 ${command}`), error.stderr)
+      return true
+    })
+    assert.deepEqual(await readFile(join(user, '.codex', 'config.toml')), config, command)
+    assert.deepEqual((await readdir(join(user, '.codex'))).sort(), codex, command)
+    assert.equal(await readFile(configureSkill(user), 'utf8').catch(() => undefined), skill, command)
+  }
+})
+
 test('uninstall with a backup holding a byte that is not UTF-8 takes only Deck\'s hook out of the hooks and leaves the backup byte for byte', async () => {
   // The hooks before install as the backup would read were it decoded with
   // a replacement character: they are not what install wrote.
@@ -496,6 +595,11 @@ test('install then uninstall gives back the Codex hooks byte for byte whatever t
     // Groups of a person's own with no list of hooks in them, or a handler
     // that is not one.
     '{"hooks": {"UserPromptSubmit": [{"matcher": "x"}, null, {"hooks": "oops"}, {"hooks": [null]}]}}',
+    // Escapes a rewrite writes as they are, and keys like an index all first,
+    // in numeric order.
+    '{"x": "\\u0001", "y": "\\u001f", "z": "\\n\\"\\\\"}',
+    '{"1": 2, "a": 1}',
+    '{"1": 1, "2": 2, "hooks": {}}',
     // Laid out with tabs and CRLF, a string holding a quote and a space.
     '{\r\n\t"hooks": {\r\n\t\t"Stop": [{"hooks": [{"type": "command", "command": "echo \\"hi there\\""}]}]\r\n\t}\r\n}\r\n',
   ]) {
@@ -568,7 +672,8 @@ test('a backup left before an install where there are no hooks is moved to the f
 
   await run(user, 'uninstall')
 
-  assert.deepEqual((await readdir(join(user, '.codex'))).sort(), ['config.toml', 'hooks.json.before-matt-deck.1'])
+  assert.deepEqual((await readdir(join(user, '.codex'))).sort(), ['config.toml', 'hooks.json', 'hooks.json.before-matt-deck.1'])
+  assert.equal(await readFile(hooksFile(user), 'utf8'), '{}\n')
   assert.equal(await readFile(`${BACKUP(user)}.1`, 'utf8'), OLD_BACKUP)
 })
 
@@ -602,6 +707,21 @@ test('a backup left before an install where there are hooks is moved, taking no 
     'hooks.json.before-matt-deck.4',
   ])
   assert.equal(await readFile(`${BACKUP(user)}.4`, 'utf8'), OLD_BACKUP)
+})
+
+test('a backup left before that holds the hooks as they are, as an install that failed after backing them up leaves it, stays where it is: install run again moves nothing', async () => {
+  const { user } = await withConfig(BEFORE)
+  await writeFile(hooksFile(user), HOOKS_BEFORE)
+  await writeFile(BACKUP(user), HOOKS_BEFORE)
+
+  const { stdout } = await run(user, 'install')
+  await run(user, 'uninstall')
+  await run(user, 'install')
+
+  assert.ok(!stdout.includes('之前留下的备份'), stdout)
+  assert.ok(stdout.includes(`原来的文件备份在 ${BACKUP(user)}`), stdout)
+  assert.deepEqual((await readdir(join(user, '.codex'))).sort(), ['config.toml', 'hooks.json', 'hooks.json.before-matt-deck'])
+  assert.equal(await readFile(BACKUP(user), 'utf8'), HOOKS_BEFORE)
 })
 
 test('with no backup left before, install says nothing of moving one', async () => {
@@ -825,7 +945,21 @@ test('uninstall takes hooks only laid out anew since install for unchanged: it g
 // alone. A number past what a double holds, 1e400, 1.0, a key given twice, an
 // escape such as \u or \/, or a key like an index, which moves first, would
 // change.
-const CHANGED_BY_A_REWRITE = ['{"x": 1.0}', '{"x": 9007199254740993}', '{"x": 1, "x": 2}', '{"x": "\\u0041"}', '{"a": "x\\/y"}', '{"x": 1, "1": 2}']
+const CHANGED_BY_A_REWRITE = [
+  '{"x": 1.0}',
+  '{"x": 0.10}',
+  '{"x": 1e3}',
+  '{"x": -0}',
+  '{"x": 1e400}',
+  '{"x": 9007199254740993}',
+  '{"x": 1, "x": 2}',
+  '{"x": "\\u0041"}',
+  '{"x": "\\u001F"}',
+  '{"a": "x\\/y"}',
+  '{"x": 1, "1": 2}',
+  '{"a": 1, "1": 2}',
+  '{"2": 1, "1": 2}',
+]
 
 test('install stops when the Codex hooks hold what Deck would not write back as written, says so, and writes nothing', async () => {
   for (const hooks of CHANGED_BY_A_REWRITE) {
@@ -835,7 +969,12 @@ test('install stops when the Codex hooks hold what Deck would not write back as 
     await assert.rejects(run(user, 'install'), (error: any) => {
       assert.equal(error.code, 1, hooks)
       assert.ok(error.stderr.includes(`${hooksFile(user)} 里有 Deck 改写时会变样的写法`), error.stderr)
-      assert.ok(error.stderr.includes('（超出双精度的数、1.0 或 1e400 这样的数、重复的键、\\u、\\/ 这样的转义，或像序号的键）'), error.stderr)
+      assert.ok(
+        error.stderr.includes(
+          '（超出双精度的数、1.0 或 1e400 这样重写后写法会变的数、重复的键、\\u0041、\\/ 这样重写后会变样的转义，或没有全部按数值升序排在最前面的像序号的键）',
+        ),
+        error.stderr,
+      )
       assert.ok(error.stderr.includes('再运行一次 install'), error.stderr)
       return true
     })
@@ -884,9 +1023,219 @@ test('uninstall with a backup holding what Deck would not write back as written 
 
     const { stdout } = await run(user, 'uninstall')
 
-    assert.deepEqual(JSON.parse(await readFile(hooksFile(user), 'utf8')), JSON.parse(backup), backup)
+    // As JSON writes them: -0 is written 0.
+    assert.equal(JSON.stringify(JSON.parse(await readFile(hooksFile(user), 'utf8'))), JSON.stringify(JSON.parse(backup)), backup)
     assert.equal(await readFile(BACKUP(user), 'utf8'), backup)
     assert.ok(stdout.includes(`备份留在 ${BACKUP(user)}`), stdout)
+  }
+})
+
+// What install leaves in a home it stopped in: the config as it was, no
+// skill, and in .codex only what was there.
+const unchanged = async (user: string, codex: string[], why: string) => {
+  assert.equal(await readFile(join(user, '.codex', 'config.toml'), 'utf8'), BEFORE, why)
+  assert.deepEqual((await readdir(join(user, '.codex'))).sort(), codex, why)
+  assert.equal(await readFile(configureSkill(user), 'utf8').catch(() => undefined), undefined, why)
+}
+
+// Permissions stop no one running as root.
+const AS_ROOT = { skip: process.getuid?.() === 0 }
+
+test('install stops before writing anything when it cannot write the hooks, and run again once they can be written it installs, with one backup', AS_ROOT, async () => {
+  const { user } = await withConfig(BEFORE)
+  await writeFile(hooksFile(user), HOOKS_BEFORE, { mode: 0o444 })
+
+  for (let n = 0; n < 2; n++) {
+    await assert.rejects(run(user, 'install'), (error: any) => {
+      assert.equal(error.code, 1)
+      assert.ok(error.stderr.includes(`${hooksFile(user)} 写不进去（EACCES），没有安装，什么都没改。`), error.stderr)
+      assert.ok(error.stderr.includes('再运行一次 install'), error.stderr)
+      return true
+    })
+    await unchanged(user, ['config.toml', 'hooks.json'], 'read-only')
+  }
+
+  await chmod(hooksFile(user), 0o644)
+  await run(user, 'install')
+
+  assert.deepEqual((await readdir(join(user, '.codex'))).sort(), ['config.toml', 'hooks.json', 'hooks.json.before-matt-deck'])
+  assert.equal(await readFile(BACKUP(user), 'utf8'), HOOKS_BEFORE)
+})
+
+test('install takes a backup there holding the hooks as they are for its own and leaves it as it is, though it cannot be written, as a run that stopped on read-only hooks leaves it', async () => {
+  const { user } = await withConfig(BEFORE)
+  await writeFile(hooksFile(user), '{}\n')
+  await writeFile(BACKUP(user), '{}\n', { mode: 0o444 })
+
+  await run(user, 'install')
+
+  assert.equal(await readFile(BACKUP(user), 'utf8'), '{}\n')
+  assert.equal((await stat(BACKUP(user))).mode & 0o777, 0o444)
+  assert.deepEqual(JSON.parse(await readFile(hooksFile(user), 'utf8')), { hooks: { UserPromptSubmit: [{ hooks: [DECK_HOOK] }] } })
+})
+
+// A file macOS will not let anyone change or remove, where the check before
+// writing finds nothing amiss: removing a file asks only its directory.
+const IMMUTABLE = { skip: process.platform !== 'darwin' || process.getuid?.() === 0 }
+const chflags = (flag: string, path: string) => exec('chflags', [flag, path])
+
+test('uninstall gives the hooks back before it removes their backup: a backup it cannot remove leaves the hooks as they were before install', IMMUTABLE, async () => {
+  const { user } = await withConfig(BEFORE)
+  await writeFile(hooksFile(user), HOOKS_BEFORE)
+  await run(user, 'install')
+  await chflags('uchg', BACKUP(user))
+
+  try {
+    await assert.rejects(run(user, 'uninstall'), (error: any) => {
+      assert.equal(error.code, 1)
+      assert.match(error.stderr, /EPERM/)
+      return true
+    })
+    assert.equal(await readFile(hooksFile(user), 'utf8'), HOOKS_BEFORE)
+    assert.equal(await readFile(BACKUP(user), 'utf8'), HOOKS_BEFORE)
+  } finally {
+    await chflags('nouchg', BACKUP(user))
+  }
+})
+
+// A run of the command line where macOS denies writing one file, which the
+// check before writing does not see: making a file asks only its directory.
+const SANDBOXED = {
+  skip:
+    process.platform !== 'darwin' ||
+    process.getuid?.() === 0 ||
+    !(await exec('sandbox-exec', ['-p', '(version 1)(allow default)', 'true']).then(() => true, () => false)),
+}
+const runDenying = (user: string, denied: string, ...args: string[]) =>
+  exec('sandbox-exec', ['-p', `(version 1)(allow default)(deny file-write* (literal ${JSON.stringify(denied)}))`, process.execPath, CODEX, ...args], {
+    env: { ...process.env, HOME: user },
+  })
+
+test('install backs the hooks up before it writes Deck\'s hook in: a backup it cannot make leaves the hooks as they were', SANDBOXED, async () => {
+  const { user } = await withConfig(BEFORE)
+  await writeFile(hooksFile(user), '{"hooks":{}}\n')
+
+  await assert.rejects(runDenying(user, BACKUP(user), 'install'), (error: any) => {
+    assert.equal(error.code, 1)
+    assert.match(error.stderr, /EPERM/)
+    return true
+  })
+  assert.equal(await readFile(hooksFile(user), 'utf8'), '{"hooks":{}}\n')
+  assert.equal(await lstat(BACKUP(user)).catch(() => undefined), undefined)
+})
+
+test('install stops before writing anything when the hooks are a link to a file it cannot write', AS_ROOT, async () => {
+  const { user } = await withConfig(BEFORE)
+  const elsewhere = await home()
+  await writeFile(join(elsewhere, 'hooks.json'), HOOKS_BEFORE, { mode: 0o444 })
+  await symlink(join(elsewhere, 'hooks.json'), hooksFile(user))
+
+  await assert.rejects(run(user, 'install'), (error: any) => {
+    assert.equal(error.code, 1)
+    assert.ok(error.stderr.includes(`${hooksFile(user)} 写不进去（EACCES）`), error.stderr)
+    return true
+  })
+  await unchanged(user, ['config.toml', 'hooks.json'], 'link')
+  assert.equal(await readFile(join(elsewhere, 'hooks.json'), 'utf8'), HOOKS_BEFORE)
+})
+
+test('install stops before writing anything when the hooks are a link reaching no file, in a directory that is there or one that is not', async () => {
+  for (const gone of ['gone 7k3e.json', join('no such dir 2r8q', 'hooks.json')]) {
+    const { user } = await withConfig(BEFORE)
+    const elsewhere = await home()
+    await symlink(join(elsewhere, gone), hooksFile(user))
+
+    await assert.rejects(run(user, 'install'), (error: any) => {
+      assert.equal(error.code, 1, gone)
+      assert.ok(error.stderr.includes(`${hooksFile(user)} 是一个链接，链到的文件不存在，没有安装，什么都没改。`), error.stderr)
+      return true
+    })
+    await unchanged(user, ['config.toml', 'hooks.json'], gone)
+    assert.deepEqual(await readdir(elsewhere), [], gone)
+  }
+})
+
+test('install stops before writing anything when the Codex config or the configure skill is a link reaching no file', async () => {
+  for (const which of ['config', 'skill'] as const) {
+    const user = await home()
+    const elsewhere = await home()
+    const path = which === 'config' ? join(user, '.codex', 'config.toml') : configureSkill(user)
+    await mkdir(join(path, '..'), { recursive: true })
+    await symlink(join(elsewhere, 'gone 4w9s'), path)
+
+    await assert.rejects(run(user, 'install'), (error: any) => {
+      assert.equal(error.code, 1, which)
+      assert.ok(error.stderr.includes(`${path} 是一个链接，链到的文件不存在，没有安装，什么都没改。`), error.stderr)
+      return true
+    })
+    assert.deepEqual(await readdir(elsewhere), [], which)
+    assert.equal(await lstat(hooksFile(user)).catch(() => undefined), undefined, which)
+  }
+})
+
+test('install stops before writing anything when it cannot make the backup beside the hooks', AS_ROOT, async () => {
+  const { user } = await withConfig(BEFORE)
+  await writeFile(hooksFile(user), HOOKS_BEFORE)
+  await chmod(join(user, '.codex'), 0o555)
+
+  try {
+    await assert.rejects(run(user, 'install'), (error: any) => {
+      assert.equal(error.code, 1)
+      assert.ok(error.stderr.includes(`${join(user, '.codex')} 写不进去（EACCES）`), error.stderr)
+      return true
+    })
+    await unchanged(user, ['config.toml', 'hooks.json'], 'directory')
+  } finally {
+    await chmod(join(user, '.codex'), 0o755)
+  }
+})
+
+test('uninstall stops before changing anything when it cannot write the hooks, and run again once they can be written it uninstalls', AS_ROOT, async () => {
+  const { user, config } = await withConfig(BEFORE)
+  await writeFile(hooksFile(user), HOOKS_BEFORE)
+  await run(user, 'install')
+  const installed = await readFile(config, 'utf8')
+  const hooks = await readFile(hooksFile(user), 'utf8')
+  await chmod(hooksFile(user), 0o444)
+
+  await assert.rejects(run(user, 'uninstall'), (error: any) => {
+    assert.equal(error.code, 1)
+    assert.ok(error.stderr.includes(`${hooksFile(user)} 写不进去（EACCES），没有卸载，什么都没改。`), error.stderr)
+    assert.ok(error.stderr.includes('再运行一次 uninstall'), error.stderr)
+    return true
+  })
+  assert.equal(await readFile(config, 'utf8'), installed)
+  assert.equal(await readFile(hooksFile(user), 'utf8'), hooks)
+  assert.ok((await readFile(configureSkill(user), 'utf8')).length > 0)
+
+  await chmod(hooksFile(user), 0o644)
+  await run(user, 'uninstall')
+
+  assert.equal(await readFile(config, 'utf8'), BEFORE)
+  assert.equal(await readFile(hooksFile(user), 'utf8'), HOOKS_BEFORE)
+  assert.deepEqual((await readdir(join(user, '.codex'))).sort(), ['config.toml', 'hooks.json'])
+})
+
+test('uninstall stops before changing anything when it cannot remove the backup it gives back, or the skill it generated', AS_ROOT, async () => {
+  for (const dir of ['.codex', join('.agents', 'skills', 'matt-deck-configure')]) {
+    const { user, config } = await withConfig(BEFORE)
+    await writeFile(hooksFile(user), HOOKS_BEFORE)
+    await run(user, 'install')
+    const installed = await readFile(config, 'utf8')
+    await chmod(join(user, dir), 0o555)
+
+    try {
+      await assert.rejects(run(user, 'uninstall'), (error: any) => {
+        assert.equal(error.code, 1, dir)
+        assert.ok(error.stderr.includes(`${join(user, dir)} 写不进去（EACCES），没有卸载`), error.stderr)
+        return true
+      })
+      assert.equal(await readFile(config, 'utf8'), installed, dir)
+      assert.equal(await readFile(BACKUP(user), 'utf8'), HOOKS_BEFORE, dir)
+      assert.ok((await readFile(configureSkill(user), 'utf8')).length > 0, dir)
+    } finally {
+      await chmod(join(user, dir), 0o755)
+    }
   }
 })
 

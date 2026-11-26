@@ -104,15 +104,17 @@ node matt-deck/plugin/cli/codex.ts uninstall
 
 - `config.toml`：只移除 `[mcp_servers.matt_deck]` 和它下面的子表，别的内容不动；只是原文件结尾没有换行时，卸载后结尾多一个换行（#66）。
 - 配置技能：只删 Deck 生成的那个 `SKILL.md`，目录空了才删目录；不是 Deck 生成的，不动。
-- `hooks.json`：安装之后没改过（按解析后的内容比，只改了空白和换行的也算没改过），就逐字节还原成备份并删掉备份；安装前没有这个文件，就删掉它。改过，就只摘掉 Deck 的钩子，备份留着，输出写明在哪里。比较时键的顺序也算在内：只调换了键的顺序也算改过。
+- `hooks.json`：安装之后没改过（按解析后的内容比，只改了空白和换行的也算没改过），就逐字节还原成备份并删掉备份。改过，就只摘掉 Deck 的钩子，备份留着，输出写明在哪里。没有备份时（安装前没有这个文件，或者备份后来没了，或者 Deck 的钩子是手写进去的），Deck 证明不了文件是它建的，只摘掉 Deck 的钩子、写回剩下的内容，不删文件：安装前没有 `hooks.json` 的，卸载后留下一个 `{}`（#109）。比较时键的顺序也算在内：只调换了键的顺序也算改过。
 
-卸载之后重启桌面应用。卸载后入口是否消失，列在[手动检查清单](docs/codex-manual-checklist.md)里待核对。安装前没有 `config.toml` 时，卸载后会留下一个空的；`~/.agents/skills` 这类安装时新建的上级目录也会留下。
+卸载之后重启桌面应用。卸载后入口是否消失，列在[手动检查清单](docs/codex-manual-checklist.md)里待核对。安装前没有 `config.toml` 时，卸载后会留下一个空的，`hooks.json` 也一样留下；`~/.agents/skills` 这类安装时新建的上级目录也会留下。
 
 ### install 和 uninstall 不动的 config.toml
 
-Deck 不解析 `config.toml`，按行认 `[mcp_servers.matt_deck]` 这种单独一行的表头和它下面的子表（`codex mcp add` 写的也是这种）。`config.toml` 里的 `matt_deck` 注册是别的写法时，install 和 uninstall 都以退出码 1 结束，什么都不改，改成这种表头或删掉之后再运行一次。别的写法指：`[mcp_servers]` 下的 `matt_deck = { ... }` 或 `matt_deck.command = ...`、带空格或引号的表头（如 `[ mcp_servers . matt_deck ]`、`[mcp_servers."matt_deck"]`）、顶层的点分键 `mcp_servers.matt_deck.command = ...`、`mcp_servers = { matt_deck = { ... } }`（#85）。照原样追加一张表会让同一个注册声明两次，Codex 整份配置都读不了。
+Deck 不解析 `config.toml`，按行认 `[mcp_servers.matt_deck]` 这种单独一行的表头和它下面的子表（`codex mcp add` 写的也是这种）；多行字符串（`"""` 或 `'''` 括起来的）里的行是文字，不管长得像什么，都不当成表头或键（#109）。`config.toml` 里的 `matt_deck` 注册是别的写法时，install 和 uninstall 都以退出码 1 结束，什么都不改，改成这种表头或删掉之后再运行一次。别的写法指：`[mcp_servers]` 下的 `matt_deck = { ... }` 或 `matt_deck.command = ...`、带空格或引号的表头（如 `[ mcp_servers . matt_deck ]`、`[mcp_servers."matt_deck"]`）、顶层的点分键 `mcp_servers.matt_deck.command = ...`、`mcp_servers = { matt_deck = { ... } }`（#85）。照原样追加一张表会让同一个注册声明两次，Codex 整份配置都读不了。
 
-`mcp_servers` 写成内联表（`mcp_servers = { ... }`）、里面没有 `matt_deck` 时，install 同样以退出码 1 结束、什么都不改，因为内联表后面不能再加子表；uninstall 照常说没有注册。多行字符串里恰好有像这些写法的行时，Deck 也当它是，宁可停下。
+`mcp_servers` 写成内联表（`mcp_servers = { ... }`）、里面没有 `matt_deck` 时，install 同样以退出码 1 结束、什么都不改，因为内联表后面不能再加子表；uninstall 照常说没有注册；只有内联表最外层的键 `matt_deck` 才算注册，更深的表、数组或字符串里的不算。
+
+`config.toml` 里有不合法的 UTF-8 字节时，install 和 uninstall 都以退出码 1 结束、什么都不改：Deck 按文字改写它，这些字节会被换掉（#109）。
 
 ### install 和 uninstall 不动的钩子文件
 
@@ -123,7 +125,13 @@ Deck 读进 `hooks.json` 之后整份重写，所以它只经手重写之后只�
 
 install 要把 Deck 的钩子写进 `hooks.json`（钩子不在里面）、`hooks.json.before-matt-deck` 又已经在时（上一次卸载因为钩子改过而留下的，或者你手动摘掉 Deck 的钩子时留下的），它先被挪到第一个空着的带序号的名字，如 `hooks.json.before-matt-deck.1`，输出会说。之后 Deck 不再碰这些带序号的文件，卸载也不删，要你自己处理。
 
-退出码是 1、报的是系统错误（如 `EACCES`、`ENOENT`）时，前面的步骤可能已经做了，例如注册已经写进去而钩子还没加。修好原因之后再运行一次 install 能补齐，或者运行 uninstall 撤掉；上一次已经写出了备份、Deck 的钩子又不在 `hooks.json` 里时，重跑 install 会把那份备份挪成带序号的文件。
+已经在的 `hooks.json.before-matt-deck` 和现在的 `hooks.json` 逐字节相同时（例如上一次 install 写完备份之后失败了），它就是这一次的备份，不挪也不重写，权限照旧。
+
+### 写不进去时
+
+install 和 uninstall 动手之前，先查一遍这一次要写、要新建或要删的每个位置：已在的文件要能写（是链接的，看它链到的文件），要新建或删掉的文件所在的目录要能写。有一处不行，就以退出码 1 结束，说是哪个位置、什么原因（如 `EACCES`），什么都不改；改好权限之后再运行一次。`hooks.json`、`config.toml` 或配置技能的 `SKILL.md` 是链到不存在的文件的链接时，install 也这样停下，不顺着链接在别处建文件（#109）。
+
+预检之后仍可能失败（如磁盘满了，或者检查和写入之间权限又变了）：这时退出码是 1、报的是系统错误，前面的步骤可能已经做了。修好原因之后再运行一次 install 能补齐，或者运行 uninstall 撤掉。以 root 运行时权限拦不住写入，预检也就查不出这一类。
 
 ### Codex 上的已知限制
 
