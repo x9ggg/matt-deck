@@ -831,7 +831,12 @@ body{margin:0;background:var(--ground)}
     const open = el('button', 'dk-btn dk-btn--sm dk-btn--quiet', '在 GitHub 打开')
     open.type = 'button'
     // Through the Host, which opens it in the browser: the page holds no link.
-    open.addEventListener('click', () => request('ui/open-link', { url: task.url }))
+    // Refused, the result notice says so.
+    open.addEventListener('click', () =>
+      request('ui/open-link', { url: task.url }).catch(error =>
+        showResult('没有打开链接', `宿主拒绝了这次打开${error.message === '' ? '' : `：${error.message}`}。再点一次重试。`),
+      ),
+    )
 
     const closeout = entry?.isPendingCloseout ? [closeoutButton(closeoutOf(number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
     // The Spec or Map it is under, as the list holds it; clicked, its Map View.
@@ -1155,12 +1160,16 @@ body{margin:0;background:var(--ground)}
   // Puts the text in the Session's prompt for the person to send (ADR-0006).
   // The page never sends a message itself: the Host hands what a page sends
   // to the agent as untrusted input, and no skill runs.
-  const fill = text =>
-    request('ui/message', {
+  // Not answered in 10 seconds, `unanswered` runs; the answer coming later
+  // still settles what is returned.
+  const fill = (text, unanswered) => {
+    const late = setTimeout(unanswered, 10_000)
+    return request('ui/message', {
       role: 'user',
       content: [{ type: 'text', text }],
       _meta: { 'openai/message': { target: 'active', send: false } },
-    })
+    }).finally(() => clearTimeout(late))
+  }
   // The result notice (docs/codex-tab-layout.md, "结果提示"): what a prefill
   // did not do, at the bottom of the block that stays at the top, one at a
   // time, with whatever `more` it shows under its words. It goes as the next
@@ -1173,30 +1182,67 @@ body{margin:0;background:var(--ground)}
     $('result').replaceChildren(notice)
   }
   const closeResult = () => $('result').replaceChildren()
+  // A prefill the Host has not answered in 10 seconds: the text may be in
+  // the prompt all the same, else `retry` says how to try again. In orange,
+  // the result notice's place; answered later and taken, it goes. Answers
+  // the notice. The 下一步 tab draws the same notice in its own place.
+  const unansweredNotice = retry => {
+    const notice = el('div', 'dk-notice is-warn', el('div', 'dk-notice__body',
+      el('span', 'dk-notice__title heading', '宿主还没应答这次预填。'),
+      el('span', 'dk-notice__text', `输入框里可能已经有这段文字；没有的话，${retry}`)))
+    notice.setAttribute('role', 'status')
+    return notice
+  }
+  const showUnanswered = retry => {
+    const notice = unansweredNotice(retry)
+    $('result').replaceChildren(notice)
+    return notice
+  }
+  const closeUnanswered = notice => {
+    if (notice !== undefined && $('result').firstElementChild === notice) closeResult()
+  }
   // What the Host refusing a prefill says: its reason as it gave it, if it
   // gave one.
   const refusal = error => `宿主拒绝了这次预填${error.message === '' ? '' : `：${error.message}`}。`
   // Refused from a button, the result notice says to click the button, by
   // its words `label`, again.
   const notFilled = (error, label) => showResult('没有填入输入框', `${refusal(error)}再点“${label}”重试。`)
+  // The last prefill from each button.
+  const prefilled = new WeakMap()
   // Fills in the text from the button, which is off from the click and stays
   // off for 5 seconds once it is filled in, so a second click fills in no
   // second copy. Refused by the Host, the button is on again at once and the
-  // result notice says why.
+  // result notice says why; not answered in 10 seconds, it is on again and
+  // the notice says so. An answer after that counts while the button has
+  // filled in nothing since.
   const prefill = async (button, text) => {
     closeResult()
     const label = button.textContent
-    button.disabled = true
-    try {
-      await fill(text)
-      button.textContent = '已填入'
-      await new Promise(resolve => setTimeout(resolve, 5_000))
-    } catch (error) {
-      notFilled(error, label)
-    } finally {
+    const asked = {}
+    prefilled.set(button, asked)
+    const on = () => {
       button.textContent = label
       button.disabled = false
     }
+    button.disabled = true
+    let unanswered
+    try {
+      await fill(text, () => {
+        on()
+        unanswered = showUnanswered(`再点“${label}”重试。`)
+      })
+    } catch (error) {
+      if (prefilled.get(button) !== asked) return
+      notFilled(error, label)
+      on()
+      return
+    }
+    if (prefilled.get(button) !== asked) return
+    closeUnanswered(unanswered)
+    button.textContent = '已填入'
+    button.disabled = true
+    await new Promise(resolve => setTimeout(resolve, 5_000))
+    if (prefilled.get(button) === asked) on()
   }
 
   // implement as the last read of the skills lists it: undefined before the
@@ -1204,17 +1250,20 @@ body{margin:0;background:var(--ground)}
   // listed none, { failure } where the read failed.
   // "执行" is on only where Codex finds the Skill Source's own file.
   let implement
-  // The Tasks whose Execute Prompt is being filled in, false, or was in the
-  // last 5 seconds, true, by number. Every "执行" of theirs, drawn before or
-  // since, is off meanwhile, so no second copy goes in the prompt.
+  // The Tasks whose Execute Prompt is being filled in, or was in the last 5
+  // seconds, `filled` then, by number: the execution under way. Every "执行"
+  // of theirs, drawn before or since, is off meanwhile, so no second copy
+  // goes in the prompt.
   const filling = new Map()
+  // The last execution of each Task, by number.
+  const executed = new Map()
 
   // A "执行" of the Task `number`, which the page draws again as "执行"
   // stands: it fills in the Execute Prompt the Deck service gives, never
   // sends it, and occupies nothing; the hook does, once the person sends it.
   // A button whose click ends in that prompt another way, `onClick`, is
   // drawn as "执行" stands too.
-  const executeButton = (number, label, className, onClick = () => execute(number, error => notFilled(error, label))) => {
+  const executeButton = (number, label, className, onClick = () => execute(number, { refused: error => notFilled(error, label), retry: `再点“${label}”重试。` })) => {
     const button = el('button', className, label)
     button.type = 'button'
     button.dataset.execute = String(number)
@@ -1230,33 +1279,45 @@ body{margin:0;background:var(--ground)}
   const drawExecute = button => {
     const filled = filling.get(Number(button.dataset.execute))
     button.disabled = filled !== undefined || implement?.copy !== 'same'
-    button.textContent = filled === true ? '已填入' : button.dataset.label
+    button.textContent = filled?.filled ? '已填入' : button.dataset.label
   }
   // `before` runs first, every "执行" of the Task off meanwhile; answering
   // false, nothing is filled in. A prompt the Host refuses is not filled in
   // either: "执行" is on again at once, and `refused` says so, given the
-  // Host's error and the prompt.
-  const execute = async (number, refused, before = async () => true) => {
+  // Host's error and the prompt. Not answered in 10 seconds, "执行" is on
+  // again and the notice says so, with `retry`; an answer after that counts
+  // while the Task has had no execution since.
+  const execute = async (number, { refused, retry }, before = async () => true) => {
     closeResult()
-    filling.set(number, false)
+    const execution = { filled: false }
+    executed.set(number, execution)
+    filling.set(number, execution)
     showExecutable()
     try {
       if (!(await before())) return
       const { prompt } = await callTool('deck_execute', { task: number })
+      let unanswered
       try {
-        await fill(prompt)
+        await fill(prompt, () => {
+          filling.delete(number)
+          showExecutable()
+          unanswered = showUnanswered(retry)
+        })
       } catch (error) {
-        refused(error, prompt)
+        if (executed.get(number) === execution) refused(error, prompt)
         return
       }
-      filling.set(number, true)
+      if (executed.get(number) !== execution) return
+      closeUnanswered(unanswered)
+      execution.filled = true
+      filling.set(number, execution)
       showExecutable()
       await new Promise(resolve => setTimeout(resolve, 5_000))
     } catch {
       // Not given, nothing is in the prompt: "执行" is on again to be
       // clicked once more.
     } finally {
-      filling.delete(number)
+      if (filling.get(number) === execution) filling.delete(number)
       showExecutable()
     }
   }
@@ -1420,11 +1481,14 @@ body{margin:0;background:var(--ground)}
   // gives the Execute Prompt as the Deck service gave it.
   const takeOver = (number, from) =>
     // A button of an asking closed since, still in the page, does nothing.
-    takeover === undefined ? undefined : execute(number, (error, prompt) => showResult(
-      `#${number} 已转给本 Session，Execute Prompt 没有填入`,
-      `${refusal(error)}点“释放”之后再点“执行”，或者把下面这段 Execute Prompt 填进输入框自己发送。`,
-      el('span', 'dk-raw mono', prompt),
-    ), async () => {
+    takeover === undefined ? undefined : execute(number, {
+      refused: (error, prompt) => showResult(
+        `#${number} 已转给本 Session，Execute Prompt 没有填入`,
+        `${refusal(error)}点“释放”之后再点“执行”，或者把下面这段 Execute Prompt 填进输入框自己发送。`,
+        el('span', 'dk-raw mono', prompt),
+      ),
+      retry: '点“释放”之后再点“执行”重试。',
+    }, async () => {
       takeover.moving = true
       showTakeOver()
       let answer
@@ -1700,12 +1764,15 @@ body{margin:0;background:var(--ground)}
   let asking = { phase: 'none' }
   let waitingFor
 
+  // The last request asked for.
+  let lastAsked
   // Asks the Deck service for a Recommendation Request and prefills it; once
   // the Host has it in the prompt, reads its Recommendation every 2 seconds,
   // for 10 minutes at most. Refused by the Host, the request before is
   // waited for as it was, and the tab says why.
   const ask = async button => {
     closeResult()
+    const asked = (lastAsked = {})
     button.disabled = true
     let answer
     try {
@@ -1715,10 +1782,16 @@ body{margin:0;background:var(--ground)}
     }
     if (answer.ok) {
       try {
-        await fill(answer.prompt)
+        // Not answered in 10 seconds, the tab says so, its button on again.
+        await fill(answer.prompt, () => {
+          asking = { ...asking, failure: { unanswered: true } }
+          showNext()
+        })
       } catch (error) {
         answer = { ok: false, failure: { refused: error } }
       }
+      // Answered after that, it counts while nothing was asked since.
+      if (asked !== lastAsked) return
     }
     if (!answer.ok) {
       asking = { ...asking, failure: answer.failure }
@@ -1809,13 +1882,18 @@ body{margin:0;background:var(--ground)}
       // The reason in the Pane's words, and the hint that holds here: not
       // "刷新", which makes no request, but the button this tab shows.
       // Refused by the Host, its reason as it gave it.
-      const { kind, message, refused } = asking.failure
+      // Not answered by the Host, the notice says so in orange.
+      const { kind, message, refused, unanswered } = asking.failure
       const again = `再点“${asking.phase === 'waiting' || asking.phase === 'answered' ? '再问一次' : '我现在该做什么'}”重试。`
-      const reason = refused !== undefined ? [`${refusal(refused)}${again}`] : FAILURE[kind]?.(message) ?? [skillFailure({ kind, message })]
-      if (refused === undefined) reason.push(reason.pop().replace(/点“刷新”(?:重试|重新读取)。$/, again))
-      const notice = failedNotice('没有填入推荐请求', '')
-      notice.querySelector('.dk-notice__text').replaceChildren(...reason)
-      shown.push(notice)
+      if (unanswered) {
+        shown.push(unansweredNotice(again))
+      } else {
+        const reason = refused !== undefined ? [`${refusal(refused)}${again}`] : FAILURE[kind]?.(message) ?? [skillFailure({ kind, message })]
+        if (refused === undefined) reason.push(reason.pop().replace(/点“刷新”(?:重试|重新读取)。$/, again))
+        const notice = failedNotice('没有填入推荐请求', '')
+        notice.querySelector('.dk-notice__text').replaceChildren(...reason)
+        shown.push(notice)
+      }
     }
     const hint = text => el('p', 'dk-next__hint caption', text)
     if (asking.phase === 'none') shown.push(primary(), ...(why === undefined ? [hint('把 $ask-matt 填进输入框，附带 Task Snapshot。')] : []))

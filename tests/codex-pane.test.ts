@@ -5645,3 +5645,235 @@ test('closed, an asking leaves the focus where it is once the person has gone to
   assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'])
   assert.equal(document.activeElement, document.body)
 })
+
+test('"在 GitHub 打开" the Host refuses says so in the result notice, with the Host\'s reason if it gives one, and to click it again', async t => {
+  let reason = REFUSAL
+  const page = await openPage({ answer: deckAt('/work/matt-deck'), answerOpenLink: () => ({ error: { code: -32000, message: reason } }) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 70))
+
+  await page.click(barButton(document, '在 GitHub 打开'))
+  assert.equal(page.sent.filter(message => message.method === 'ui/open-link').length, 1)
+  assert.deepEqual(resultShown(page), {
+    order: ['抬头', '标签页', '结果提示'],
+    role: 'status',
+    glyph: true,
+    title: '没有打开链接',
+    said: `宿主拒绝了这次打开：${REFUSAL}。再点一次重试。`,
+  })
+  assert.equal(page.document.querySelector('.dk-top .dk-notice.is-danger b'), null)
+
+  reason = ''
+  await page.click(barButton(document, '在 GitHub 打开'))
+  assert.deepEqual(resultSaid(page), ['没有打开链接', '宿主拒绝了这次打开。再点一次重试。'])
+})
+
+// The notice at the top other than the one of Deck's hook, as the person
+// reads it, if one is shown: whether it is orange, its title and words.
+const topNotice = (page: { window: any; document: Document }) => {
+  const notices = [...page.document.querySelectorAll('.dk-top .dk-notice')].filter(
+    each => shown(page, each) && text(each.querySelector('.dk-notice__title')) !== HOOK_TITLE,
+  )
+  assert.ok(notices.length <= 1, 'one result notice at most')
+  const notice = notices[0]
+  return notice === undefined
+    ? undefined
+    : { warn: notice.classList.contains('is-warn'), role: notice.getAttribute('role'), title: text(notice.querySelector('.dk-notice__title')), said: text(notice.querySelector('.dk-notice__text')) }
+}
+// The notice of a prefill from the button `label` the Host has not answered.
+const unanswered = (label: string) => ({
+  warn: true,
+  role: 'status',
+  title: '宿主还没应答这次预填。',
+  said: `输入框里可能已经有这段文字；没有的话，再点“${label}”重试。`,
+})
+// Clicks the button `found` finds and waits 10 seconds of no answer: off,
+// with no notice, until then; on again with its own words then, and the
+// notice says the Host has not answered.
+const unansweredFrom = async (page: Awaited<ReturnType<typeof openPage>>, found: () => Element, label: string) => {
+  await page.click(found())
+  await page.advance(9_999)
+  assert.equal((found() as HTMLButtonElement).disabled, true)
+  assert.equal(topNotice(page), undefined)
+  await page.advance(1)
+  assert.deepEqual([text(found()), (found() as HTMLButtonElement).disabled], [label, false])
+  assert.deepEqual(topNotice(page), unanswered(label))
+}
+
+test('a prefill the Host does not answer in 10 seconds puts "配置这个项目" on again, and says so', async t => {
+  const page = await openPage({ answer: deckAt('/work/elsewhere', false), answerMessage: () => undefined })
+  t.after(page.close)
+  await unansweredFrom(page, () => page.document.querySelector('.dk-empty button')!, '配置这个项目')
+})
+
+test('a prefill the Host does not answer in 10 seconds puts "预填" and "重跑配置" on again, and says so', async t => {
+  const page = await openPage({ answer: deckWithSkills(), answerMessage: () => undefined })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '技能'))
+  await unansweredFrom(page, () => [...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === IMPLEMENT)!.querySelector('button')!, '预填')
+  await unansweredFrom(page, () => document.querySelector('#skill-list .dk-notice.is-warn button')!, '重跑配置')
+})
+
+test('a prefill the Host does not answer in 10 seconds puts "收尾核对" and "执行" on again, and says so', async t => {
+  const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)), answerMessage: () => undefined })
+  t.after(page.close)
+  const { document } = page
+  await unansweredFrom(page, () => rowOf(document, 64).querySelector('button')!, '收尾核对')
+  await unansweredFrom(page, () => rowExecute(document, 81)!, '执行')
+})
+
+test('"我现在该做什么" the Host does not answer in 10 seconds does not wait: the 下一步 tab says so, the button on again, and no report is read', async t => {
+  const deck = deckThatRecommends()
+  const page = await openPage({ answer: deck.answer, answerMessage: () => undefined })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '下一步'))
+
+  await page.click(button(page, '我现在该做什么'))
+  await page.advance(9_999)
+  assert.deepEqual(nextTab(page), { shown: true, phases: [], said: ['把 $ask-matt 填进输入框，附带 Task Snapshot。'], buttons: ['我现在该做什么（停用）'] })
+  await page.advance(1)
+
+  assert.deepEqual(nextTab(page), {
+    shown: true,
+    phases: [],
+    said: ['宿主还没应答这次预填。', '输入框里可能已经有这段文字；没有的话，再点“我现在该做什么”重试。', '把 $ask-matt 填进输入框，附带 Task Snapshot。'],
+    buttons: ['我现在该做什么'],
+  })
+  assert.equal(page.document.querySelector('[data-panel="next"] .dk-notice')!.classList.contains('is-warn'), true)
+  assert.equal(topNotice(page), undefined)
+  await page.advance(10_000)
+  assert.deepEqual(deck.reads, [])
+})
+
+// The prefills the page asked the Host for, as sent.
+const prefillsSent = (page: { sent: any[] }) => page.sent.filter(message => message.method === 'ui/message')
+
+test('a prefill the Host answers after 10 seconds counts while its button filled in nothing since: taken, the notice goes and the button says 已填入 for 5 seconds; refused, the notice says so', async t => {
+  const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)), answerMessage: () => undefined })
+  t.after(page.close)
+  const { document } = page
+  const closeout = () => rowOf(document, 64).querySelector<HTMLButtonElement>('button')!
+
+  await page.click(closeout())
+  await page.advance(10_000)
+  assert.equal(topNotice(page)?.title, '宿主还没应答这次预填。')
+  await page.respond(prefillsSent(page)[0], { result: {} })
+  assert.equal(topNotice(page), undefined)
+  assert.deepEqual([text(closeout()), closeout().disabled], ['已填入', true])
+  await page.advance(5_000)
+  assert.deepEqual([text(closeout()), closeout().disabled], ['收尾核对', false])
+
+  await page.click(closeout())
+  await page.advance(10_000)
+  await page.respond(prefillsSent(page)[1], { error: { code: -32000, message: REFUSAL } })
+  assert.deepEqual(resultSaid(page), ['没有填入输入框', `宿主拒绝了这次预填：${REFUSAL}。再点“收尾核对”重试。`])
+  assert.deepEqual([text(closeout()), closeout().disabled], ['收尾核对', false])
+
+  // "执行" the same way.
+  await page.click(rowExecute(document, 81))
+  await page.advance(10_000)
+  await page.respond(prefillsSent(page)[2], { result: {} })
+  assert.equal(topNotice(page), undefined)
+  assert.deepEqual(executeShown(rowExecute(document, 81)), ['已填入', false])
+  await page.advance(5_000)
+  await page.click(rowExecute(document, 81))
+  await page.advance(10_000)
+  await page.respond(prefillsSent(page)[3], { error: { code: -32000, message: REFUSAL } })
+  assert.deepEqual(resultSaid(page), ['没有填入输入框', `宿主拒绝了这次预填：${REFUSAL}。再点“执行”重试。`])
+  assert.deepEqual(executeShown(rowExecute(document, 81)), ['执行', true])
+})
+
+test('a prefill the Host answers after it was clicked again changes nothing', async t => {
+  const page = await openPage({ answer: deckOfCloseout(() => closeoutProject(true)), answerMessage: () => undefined })
+  t.after(page.close)
+  const { document } = page
+  const closeout = () => rowOf(document, 64).querySelector<HTMLButtonElement>('button')!
+  const shownNow = () => [text(closeout()), closeout().disabled, topNotice(page), executeShown(rowExecute(document, 81))]
+
+  await page.click(closeout())
+  await page.click(rowExecute(document, 81))
+  await page.advance(10_000)
+  await page.click(closeout())
+  await page.click(rowExecute(document, 81))
+  const before = shownNow()
+  assert.deepEqual(before, ['收尾核对', true, undefined, ['执行', false]])
+
+  await page.respond(prefillsSent(page)[0], { result: {} })
+  await page.respond(prefillsSent(page)[1], { error: { code: -32000, message: REFUSAL } })
+  assert.deepEqual(shownNow(), before)
+  await page.advance(5_000)
+  assert.deepEqual(shownNow(), before)
+})
+
+test('"我现在该做什么" the Host answers after 10 seconds counts while nothing was asked since: taken, the tab waits for the report; refused, it says so', async t => {
+  const deck = deckThatRecommends()
+  const page = await openPage({ answer: deck.answer, answerMessage: () => undefined })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '下一步'))
+
+  await page.click(button(page, '我现在该做什么'))
+  await page.advance(10_000)
+  await page.respond(prefillsSent(page)[0], { result: {} })
+  assert.deepEqual(nextTab(page).phases, ['+已填入', '>等待回报', '已回答'])
+  assert.deepEqual(nextTab(page).said, ['已填入输入框，等你发送。'])
+  await page.advance(2_000)
+  assert.deepEqual(deck.reads, ['request-1'])
+
+  await page.click(button(page, '再问一次'))
+  await page.advance(10_000)
+  await page.respond(prefillsSent(page)[1], { error: { code: -32000, message: REFUSAL } })
+  assert.deepEqual(nextTab(page).said.slice(0, 2), ['没有填入推荐请求', `宿主拒绝了这次预填：${REFUSAL}。再点“再问一次”重试。`])
+
+  // Asked again before it is answered: the answer changes nothing.
+  await page.click(button(page, '再问一次'))
+  await page.advance(10_000)
+  await page.click(button(page, '再问一次'))
+  const before = nextTab(page)
+  await page.respond(prefillsSent(page)[2], { result: {} })
+  assert.deepEqual(nextTab(page), before)
+  assert.deepEqual(deck.reads.filter(each => each !== 'request-1'), [])
+})
+
+test('an Execute Prompt after a takeover the Host does not answer in 10 seconds says to release and execute again, the Task being this Session\'s', async t => {
+  const page = await openPage({ answer: deckThatOccupies().answer, answerMessage: () => undefined })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  await page.advance(10_000)
+
+  assert.deepEqual(topNotice(page), { ...unanswered('释放'), said: '输入框里可能已经有这段文字；没有的话，点“释放”之后再点“执行”重试。' })
+  assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'])
+})
+
+test('"我现在该做什么" the Host answers once it was clicked again, while the Deck service makes the new request, changes nothing', async t => {
+  const deck = deckThatRecommends()
+  // From the second ask on, the Deck service makes the request once let.
+  let asks = 0
+  let release = () => {}
+  const page = await openPage({
+    answer: (name, args: any) => {
+      if (name !== 'deck_ask' || ++asks === 1) return deck.answer(name, args)
+      const answer = deck.answer(name, args)
+      return new Promise(resolve => (release = () => resolve(answer)))
+    },
+    answerMessage: () => undefined,
+  })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  await page.advance(10_000)
+
+  ;(button(page, '我现在该做什么') as HTMLElement).click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  const answered = page.respond(prefillsSent(page)[0], { result: {} })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  release()
+  await answered
+
+  assert.deepEqual(nextTab(page).phases, [])
+  await page.advance(2_000)
+  assert.deepEqual(deck.reads, [])
+})

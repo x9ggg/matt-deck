@@ -25,6 +25,7 @@ type HostAnswer = { result: object } | { error: { code: number; message: string 
 export const openPage = async ({
   answer,
   answerMessage = () => ({ result: {} }),
+  answerOpenLink = () => ({ result: {} }),
   hostContext = {},
   onScroll = () => {},
 }: {
@@ -32,9 +33,14 @@ export const openPage = async ({
   // document is there to read what the page shows while the call is open.
   answer: (name: string, args: object, document: Document) => object | Promise<object>
   // What the Host answers a prefill, `ui/message`: {} as Codex does (#68)
-  // unless the test says otherwise, an error where it refuses one. The page's
-  // document is there to read what the page shows while the prefill is open.
-  answerMessage?: (params: object, document: Document) => HostAnswer
+  // unless the test says otherwise, an error where it refuses one, nothing
+  // yet where it gives undefined, and the test answers later with
+  // `respond`. The page's document is there to read what the page shows
+  // while the prefill is open.
+  answerMessage?: (params: object, document: Document) => HostAnswer | undefined
+  // What the Host answers the page's asking it to open a link,
+  // `ui/open-link`: {} as Codex does (#68) unless the test says otherwise.
+  answerOpenLink?: (params: object, document: Document) => HostAnswer
   hostContext?: HostContext
   // Told each time the page scrolls itself, with what the page shows as it
   // does: a browser stops a scroll at the end of what is shown then.
@@ -128,13 +134,19 @@ export const openPage = async ({
         // error to the test waiting on the page, or close() does if none waits.
         failed ??= { error }
       }
-    } else if (data.method === 'ui/open-link') {
-      // Codex opens the link in the default browser and answers {} (#68).
-      toPage({ id: data.id, result: {} })
-    } else if (data.method === 'ui/message') {
-      // A message the page puts in the Session's prompt, or sends; the test
-      // reads it from `sent`, and may say what the Host answers it.
-      toPage({ id: data.id, ...answerMessage(data.params, page.window.document) })
+    } else if (data.method === 'ui/open-link' || data.method === 'ui/message') {
+      // Codex opens a link in the default browser and answers {} (#68). A
+      // message the page puts in the Session's prompt, or sends, the test
+      // reads from `sent`; it may say what the Host answers it, or that it
+      // answers it later. An answer that throws is the test's, as above.
+      try {
+        const answer = (data.method === 'ui/open-link' ? answerOpenLink : answerMessage)(data.params, page.window.document)
+        if (answer !== undefined) {
+          toPage({ id: data.id, ...answer })
+        }
+      } catch (error) {
+        failed ??= { error }
+      }
     } else {
       toPage({ id: data.id, error: { code: -32601, message: `Method not found: ${data.method}` } })
     }
@@ -173,6 +185,11 @@ export const openPage = async ({
         showTheme(params)
       }
       toPage({ method, params })
+      await settled()
+    },
+    // The Host answers a request the page sent, which it left unanswered.
+    respond: async (request: { id: number }, answer: HostAnswer) => {
+      toPage({ id: request.id, ...answer })
       await settled()
     },
     // Moves the page's clock on, running each timer as it comes due.

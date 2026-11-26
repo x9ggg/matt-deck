@@ -99,3 +99,15 @@ test('an answer that comes late, and the calls it leads to, are waited for', asy
   await page.click(page.document.querySelector('.dk-head button'))
   assert.deepEqual(calls, ['deck_config', 'deck_session', 'deck_configure'])
 })
+
+test('an answer to a prefill that throws fails the next wait on the page with that error', { timeout: 5_000 }, async t => {
+  const page = await openPage({
+    answer: () => answered({}),
+    answerMessage: () => {
+      throw new Error('unexpected prefill 3k')
+    },
+  })
+  t.after(page.close)
+
+  await assert.rejects(page.click(page.document.querySelector('.dk-empty button')), /unexpected prefill 3k/)
+})
