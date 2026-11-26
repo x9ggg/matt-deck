@@ -5976,3 +5976,199 @@ test('"在 GitHub 打开" clicked again after a refusal puts the notice of it aw
   const asked = plain.sent.find(message => message.method === 'ui/open-link')
   assert.deepEqual(answers.find(each => each.id === asked.id)?.result, {})
 })
+
+// The notice that a read is late, as the person reads it, if one is shown:
+// whether it is orange, where it stands, its title and words.
+const lateShown = (page: { window: any; document: Document }) => {
+  const notices = [...page.document.querySelectorAll('.dk-notice')].filter(each => shown(page, each) && text(each.querySelector('.dk-notice__title')) === 'Deck 服务还没应答。')
+  assert.ok(notices.length <= 1, 'one notice of a late read at most')
+  const notice = notices[0]
+  if (notice === undefined) return undefined
+  // What is shown of the content under the block that stays at the top: the
+  // notice comes first.
+  const content = [...page.document.querySelectorAll('.dk-pane *')].filter(
+    each => shown(page, each) && each.closest('.dk-top') === null && each.matches('.dk-notice, .dk-why, .dk-filter, .dk-bar, .dk-next, .dk-empty, .dk-source, .dk-spec'),
+  )
+  return { warn: notice.classList.contains('is-warn'), role: notice.getAttribute('role'), first: content[0] === notice, said: text(notice.querySelector('.dk-notice__text')) }
+}
+const LATE = { warn: true, role: 'status', first: true, said: '点“刷新”重新读取。' }
+const freshShown = (document: Document) => {
+  const fresh = document.querySelector('.dk-head__fresh')!
+  return [text(fresh), fresh.classList.contains('is-stale')]
+}
+
+test('a timed read whose Tasks the Deck service does not answer is late at 10 seconds: the head says 没有应答, the content says so at its top, "刷新" is on, and the next timed read is made and drawn', async t => {
+  let dropping = false
+  let tasks: any = TASKS
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' ? (dropping ? undefined : answered(tasks)) : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const refresh = document.querySelector<HTMLButtonElement>('.dk-head button')!
+  const reads = () => calledWith(page, 'deck_tasks').length
+
+  dropping = true
+  await page.advance(60_000)
+  const before = reads()
+  await page.advance(9_999)
+  assert.equal(refresh.disabled, true)
+  assert.equal(lateShown(page), undefined)
+  await page.advance(1)
+
+  assert.deepEqual(freshShown(document), ['没有应答', true])
+  assert.deepEqual(lateShown(page), LATE)
+  assert.equal(refresh.disabled, false)
+
+  dropping = false
+  tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [...TASKS.groups.ready, task(90, '新读到的 9q2w')] } }
+  await page.advance(50_000)
+  assert.equal(reads(), before + 1)
+  assert.equal(text(rowOf(document, 90).querySelector('.dk-row__title')), '新读到的 9q2w')
+  assert.equal(lateShown(page), undefined)
+  assert.deepEqual(freshShown(document), ['刚刚', false])
+})
+
+test('a read late on the skills, after "刷新" in 技能, or on a detail\'s Task, says so as a late read of the Tasks does, and the next timed read is made and drawn', async t => {
+  let dropping = ''
+  let skills = SKILLS
+  const page = await openPage({ answer: (name, args: any) => (name === dropping ? undefined : deckWithSkills(skills)(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const refresh = document.querySelector<HTMLButtonElement>('.dk-head button')!
+  const reads = () => calledWith(page, 'deck_tasks').length
+  // Late 10 seconds after the read began, and the next timed read made.
+  const lateFrom = async (begin: () => Promise<void>, wait: number) => {
+    await begin()
+    await page.advance(9_999)
+    assert.equal(refresh.disabled, true)
+    assert.equal(lateShown(page), undefined)
+    await page.advance(1)
+    assert.deepEqual(freshShown(document), ['没有应答', true])
+    assert.deepEqual(lateShown(page), LATE)
+    assert.equal(refresh.disabled, false)
+    dropping = ''
+    const before = reads()
+    await page.advance(wait)
+    assert.equal(reads(), before + 1)
+    assert.equal(lateShown(page), undefined)
+    assert.deepEqual(freshShown(document), ['刚刚', false])
+  }
+
+  await page.click(tabNamed(document, '技能'))
+  dropping = 'deck_skills'
+  skills = [...SKILLS, { name: 'grill', call: '$grill-as-read-next-6t1x', description: '追问计划。', path: '~/.claude/skills/grill/SKILL.md', copy: 'same' }]
+  await lateFrom(() => page.click(refresh), 50_000)
+  assert.ok([...document.querySelectorAll('.dk-skill__name')].some(each => text(each) === '$grill-as-read-next-6t1x'))
+
+  await page.click(tabNamed(document, '任务'))
+  await page.click(rowOf(document, 70))
+  dropping = 'deck_task'
+  await lateFrom(() => page.advance(60_000), 50_000)
+  assert.equal(detailShown(page)?.crumbs, '任务 / #70')
+  assert.notEqual(document.querySelector('.dk-detail'), null)
+})
+
+// The read of the Tasks the page asked for last, as sent.
+const lastTasksRead = (page: { sent: any[] }) => page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_tasks').at(-1)
+
+test('once a read is late, "刷新" reads anew and draws it; the late read\'s answer coming after that draws nothing', async t => {
+  let dropping = false
+  let tasks: any = TASKS
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' ? (dropping ? undefined : answered(tasks)) : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+
+  dropping = true
+  await page.advance(60_000)
+  const lateRead = lastTasksRead(page)
+  await page.advance(10_000)
+  assert.deepEqual(lateShown(page), LATE)
+
+  dropping = false
+  tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [...TASKS.groups.ready, task(90, '新读到的 9q2w')] } }
+  await page.click(document.querySelector('.dk-head button'))
+  assert.equal(text(rowOf(document, 90).querySelector('.dk-row__title')), '新读到的 9q2w')
+  assert.equal(lateShown(page), undefined)
+  const drawn = text(document.querySelector('#tasks'))
+
+  await page.respond(lateRead, { result: answered({ ...TASKS, groups: { ...TASKS.groups, ready: [task(91, '迟到的 4m7k')] } }) })
+  assert.equal(text(document.querySelector('#tasks')), drawn)
+  assert.deepEqual(freshShown(document), ['刚刚', false])
+})
+
+test('a read that answers at 15 seconds, no other begun meanwhile, says it is late at 10 and draws what it read as it answers', async t => {
+  let dropping = false
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' && dropping ? undefined : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+
+  dropping = true
+  await page.advance(60_000)
+  const lateRead = lastTasksRead(page)
+  await page.advance(10_000)
+  assert.deepEqual(lateShown(page), LATE)
+  await page.advance(5_000)
+
+  await page.respond(lateRead, { result: answered({ ...TASKS, groups: { ...TASKS.groups, ready: [...TASKS.groups.ready, task(90, '慢慢读到的 2c6h')] } }) })
+  assert.equal(lateShown(page), undefined)
+  assert.equal(text(rowOf(document, 90).querySelector('.dk-row__title')), '慢慢读到的 2c6h')
+  assert.deepEqual(freshShown(document), ['刚刚', false])
+})
+
+test('a first read that is late says so in place of the line saying it reads: the project config, or the Tasks', async t => {
+  for (const [dropped, reading] of [['deck_config', '正在读取项目配置…'], ['deck_tasks', '正在读取 Task…']]) {
+    const page = await openPage({ answer: (name, args: any) => (name === dropped ? undefined : deckWithSkills()(name, args)) })
+    const { document } = page
+    const line = [...document.querySelectorAll('.dk-why')].find(each => text(each) === reading)!
+    assert.equal(shown(page, line), true)
+    await page.advance(10_000)
+    assert.equal(shown(page, line), false)
+    assert.deepEqual(lateShown(page), LATE)
+    page.close()
+  }
+})
+
+test('while a read is under way and not late, the timed read and the read as the tab is shown again begin no second read', async t => {
+  let dropping = false
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' && dropping ? undefined : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const reads = () => calledWith(page, 'deck_config').length
+
+  // "刷新" 5 seconds before the timed read.
+  await page.advance(55_000)
+  dropping = true
+  await page.click(document.querySelector('.dk-head button'))
+  const before = reads()
+  await page.advance(5_000)
+  await page.show(false)
+  await page.show(true)
+  assert.equal(lateShown(page), undefined)
+  // The read ends: none was asked for meanwhile to follow it.
+  dropping = false
+  await page.respond(lastTasksRead(page), { result: answered(TASKS) })
+  assert.equal(reads(), before)
+})
+
+test('a late "刷新" whose Tasks are answered while the read after it waits for the skills leaves that read\'s skills to be drawn', async t => {
+  let dropping: string[] = []
+  const page = await openPage({ answer: (name, args: any) => (dropping.includes(name) ? undefined : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+
+  dropping = ['deck_tasks']
+  await page.click(document.querySelector('.dk-head button'))
+  const lateRead = lastTasksRead(page)
+  await page.advance(10_000)
+  assert.deepEqual(lateShown(page), LATE)
+
+  dropping = ['deck_skills']
+  await page.click(document.querySelector('.dk-head button'))
+  const skillsRead = page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_skills').at(-1)
+  await page.respond(lateRead, { result: answered(TASKS) })
+  dropping = []
+  const grill = { name: 'grill', call: '$grill-as-read-last-6t1x', description: '追问计划。', path: '~/.claude/skills/grill/SKILL.md', copy: 'same' }
+  await page.respond(skillsRead, { result: answered({ ok: true, source: { type: 'directory', path: '~/.claude/skills' }, skills: [...SKILLS, grill] }) })
+
+  await page.click(tabNamed(document, '技能'))
+  assert.ok([...document.querySelectorAll('.dk-skill__name')].some(each => text(each) === '$grill-as-read-last-6t1x'))
+})

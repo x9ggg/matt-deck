@@ -31,7 +31,9 @@ export const openPage = async ({
 }: {
   // What the Deck service answers a tool call the Host passes on; the page's
   // document is there to read what the page shows while the call is open.
-  answer: (name: string, args: object, document: Document) => object | Promise<object>
+  // Undefined, the call is not answered yet, and the test answers it later
+  // with `respond`, if ever.
+  answer: (name: string, args: object, document: Document) => object | undefined | Promise<object | undefined>
   // What the Host answers a prefill, `ui/message`: {} as Codex does (#68)
   // unless the test says otherwise, an error where it refuses one, nothing
   // yet where it gives undefined, and the test answers later with
@@ -128,7 +130,10 @@ export const openPage = async ({
       })
     } else if (data.method === 'tools/call') {
       try {
-        toPage({ id: data.id, result: await answer(data.params.name, data.params.arguments, page.window.document) })
+        const result = await answer(data.params.name, data.params.arguments, page.window.document)
+        if (result !== undefined) {
+          toPage({ id: data.id, result })
+        }
       } catch (error) {
         // The test's answer threw or rejected: the next settled() hands the
         // error to the test waiting on the page, or close() does if none waits.

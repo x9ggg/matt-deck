@@ -980,6 +980,32 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <p class="dk-why">正在读取 Task…</p>
     </div></div>
   </section>
+  <section class="shot" id="tasks-slow">
+    <h3>读取迟迟没有应答<code>#tasks-slow</code></h3>
+    <p>一次读取 10 秒还没结束。“刷新”可点，后面的读取不再等它；它晚到的回答，期间没有新的读取开始时照常画出来，否则丢掉。第一次读取就迟了的，“正在读取…”那一行换成这条提示。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-top">
+      <header class="dk-head">
+        <span class="dk-chip dk-chip--project"><span>matt-deck</span></span>
+        <span class="dk-chip"><span>Session <b>8186a893</b></span></span>
+        <span class="dk-head__fresh caption is-stale">没有应答</span>
+        <button class="dk-btn dk-btn--sm" type="button">刷新</button>
+      </header>
+      <div class="dk-tabs" role="tablist">
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">下一步</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="true">任务</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">地图</button>
+        <button class="dk-tab" type="button" role="tab" aria-selected="false">技能</button>
+      </div>
+      </div>
+      <div class="dk-notice is-warn" role="status">
+        <div class="dk-notice__body">
+          <div class="dk-notice__line"><span class="dk-notice__title heading">Deck 服务还没应答。</span></div>
+          <span class="dk-notice__text">点“刷新”重新读取。</span>
+        </div>
+      </div>
+    </div></div>
+  </section>
   <h2>Task 详情</h2>
   <section class="shot" id="detail">
     <h3>被阻塞的 Task<code>#detail</code></h3>

@@ -311,6 +311,8 @@ body{margin:0;background:var(--ground)}
 .dk-parent__link{min-width:0;padding:0;border:0;background:none;color:var(--progress);font:inherit;text-align:left;text-decoration:underline;text-overflow:ellipsis;text-underline-offset:3px;white-space:nowrap;overflow:hidden;cursor:pointer}
 /* A Task blocking the one shown goes on into it. */
 .dk-edge{cursor:pointer}
+/* A read that is late says so in place of the line saying it reads. */
+#late:not([hidden]) ~ #loading,#late:not([hidden]) ~ [data-panel] #tasks-loading,#late:not([hidden]) ~ [data-panel] #map-loading{display:none}
 /* A badge's words are in its colours, whatever their row gives them. */
 .dk-pane .dk-badge span{color:inherit}
 </style>
@@ -341,6 +343,12 @@ body{margin:0;background:var(--ground)}
       <button class="dk-tab" type="button" role="tab" aria-selected="false" data-tab="skills">技能</button>
     </div>
     <div id="result"></div>
+  </div>
+  <div class="dk-notice is-warn" role="status" id="late" hidden>
+    <div class="dk-notice__body">
+      <div class="dk-notice__line"><span class="dk-notice__title heading">Deck 服务还没应答。</span></div>
+      <span class="dk-notice__text">点“刷新”重新读取。</span>
+    </div>
   </div>
   <p class="dk-why" id="loading">正在读取项目配置…</p>
   <div class="dk-notice is-danger" role="status" id="failed" hidden>
@@ -470,17 +478,22 @@ body{margin:0;background:var(--ground)}
   // undefined while there is nothing read to say how fresh it is. The head
   // writes it here alone, its text and its two classes together.
   let readAt
+  // Whether the read under way is late: 10 seconds in and not ended. The
+  // head says so then, and the content at its top.
+  let isLate = false
   const showFreshness = () => {
     const fresh = $('fresh')
     const minutes = typeof readAt === 'number' ? Math.floor(Math.max(0, Date.now() - readAt) / 60_000) : undefined
+    $('late').hidden = !isLate
     fresh.textContent =
-      readAt === 'failed' ? '读取失败'
+      isLate ? '没有应答'
+      : readAt === 'failed' ? '读取失败'
       : minutes === undefined ? ''
       : minutes === 0 ? '刚刚'
       : minutes < 60 ? `${minutes} 分钟前`
       : `${Math.floor(minutes / 60)} 小时前`
-    fresh.classList.toggle('is-failed', readAt === 'failed')
-    fresh.classList.toggle('is-stale', minutes > 10)
+    fresh.classList.toggle('is-failed', !isLate && readAt === 'failed')
+    fresh.classList.toggle('is-stale', isLate || minutes > 10)
   }
   setInterval(showFreshness, 30_000)
 
@@ -769,13 +782,16 @@ body{margin:0;background:var(--ground)}
     showPrefills()
   }
   // The step shown: the way to it, what it drew last, then what it draws now.
-  const drawStep = async () => {
+  // Drawn for a read of the page's no longer `current`, it draws nothing.
+  const drawStep = async (current = () => true) => {
     if (into === undefined) return
     const step = into.steps.at(-1)
     const way = [tabs.find(tab => tab.dataset.tab === into.tab).textContent, ...into.via, ...into.steps.slice(0, -1).map(each => each.crumb)]
     $('crumbs').replaceChildren(`${way.join(' / ')} / `, el('b', '', step.crumb))
     showStep(step)
-    step.drawn = await step.draw()
+    const drawn = await step.draw()
+    if (!current()) return
+    step.drawn = drawn
     if (into?.steps.at(-1) === step) showStep(step)
   }
 
@@ -1030,12 +1046,14 @@ body{margin:0;background:var(--ground)}
   // Reads the Tasks, the Task Source again when `refresh` asks for it, then
   // their Map Views from that read. A read that fails says why, in "任务" and
   // in "地图", above what was read before, if anything.
-  // Answers whether the Tasks were read.
-  const readTasks = async refresh => {
+  // Answers whether the Tasks were read. A read no longer `current` draws
+  // nothing of what it read.
+  const readTasks = async (refresh, current) => {
     let failure
     try {
       const answer = await callTool('deck_tasks', refresh ? { refresh: true } : {})
       const viewed = answer.ok ? await callTool('deck_map', { session: session.session }) : answer
+      if (!current()) return false
       if (viewed.ok) {
         list = answer
         maps = viewed.maps
@@ -1049,6 +1067,7 @@ body{margin:0;background:var(--ground)}
     } catch (error) {
       failure = [`Deck 服务出错：${error.message}。点“刷新”重试。`]
     }
+    if (!current()) return false
     $('tasks-loading').hidden = $('map-loading').hidden = true
     for (const notice of [$('tasks-failed'), $('map-failed')]) {
       notice.hidden = failure === undefined
@@ -1070,22 +1089,29 @@ body{margin:0;background:var(--ground)}
   // the config of a project that is not configured, and with the skills.
   let configureCall
 
-  // Whether the skills were read since the page opened, or since a read found
-  // the project not configured. A timed read, or the read as the tab is shown
-  // again, reads them only while it is false; "刷新" reads them again whatever
-  // it is.
+  // Whether the skills the last read of them asked for were drawn, since the
+  // page opened, or since a read found the project not configured. A timed
+  // read, or the read as the tab is shown again, reads them only while it is
+  // false and no read of them is out for a read of the page still current;
+  // "刷新" reads them again whatever it is.
   let skillsRead = false
+  const skillsUnread = () => !skillsRead && (skillsAsked === undefined || !skillsAsked.current())
   // The skills the last read of the Skill Source listed.
   let skillsListed = []
-  // The read of the skills asked for last: only its answer is shown, and an
-  // earlier one answering after it is dropped.
+  // The read of the skills asked for last, with whether the read of the page
+  // it is for is `current`: only its answer is shown, and an earlier one
+  // answering after it is dropped.
   let skillsAsked
 
   // The reads asked for, one after another: each begins once the one before
-  // it has ended, and "刷新" is off until the last has. Each answers whether
-  // the project config and the Session were read, and the Tasks too in a
-  // Configured Project.
+  // it has ended, or is late, and "刷新" is off until the last has. Each
+  // answers whether the project config and the Session were read, and the
+  // Tasks too in a Configured Project. A late read whose answers come once
+  // another has begun draws nothing of them; with none begun, it draws them
+  // as they come.
   let reading = Promise.resolve()
+  // The read begun last.
+  let lastRead
   const read = async (refresh = false) => {
     $('refresh').disabled = true
     const before = reading
@@ -1094,8 +1120,17 @@ body{margin:0;background:var(--ground)}
       ended = resolve
     }))
     await before
+    lastRead = asked
+    const current = () => lastRead === asked
+    const late = setTimeout(() => {
+      isLate = true
+      showFreshness()
+      ended()
+      if (reading === asked) $('refresh').disabled = false
+    }, 10_000)
     try {
       const [config, named] = await Promise.all([callTool('deck_config'), callTool('deck_session')])
+      if (!current()) return false
       session = named
       // In a Configured Project, the page says Deck's hook may not run while
       // no call from it was received: Codex runs it only once the person
@@ -1104,6 +1139,7 @@ body{margin:0;background:var(--ground)}
       // hook and reads the rest as usual: the Tasks' own read says why the
       // local state cannot be read.
       const hook = config.configured ? await callTool('deck_hook').catch(() => undefined) : undefined
+      if (!current()) return false
       // Configured again, the project's skills are read again; until that
       // read answers, what an earlier one said of implement no longer holds,
       // a read still out included, and every "执行" is off, whether or not
@@ -1113,7 +1149,9 @@ body{margin:0;background:var(--ground)}
         skillsAsked = undefined
         implement = undefined
         showExecutable()
-        configureCall = (await callTool('deck_configure')).call
+        const configured = await callTool('deck_configure')
+        if (!current()) return false
+        configureCall = configured.call
       }
       $('project').firstElementChild.textContent = config.workspace.slice(config.workspace.lastIndexOf('/') + 1)
       $('session').querySelector('b').textContent = session.sessionShort
@@ -1130,18 +1168,20 @@ body{margin:0;background:var(--ground)}
       }
       let tasksRead = true
       if (config.configured) {
-        tasksRead = await readTasks(refresh)
+        tasksRead = await readTasks(refresh, current)
+        if (!current()) return false
         // Read again, the page no longer says a request was not made.
         if (refresh) asking = { ...asking, failure: undefined }
         // Every tab's "执行" goes by the skills: they are read with the first
         // read of the Tasks, and again with "刷新".
-        if (refresh || !skillsRead) await readSkills()
+        if (refresh || skillsUnread()) await readSkills(current)
         // A step drawn from the Tasks draws again with each read of them;
         // every step with "刷新", after what it is drawn from is read again.
-        if (refresh || into?.steps.at(-1).withTasks) await drawStep()
+        if (current() && (refresh || into?.steps.at(-1).withTasks)) await drawStep(current)
       }
       return tasksRead
     } catch (error) {
+      if (!current()) return false
       $('failed').querySelector('.dk-notice__text').textContent = `Deck 服务出错：${error.message}。点“刷新”重试。`
       $('loading').hidden = true
       $('failed').hidden = false
@@ -1149,6 +1189,11 @@ body{margin:0;background:var(--ground)}
       showFreshness()
       return false
     } finally {
+      clearTimeout(late)
+      if (current() && isLate) {
+        isLate = false
+        showFreshness()
+      }
       ended()
       if (reading === asked) $('refresh').disabled = false
     }
@@ -1736,11 +1781,13 @@ body{margin:0;background:var(--ground)}
     $('skill-list').replaceChildren(...shown)
   }
 
-  const readSkills = async () => {
-    skillsRead = true
-    const asked = (skillsAsked = {})
+  // A read of the page's no longer `current` draws nothing of the skills.
+  const readSkills = async (current = () => true) => {
+    skillsRead = false
+    const asked = (skillsAsked = { current })
     const [read, configure] = await Promise.allSettled([callTool('deck_skills'), callTool('deck_configure')])
-    if (asked !== skillsAsked) return
+    if (asked !== skillsAsked || !current()) return
+    skillsRead = true
     // The call every "重跑配置" fills in; one not given leaves the one given
     // before, if any, and with none they are off.
     if (configure.status === 'fulfilled') configureCall = configure.value.call
@@ -1762,7 +1809,7 @@ body{margin:0;background:var(--ground)}
   // The 技能 tab shows the list the skills were last read into: opened before
   // the read of the Pane has read them, it reads them.
   const showSkillsTab = async () => {
-    if (!skillsRead) await readSkills()
+    if (skillsUnread()) await readSkills()
   }
 
   // ask-matt as the last read of the skills lists it: undefined before the
@@ -1938,7 +1985,7 @@ body{margin:0;background:var(--ground)}
   // ask-matt: opened before the read of the Pane has read them, it reads them.
   const showNextTab = async () => {
     showNext()
-    if (!skillsRead) await readSkills()
+    if (skillsUnread()) await readSkills()
   }
 
   const tabs = [...$('tabs').querySelectorAll('[role="tab"]')]
