@@ -447,10 +447,12 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
           break
         }
       }
-      // A JSON string is a TOML basic string.
+      // A JSON string is a TOML basic string. Deck's lines take the first line
+      // ending in the config besides its registration, LF when there is none.
       const launch = [join(PLUGIN, 'server', 'main.ts'), '--host', 'codex']
-      const table = `[${TABLE}]\ncommand = ${JSON.stringify(node)}\nargs = [${launch.map(arg => JSON.stringify(arg)).join(', ')}]\n`
-      const gap = kept === '' ? '' : kept.endsWith('\n') ? '\n' : '\n\n'
+      const eol = kept.match(/\r?\n/)?.[0] ?? '\n'
+      const table = `[${TABLE}]${eol}command = ${JSON.stringify(node)}${eol}args = [${launch.map(arg => JSON.stringify(arg)).join(', ')}]${eol}`
+      const gap = kept === '' ? '' : kept.endsWith('\n') ? eol : `${eol}${eol}`
       await mkdir(dirname(config), { recursive: true })
       await writeFile(config, `${kept}${gap}${table}`)
       await mkdir(skillDir, { recursive: true })

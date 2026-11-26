@@ -213,6 +213,49 @@ test('uninstall and install read a config written with CRLF, its registration\'s
   }
 })
 
+// The line endings a text holds, each once.
+const endings = (text: string) => [...new Set(text.match(/\r?\n/g))]
+
+test('install writes Deck\'s registration in a config written with CRLF with CRLF alone, its last line ending or not, and again the same; uninstall gives back the one ending byte for byte', async () => {
+  for (const before of [crlf(BEFORE), crlf(BEFORE).slice(0, -2)]) {
+    const { user, config } = await withConfig(before)
+
+    await run(user, 'install')
+    const installed = await readFile(config, 'utf8')
+    await run(user, 'install')
+
+    assert.ok(installed.startsWith(before), installed)
+    assert.deepEqual(endings(installed), ['\r\n'], installed)
+    assert.equal(await readFile(config, 'utf8'), installed)
+
+    await run(user, 'uninstall')
+
+    const uninstalled = await readFile(config, 'utf8')
+    assert.deepEqual(endings(uninstalled), ['\r\n'], uninstalled)
+    if (before.endsWith('\n')) {
+      assert.equal(uninstalled, before)
+    }
+  }
+})
+
+test('install writes Deck\'s registration with the line ending of the config\'s first line where CRLF and LF mix, and with LF where no line ends', async () => {
+  const [first, ...rest] = BEFORE.split(/(?<=\n)/)
+  for (const [before, eol] of [
+    [`${crlf(first!)}${rest.join('')}`, '\r\n'],
+    [`${first}${crlf(rest.join(''))}`, '\n'],
+    ['', '\n'],
+    ['model = "gpt-5"', '\n'],
+  ] as const) {
+    const { user, config } = await withConfig(before)
+
+    await run(user, 'install')
+
+    const installed = await readFile(config, 'utf8')
+    assert.ok(installed.startsWith(before), installed)
+    assert.deepEqual(endings(installed.slice(before.length)), [eol], installed)
+  }
+})
+
 test('install and uninstall take a line in a multi-line string for text, not a header, however it looks, its lines ending in LF or CRLF', async () => {
   const strings = [['"""', '"""'], ["'''", "'''"], ['"""Starts here', 'and \\""" ends here"""']]
   for (const [open, close, eol] of strings.flatMap(([open, close]) => [String, crlf].map(eol => [open!, close!, eol] as const))) {
@@ -239,9 +282,7 @@ test('uninstall removes a multi-line string a person put in Deck\'s table whole,
 
       await run(user, 'uninstall')
 
-      // Line endings aside: the blank line install set its table apart with
-      // ends in LF in a CRLF config, and stays.
-      assert.equal(eol(await readFile(config, 'utf8')), eol(`${BEFORE}\n[after]\nkey = 2\n`), string)
+      assert.equal(await readFile(config, 'utf8'), eol(`${BEFORE}\n[after]\nkey = 2\n`), string)
     }
   }
 })
