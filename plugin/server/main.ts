@@ -544,7 +544,7 @@ const tools = {
           description: 'The number of the Task to do next, or null when there is none.',
         },
         nextStep: { type: 'string', description: 'The next step on it.' },
-        skill: { type: 'string', description: 'The skill to use, as it is called (e.g. /tdd); "" for none.' },
+        skill: { type: 'string', description: `The skill to use, as it is called (e.g. ${callOf(host)('tdd', undefined)}); "" for none.` },
         reason: { type: 'string', description: 'Why this Task, now.' },
         blockers: { type: 'string', description: 'What stands in the way; "" for nothing.' },
       },

@@ -2576,6 +2576,25 @@ test('deck_recommend keeps a Recommendation by its request, which deck_recommend
   assert.equal(none.structuredContent.recommendation.task, null)
 })
 
+test('deck_recommend asks for the skill as this host calls it: /tdd for Claude Code, $tdd for Codex', async t => {
+  const claudeCode = startDeck(await configured(), { HOME: await home() })
+  const codex = startDeck(await configured(), { HOME: await home() }, 'codex')
+  t.after(claudeCode.stop)
+  t.after(codex.stop)
+
+  const described = await Promise.all(
+    [claudeCode, codex].map(async deck => {
+      const { result } = await deck.request('tools/list')
+      return result.tools.find((tool: any) => tool.name === 'deck_recommend').inputSchema.properties.skill.description
+    }),
+  )
+
+  assert.deepEqual(described, [
+    'The skill to use, as it is called (e.g. /tdd); "" for none.',
+    'The skill to use, as it is called (e.g. $tdd); "" for none.',
+  ])
+})
+
 test('deck_recommend takes the request\'s id, a Task number or null, and the four texts', async t => {
   const deck = startDeck(await configured(), { HOME: await home() })
   t.after(deck.stop)
