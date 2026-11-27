@@ -7427,3 +7427,37 @@ test('the focus on a row filtered away goes on the first control shown, not on o
   await page.advance(60_000)
   assert.equal(document.activeElement, document.querySelector('#filter button'))
 })
+
+test('"我现在该做什么" answered after the person moved the focus elsewhere, in the page or to the Host, leaves the focus there; so does a prefill not answered in 10 seconds', async t => {
+  const moves: [string, (page: Awaited<ReturnType<typeof openPage>>) => Element | null][] = [
+    ['a tab', page => { const tab = tabNamed(page.document, '任务') as HTMLElement; tab.focus(); return tab }],
+    ['"刷新"', page => { const refresh = page.document.querySelector<HTMLElement>('.dk-head > button')!; refresh.focus(); return refresh }],
+    ['the Host', page => { page.window.dispatchEvent(new page.window.FocusEvent('blur')); return page.document.body }],
+  ]
+  for (const [where, move] of moves) {
+    let holding = true
+    const deck = deckThatRecommends()
+    const page = await openPage({ answer: (name, args: any) => (name === 'deck_ask' && holding ? undefined : deck.answer(name, args)) })
+    t.after(page.close)
+    await page.click(tabNamed(page.document, '下一步'))
+    const primary = button(page, '我现在该做什么') as HTMLElement
+    primary.focus()
+    primary.click()
+    await pastAFrame()
+    const there = move(page)
+    holding = false
+    await page.respond(page.sent.filter(message => message.params?.name === 'deck_ask').at(-1), { result: deck.answer('deck_ask', {}) as any })
+    assert.equal(page.document.activeElement, there, where)
+  }
+
+  // The Host not answering the prefill in 10 seconds draws the tab again too.
+  const deck = deckThatRecommends()
+  const page = await openPage({ answer: deck.answer, answerMessage: () => undefined })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '下一步'))
+  ;(button(page, '我现在该做什么') as HTMLElement).focus()
+  await page.click(button(page, '我现在该做什么'))
+  page.window.dispatchEvent(new page.window.FocusEvent('blur'))
+  await page.advance(10_000)
+  assert.equal(page.document.activeElement, page.document.body)
+})

@@ -2160,7 +2160,10 @@ button.dk-row{color:inherit}
     const focused = document.activeElement === button
     const drawn = () => {
       showNext()
-      if (focused && !$('next').contains(document.activeElement)) $('next').querySelector('[data-focus="ask"]')?.focus({ preventScroll: true })
+      // Moved elsewhere by the person meanwhile, in the page or to the Host,
+      // the focus stays there.
+      const nowhere = document.activeElement === null || document.activeElement === document.body
+      if (focused && !away && nowhere) $('next').querySelector('[data-focus="ask"]')?.focus({ preventScroll: true })
     }
     button.disabled = true
     let answer
