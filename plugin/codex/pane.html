@@ -332,7 +332,7 @@ button.dk-row{color:inherit}
 /* A row's or card's "详情" shows under the mouse or with the focus in it,
    and takes the focus while unseen. */
 .dk-reveal{opacity:0}
-.dk-row:hover .dk-reveal,.dk-row:focus-within .dk-reveal,.dk-row.is-selected .dk-reveal,.dk-card:hover .dk-reveal,.dk-card:focus-within .dk-reveal{opacity:1}
+.dk-row:hover .dk-reveal,.dk-row:focus-within .dk-reveal,.dk-card:hover .dk-reveal,.dk-card:focus-within .dk-reveal{opacity:1}
 /* A badge's words are in its colours, whatever their row gives them. */
 .dk-pane .dk-badge span{color:inherit}
 </style>
@@ -614,7 +614,10 @@ button.dk-row{color:inherit}
   // so too while the window has given the focus to the Host.
   const keepFocus = (scope, draw) => {
     const from = document.activeElement
-    const key = from !== null && from !== scope && scope.contains(from) && !away && takeover === undefined && refocus === undefined ? focusKey(from) : undefined
+    // The asking places the focus on its own buttons, and in the place of
+    // the row or card it is asked in.
+    const asking = takeover !== undefined && from !== null && (from.dataset?.takeover !== undefined || from.closest('[data-focus]')?.dataset.focus === `${takeover.place === 'map' ? 'card' : 'row'}:${takeover.number}`)
+    const key = from !== null && from !== scope && scope.contains(from) && !away && !asking && refocus === undefined ? focusKey(from) : undefined
     draw()
     if (key === undefined || scope.contains(document.activeElement)) return
     const controls = [...scope.querySelectorAll('button, [data-focus]')].filter(each => each.closest('[hidden]') === null)
@@ -1363,7 +1366,17 @@ button.dk-row{color:inherit}
   let reading = Promise.resolve()
   // The read begun last.
   let lastRead
+  // Whether "刷新" had the focus as the reads put it off: the browser moves
+  // the focus off a button gone off, and it goes back on it once they end,
+  // where the person moved it nowhere else meanwhile.
+  let refreshFocused = false
+  const refreshOn = () => {
+    $('refresh').disabled = false
+    if (refreshFocused && !away && (document.activeElement === null || document.activeElement === document.body)) $('refresh').focus({ preventScroll: true })
+    refreshFocused = false
+  }
   const read = async (refresh = false) => {
+    if (!$('refresh').disabled) refreshFocused = document.activeElement === $('refresh')
     $('refresh').disabled = true
     const before = reading
     let ended
@@ -1377,7 +1390,7 @@ button.dk-row{color:inherit}
       isLate = true
       showFreshness()
       ended()
-      if (reading === asked) $('refresh').disabled = false
+      if (reading === asked) refreshOn()
     }, 10_000)
     try {
       const [config, named] = await Promise.all([callTool('deck_config'), callTool('deck_session')])
@@ -1452,7 +1465,7 @@ button.dk-row{color:inherit}
         showFreshness()
       }
       ended()
-      if (reading === asked) $('refresh').disabled = false
+      if (reading === asked) refreshOn()
     }
   }
 

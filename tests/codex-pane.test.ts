@@ -7210,6 +7210,8 @@ test('each acceptance criterion says to a screen reader alone whether it is chec
   const items = [...document.querySelectorAll('.dk-prose li')]
   assert.deepEqual(items.map(text), ['已勾 勾了的 3n8q', '未勾 没勾的 6t2w'])
   assert.deepEqual(items.map(each => each.classList.contains('is-checked')), [true, false])
+  // The checked box filled, the other not.
+  assert.deepEqual(items.map(each => window.getComputedStyle(each, '::before').backgroundColor !== window.getComputedStyle(items[1]!, '::before').backgroundColor), [true, false])
   // Unseen: out of the flow, one pixel, clipped.
   for (const said of items.map(each => each.firstElementChild!)) {
     const style = window.getComputedStyle(said)
@@ -7239,8 +7241,6 @@ test('the focus on a control of 任务 or of the wall stays on that control thro
     assert.deepEqual(focusIs(document), then)
     ;(document.querySelector('.dk-head > button') as HTMLElement).click()
     await page.settled()
-    ;(find() as HTMLElement).focus()
-    await page.advance(60_000)
     assert.deepEqual(focusIs(document), then)
   }
   await keeps(() => document.querySelector('#groups button.dk-group__more'), [undefined, '还有 2 个'])
@@ -7284,9 +7284,18 @@ test('the focus on a button whose Task changed state goes on its row; on a row f
   assert.equal(document.activeElement, refresh)
 })
 
-test('"我现在该做什么" clicked leaves the focus on "再问一次", which keeps it as it is clicked', async t => {
+// Real time past a frame of the browser's, in which it moves the focus off
+// a button gone off (jsdom too, every 16 milliseconds).
+const pastAFrame = () => new Promise(resolve => setTimeout(resolve, 50))
+
+test('"我现在该做什么" clicked leaves the focus on "再问一次", which keeps it as it is clicked, though each goes off and the browser moves the focus off it', async t => {
   const deck = deckThatRecommends()
-  const page = await openNext(deck)
+  const page = await openNext({
+    answer: async (name: string, args: any) => {
+      if (name === 'deck_ask') await pastAFrame()
+      return deck.answer(name, args)
+    },
+  })
   t.after(page.close)
   const { document } = page
   ;(button(page, '我现在该做什么') as HTMLElement).focus()
@@ -7294,13 +7303,47 @@ test('"我现在该做什么" clicked leaves the focus on "再问一次", which 
   assert.equal(document.activeElement, button(page, '再问一次'))
   await page.click(button(page, '再问一次'))
   assert.equal(document.activeElement, button(page, '再问一次'))
-  // A browser that moves the focus off the button as it goes off, before
-  // the tab is drawn again: the focus still ends on "再问一次".
-  const again = button(page, '再问一次') as HTMLElement
-  again.focus()
-  again.addEventListener('click', () => again.blur())
-  await page.click(again)
-  assert.equal(document.activeElement, button(page, '再问一次'))
+})
+
+test('the focus on "刷新" stays on it through a read, though it goes off and the browser moves the focus off it; moved elsewhere meanwhile, it stays there', async t => {
+  let elsewhere = false
+  const page = await openPage({
+    answer: async (name, args: any, document) => {
+      await pastAFrame()
+      if (elsewhere && name === 'deck_map') (rowOf(document, 70) as HTMLElement).focus()
+      return deckWithSkills()(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+  const refresh = document.querySelector<HTMLElement>('.dk-head > button')!
+  refresh.focus()
+  await page.advance(60_000)
+  assert.equal(document.activeElement, refresh)
+  await page.click(refresh)
+  assert.equal(document.activeElement, refresh)
+
+  elsewhere = true
+  await page.advance(60_000)
+  assert.equal(document.activeElement, rowOf(document, 70))
+})
+
+test('the focus on another row\'s or card\'s control stays on it through a read while a takeover is asked elsewhere', async t => {
+  const page = await openPage({ answer: deckThatOccupies().answer })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowButton(document, 72, '接管'))
+  ;(rowExecute(document, 70) as HTMLElement).focus()
+  await page.advance(60_000)
+  assert.notEqual(askShown(page), undefined)
+  assert.deepEqual(focusIs(document), ['#70', '执行'])
+
+  await page.click(tabNamed(document, '地图'))
+  await page.click(cardButton(document, 72, '接管'))
+  ;(detailsOf(wallCard(document, 76)!) as HTMLElement).focus()
+  await page.advance(60_000)
+  assert.notEqual(askShown(page), undefined)
+  assert.deepEqual(focusIs(document), ['#76', '详情'])
 })
 
 test('the focus left on a row\'s button as the person went to the Host is not put back as the list is drawn again', async t => {
@@ -7369,4 +7412,63 @@ test('"收尾核对" of one Spec leaves another Spec\'s on', async t => {
   await page.click(closeout(64))
   assert.deepEqual([text(closeout(64)), closeout(64).disabled], ['已填入', true])
   assert.deepEqual([text(closeout(80)), closeout(80).disabled], ['收尾核对', false])
+})
+
+test('the focus on "还有 N 个" stays on it as N changes, under the list and under the wall, and on "执行这个 Task" through a read', async t => {
+  const blocked = (count: number) => Array.from({ length: count }, (_, index) => task(80 + index, `被挡 ${80 + index}`, { blockers: [70], blockedBy: [70] }))
+  let count = 7
+  const tasks = () => ({ ...TASKS, groups: { ...TASKS.groups, blocked: blocked(count) } })
+  const maps = () => ({ ...MAPS, maps: [{ ...MAPS.maps[0], wall: [...MAPS.maps[0]!.wall, ...blocked(count).map(each => card(each, 'blocked'))] }, MAPS.maps[1]] })
+  const deck = deckThatRecommends()
+  const page = await openPage({
+    answer: (name, args: any) => (name === 'deck_tasks' ? answered(tasks()) : name === 'deck_map' ? answered(maps()) : deck.answer(name, args)),
+  })
+  t.after(page.close)
+  const { document } = page
+
+  ;(document.querySelector('#groups button.dk-group__more') as HTMLElement).focus()
+  count = 8
+  await page.advance(60_000)
+  assert.equal(document.activeElement, document.querySelector('#groups button.dk-group__more'))
+  assert.equal(text(document.activeElement), '还有 3 个')
+
+  await page.click(tabNamed(document, '地图'))
+  ;(document.querySelector('#map button.dk-group__more') as HTMLElement).focus()
+  const before = text(document.activeElement)
+  count = 9
+  await page.advance(60_000)
+  assert.equal(document.activeElement, document.querySelector('#map button.dk-group__more'))
+  assert.notEqual(text(document.activeElement), before)
+
+  await page.click(tabNamed(document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+  const recommended = () => document.querySelector<HTMLElement>('.dk-rec [data-execute]')!
+  recommended().focus()
+  await page.advance(60_000)
+  assert.equal(document.activeElement, recommended())
+})
+
+test('the focus on a row filtered away goes on the first control shown, not on one the tab hides', async t => {
+  let copy = 'different'
+  let tasks: any = TASKS
+  const page = await openPage({
+    answer: (name, args: any) =>
+      name === 'deck_tasks' ? answered(tasks) : deckWithSkills(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)))(name, args),
+  })
+  t.after(page.close)
+  const { document } = page
+  // "重跑配置" drawn in the notice that "执行" is off, which then goes.
+  assert.notEqual(document.querySelector('#tasks-noexec button'), null)
+  copy = 'same'
+  await page.click(document.querySelector('.dk-head > button'))
+  assert.equal(shown(page, document.querySelector('#tasks-noexec')), false)
+  assert.notEqual(document.querySelector('#tasks-noexec button'), null)
+
+  await page.click([...document.querySelectorAll('#filter button')][2]!)
+  ;(rowButton(document, 72, '接管') as HTMLElement).focus()
+  tasks = { ...TASKS, groups: { ...TASKS.groups, inProgress: TASKS.groups.inProgress.filter(each => each.number !== 72) } }
+  await page.advance(60_000)
+  assert.equal(document.activeElement, document.querySelector('#filter button'))
 })

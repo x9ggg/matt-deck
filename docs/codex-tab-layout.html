@@ -303,10 +303,12 @@ body{margin:0;background:var(--ground)}
 .dk-pane{max-width:720px;margin:0 auto}
 /* 行和卡片的“详情”：鼠标所在或有焦点时显出来。只给读屏的字看不见。 */
 .dk-reveal{opacity:0}
-.dk-row:hover .dk-reveal,.dk-row:focus-within .dk-reveal,.dk-row.is-selected .dk-reveal,.dk-card:hover .dk-reveal,.dk-card:focus-within .dk-reveal{opacity:1}
+.dk-row:hover .dk-reveal,.dk-row:focus-within .dk-reveal,.dk-card:hover .dk-reveal,.dk-card:focus-within .dk-reveal{opacity:1}
 .dk-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
 /* ==== 4. 这份稿子自己的排版，不属于页面 ==== */
+/* 稿子里选中的那一行画成鼠标在上面的样子，“详情”显出来。 */
+.shot .dk-row.is-selected .dk-reveal{opacity:1}
 html{background:var(--surface-sunken)}
 body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:20px}
 .sheet{box-sizing:border-box;width:672px;max-width:100%;margin:0 auto;padding:16px 16px 96px;overflow-x:auto}
