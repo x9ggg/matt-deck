@@ -4549,7 +4549,7 @@ test('while the Occupancy is being moved "取消" is off with "接管", and a cl
   assert.deepEqual(prefills(page), [])
 })
 
-test('a takeover whose read again finds the project not configured fills in nothing', async t => {
+test('a takeover whose read again finds the project not configured fills in nothing, and says the Task is this Session\'s and to configure it, then release and execute again', async t => {
   let configured = true
   const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
     configured = false
@@ -4565,6 +4565,13 @@ test('a takeover whose read again finds the project not configured fills in noth
   assert.equal(shown(page, document.querySelector('[role="tablist"]')), false)
   assert.deepEqual(prefills(page), [])
   assert.deepEqual(calledWith(page, 'deck_execute'), [])
+  assert.deepEqual(resultShown(page), {
+    order: ['抬头', '结果提示'],
+    role: 'status',
+    glyph: true,
+    title: '#72 已转给本 Session，Execute Prompt 没有填入',
+    said: '此项目未配置。配置之后，点“释放”再点“执行”。',
+  })
 })
 
 // The Deck service failing deck_config from the call on, as a read sees it.
@@ -4615,7 +4622,7 @@ test('a takeover that moved nothing, read again as the Deck service fails, says 
   assert.deepEqual(prefills(page), [])
 })
 
-test('a takeover that moved the Occupancy, read again as the Deck service fails, closes the confirmation and fills in nothing; read once more, the row is this Session\'s', async t => {
+test('a takeover that moved the Occupancy, read again as the Deck service fails, closes the confirmation, fills in nothing and says the Tasks were not read; read once more, the row is this Session\'s', async t => {
   const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
     breaking.state.broken = true
     return deck.occupyAsIs(args)
@@ -4632,6 +4639,7 @@ test('a takeover that moved the Occupancy, read again as the Deck service fails,
   assert.equal(askShown(page), undefined)
   assert.deepEqual(prefills(page), [])
   assert.deepEqual(calledWith(page, 'deck_execute'), [])
+  assert.deepEqual(resultShown(page), movedNotFilled('接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。'))
 
   // Read again, the row is this Session's.
   breaking.state.broken = false
@@ -4688,7 +4696,7 @@ test('a takeover that moved nothing has "接管" on again, the focus on it, befo
   }
 })
 
-test('a takeover that moved the Occupancy, read again as the Task list cannot be read, fills in nothing; read once more, the row is this Session\'s', async t => {
+test('a takeover that moved the Occupancy, read again as the Task list cannot be read, fills in nothing and says the Tasks were not read under "读取 Task 失败"; read once more, the row is this Session\'s', async t => {
   const deck = deckThatOccupies()
   let failing = false
   const page = await openPage({
@@ -4707,6 +4715,9 @@ test('a takeover that moved the Occupancy, read again as the Task list cannot be
   assert.equal(askShown(page), undefined)
   assert.deepEqual(prefills(page), [])
   assert.deepEqual(calledWith(page, 'deck_execute'), [])
+  assert.deepEqual(resultShown(page), movedNotFilled('接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。'))
+  assert.equal(shown(page, document.getElementById('tasks-failed')), true)
+  assert.equal(text(document.getElementById('tasks-failed')!.querySelector('.dk-notice__title')), '读取 Task 失败')
   assert.equal(text(rowOf(document, 72).querySelector('.dk-row__meta')), '进行中 · 77e0aa15 ready-for-agent')
   assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['接管'])
 
@@ -5183,6 +5194,274 @@ test('a takeover that moved the Occupancy, its Execute Prompt refused by the Hos
   assert.deepEqual(buttonsIn(document.querySelector('.dk-top .dk-notice.is-danger')), [])
   assert.deepEqual(calledWith(page, 'deck_release'), [])
   assert.equal(prefills(page).length, 1)
+})
+
+// The result notice of an Execute Prompt the Deck service did not give, and
+// why, under the tabs.
+const noPrompt = (said: string) => ({ order: ['抬头', '标签页', '结果提示'], role: 'status', glyph: true, title: '没有填入输入框', said })
+const NO_IMPLEMENT = answered({ ok: false, failure: { kind: 'unknown-skill', message: 'no skill implement in the Skill Source 2w7d' } })
+
+test('"执行" the Deck service gives no Execute Prompt for, as implement is gone from the Skill Source, says so under the tabs, in 任务, in a detail, in 地图 and in 下一步', async t => {
+  const deck = deckThatRecommends()
+  let gone = false
+  const page = await openPage({ answer: (name, args) => (name === 'deck_execute' && gone ? NO_IMPLEMENT : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+  gone = true
+  const said = 'Skill Source 里没有 implement。重跑配置之后恢复。'
+
+  await page.click(document.querySelector('.dk-rec [data-execute]'))
+  assert.deepEqual(resultShown(page), noPrompt(said))
+
+  await page.click(tabNamed(document, '任务'))
+  await page.click(rowExecute(document, 70))
+  assert.deepEqual(resultShown(page), noPrompt(said))
+  assert.equal(detailShown(page), undefined)
+
+  await page.click(rowOf(document, 70))
+  await page.click(barExecute(document)!)
+  assert.deepEqual(resultShown(page), noPrompt(said))
+  assert.equal(detailShown(page)?.crumbs, '任务 / #70')
+
+  await page.click(tabNamed(document, '地图'))
+  await page.click(wallCard(document, 70)!.querySelector('[data-execute]'))
+  assert.deepEqual(resultShown(page), noPrompt(said))
+
+  assert.equal(calledWith(page, 'deck_execute').length, 4)
+  assert.deepEqual(prefills(page).slice(1), [])
+})
+
+test('"执行" the Deck service gives no Execute Prompt for, as the Skill Source cannot be found or the tool fails, says why: the reason as text, to click the button again', async t => {
+  const deck = deckThatRecommends()
+  let failing: object | undefined
+  const page = await openPage({ answer: (name, args) => (name === 'deck_execute' && failing !== undefined ? failing : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+  const broken = { content: [{ type: 'text', text: 'the prompt is <b>broken</b> 5q2n' }], isError: true }
+
+  failing = broken
+  await page.click(document.querySelector('.dk-rec [data-execute]'))
+  assert.deepEqual(resultShown(page), noPrompt('Deck 服务出错：the prompt is <b>broken</b> 5q2n。再点“执行这个 Task”重试。'))
+
+  await page.click(tabNamed(document, '任务'))
+  failing = answered({ ok: false, failure: { kind: 'missing', message: 'no such directory 3k8p' } })
+  await page.click(rowExecute(document, 70))
+  assert.deepEqual(resultShown(page), noPrompt('找不到 Skill Source。重跑配置之后恢复。'))
+
+  failing = broken
+  await page.click(rowExecute(document, 70))
+  assert.deepEqual(resultShown(page), noPrompt('Deck 服务出错：the prompt is <b>broken</b> 5q2n。再点“执行”重试。'))
+  // The reason is put in as text.
+  assert.equal(document.querySelector('.dk-top .dk-notice.is-danger b'), null)
+  assert.deepEqual(prefills(page).slice(1), [])
+})
+
+test('"执行" the Deck service gives no Execute Prompt for reads at once, as after a release: implement gone from the skills read, every "执行" is off and 任务 says why, the result notice still shown', async t => {
+  const answer = deckAt('/work/matt-deck')
+  let gone = false
+  const page = await openPage({
+    answer: (name, args) =>
+      name === 'deck_execute' && gone ? NO_IMPLEMENT
+      : name === 'deck_skills' && gone ? answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS.filter(skill => skill.name !== 'implement') })
+      : answer(name, args),
+  })
+  t.after(page.close)
+  const { document } = page
+  const [maps, skills] = [calledWith(page, 'deck_map').length, calledWith(page, 'deck_skills').length]
+  gone = true
+
+  await page.click(rowExecute(document, 70))
+
+  // Read once, with no "刷新" and no time gone by.
+  assert.deepEqual(calledWith(page, 'deck_map').slice(maps), [{ session: SESSION.session }])
+  assert.equal(calledWith(page, 'deck_skills').length, skills + 1)
+  assert.deepEqual(noExecute(page), ['Skill Source 里没有 implement，不能预填执行。', '所有 Task 的“执行”先停用，重跑配置之后恢复。'])
+  assert.equal(text(document.querySelector('#tasks .dk-notice.is-warn button')), '重跑配置')
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', false])
+  assert.deepEqual(resultShown(page), noPrompt('Skill Source 里没有 implement。重跑配置之后恢复。'))
+})
+
+test('"执行" the Deck service failed to give an Execute Prompt for is on again once read again with the skills as they were; clicked again, the result notice goes first', async t => {
+  const answer = deckAt('/work/matt-deck')
+  let failing = true
+  // The result notice as deck_execute is asked again.
+  let whileAsking: unknown = 'not asked'
+  const page = await openPage({
+    answer: (name, args) => {
+      if (name !== 'deck_execute') return answer(name, args)
+      if (failing) return { content: [{ type: 'text', text: 'the prompt is broken 5q2n' }], isError: true }
+      whileAsking = resultShown(page)
+      return answer(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+  const maps = calledWith(page, 'deck_map').length
+
+  await page.click(rowExecute(document, 70))
+
+  assert.equal(calledWith(page, 'deck_map').length, maps + 1)
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', true])
+  assert.deepEqual(resultShown(page), noPrompt('Deck 服务出错：the prompt is broken 5q2n。再点“执行”重试。'))
+
+  failing = false
+  await page.click(rowExecute(document, 70))
+  assert.equal(whileAsking, undefined)
+  assert.equal(calledWith(page, 'deck_execute').length, 2)
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(70))])
+})
+
+// The result notice of a takeover that moved the Occupancy and filled in no
+// Execute Prompt, and why, under the tabs.
+const movedNotFilled = (said: string) => ({ order: ['抬头', '标签页', '结果提示'], role: 'status', glyph: true, title: '#72 已转给本 Session，Execute Prompt 没有填入', said })
+
+test('a takeover that moved the Occupancy, the Deck service giving no Execute Prompt, says the Task is this Session\'s and nothing was filled in, why, and to release and execute again', async t => {
+  for (const [failing, said] of [
+    [NO_IMPLEMENT, 'Skill Source 里没有 implement。重跑配置之后，点“释放”再点“执行”。'],
+    [answered({ ok: false, failure: { kind: 'missing', message: 'no such directory 3k8p' } }), '找不到 Skill Source。重跑配置之后，点“释放”再点“执行”。'],
+    [{ content: [{ type: 'text', text: 'the prompt is <b>broken</b> 5q2n' }], isError: true }, 'Deck 服务出错：the prompt is <b>broken</b> 5q2n。点“释放”之后再点“执行”重试。'],
+  ] as const) {
+    const deck = deckThatOccupies()
+    const page = await openPage({ answer: (name, args) => (name === 'deck_execute' ? failing : deck.answer(name, args)) })
+    t.after(page.close)
+    const { document } = page
+    await page.click(rowButton(document, 72, '接管'))
+
+    await page.click(askButton(document, '接管'))
+
+    assert.equal(calledWith(page, 'deck_execute').length, 1, said)
+    assert.equal(text(rowOf(document, 72).querySelector('.dk-row__meta')), '进行中 · 本 Session ready-for-agent')
+    assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'])
+    assert.deepEqual(resultShown(page), movedNotFilled(said))
+    assert.equal(document.querySelector('.dk-top .dk-notice.is-danger b'), null)
+    assert.deepEqual(prefills(page), [])
+  }
+})
+
+test('a takeover that moved the Occupancy, read again as implement can no longer be used, gives no Execute Prompt and says why as "执行" cannot be used, each of the four ways', async t => {
+  const listing = (skills: object[]) => answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills })
+  const others = SKILLS.filter(skill => skill.name !== 'implement')
+  for (const skills of [
+    listing(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy: 'missing' } : skill))),
+    listing(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy: 'different' } : skill))),
+    listing(others),
+    answered({ ok: false, failure: { kind: 'missing', message: 'no such directory 3k8p' } }),
+  ]) {
+    let moved = false
+    const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
+      moved = true
+      return deck.occupyAsIs(args)
+    })
+    const page = await openPage({ answer: (name, args) => (name === 'deck_skills' && moved ? skills : deck.answer(name, args)) })
+    t.after(page.close)
+    const { document } = page
+    await page.click(rowButton(document, 72, '接管'))
+
+    await page.click(askButton(document, '接管'))
+
+    const why = noExecute(page)![0]
+    assert.deepEqual(calledWith(page, 'deck_execute'), [], why)
+    assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'])
+    assert.deepEqual(resultShown(page), movedNotFilled(`${why}重跑配置之后，点“释放”再点“执行”。`))
+    assert.deepEqual(prefills(page), [])
+  }
+})
+
+test('a takeover that moved the Occupancy, read again late and taken over by "刷新", fills in nothing and says the Tasks were not read once the late read answers', async t => {
+  let moved = false
+  const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
+    moved = true
+    return deck.occupyAsIs(args)
+  })
+  // The read of the Tasks after the takeover goes unanswered.
+  let held = false
+  const page = await openPage({
+    answer: (name, args) => {
+      if (name === 'deck_map' && moved && !held) {
+        held = true
+        return undefined
+      }
+      return deck.answer(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  const late = page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_map').at(-1)
+
+  await page.advance(10_000)
+  await page.click(document.querySelector('.dk-head > button'))
+  assert.equal(resultShown(page), undefined)
+  await page.respond(late, { result: deck.answer('deck_map', {}) })
+
+  assert.deepEqual(calledWith(page, 'deck_execute'), [])
+  assert.deepEqual(prefills(page), [])
+  assert.deepEqual(resultShown(page), movedNotFilled('接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。'))
+  assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'])
+})
+
+test('the result notice of an Execute Prompt not given, or not filled in after a takeover, stays through the timed reads and "刷新"; it goes with another tab, into a detail and back from one, and as the next prefill, takeover or release begins', async t => {
+  let failing = true
+  const deck = deckThatOccupies()
+  const page = await openPage({
+    answer: (name, args) => (name === 'deck_execute' && failing ? { content: [{ type: 'text', text: 'the prompt is broken 5q2n' }], isError: true } : deck.answer(name, args)),
+  })
+  t.after(page.close)
+  const { document } = page
+  const notGiven = async () => {
+    failing = true
+    await page.click(rowExecute(document, 70))
+    assert.equal(resultShown(page)?.title, '没有填入输入框')
+  }
+  const stays = async (title: string) => {
+    await page.advance(60_000)
+    await page.click(document.querySelector('.dk-head > button'))
+    assert.equal(resultShown(page)?.title, title)
+  }
+
+  await notGiven()
+  await stays('没有填入输入框')
+  await page.click(tabNamed(document, '地图'))
+  assert.equal(resultShown(page), undefined)
+  await page.click(tabNamed(document, '任务'))
+
+  await notGiven()
+  await page.click(rowOf(document, 70))
+  assert.equal(resultShown(page), undefined)
+  await page.click(barExecute(document)!)
+  assert.equal(resultShown(page)?.title, '没有填入输入框')
+  await page.click(barButton(document, '返回'))
+  assert.equal(resultShown(page), undefined)
+
+  await notGiven()
+  failing = false
+  await page.click(rowExecute(document, 70))
+  assert.equal(resultShown(page), undefined)
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(70))])
+  await page.advance(5_000)
+
+  await notGiven()
+  await page.click(rowButton(document, 74, '释放'))
+  assert.equal(resultShown(page), undefined)
+
+  // Taken over, the Execute Prompt not given.
+  failing = true
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  assert.equal(resultShown(page)?.title, '#72 已转给本 Session，Execute Prompt 没有填入')
+  await stays('#72 已转给本 Session，Execute Prompt 没有填入')
+  await page.click(rowButton(document, 69, '接管'))
+  await page.click(askButton(document, '接管'))
+  assert.equal(resultShown(page)?.title, '#69 已转给本 Session，Execute Prompt 没有填入')
 })
 
 test('the result notice stays through the timed reads, the read as the tab is shown again and "刷新"; it goes with another tab, into a detail and back from one, and as the next prefill, takeover or release begins', async t => {

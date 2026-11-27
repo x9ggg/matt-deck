@@ -1602,7 +1602,11 @@ button.dk-row{color:inherit}
   // sends it, and occupies nothing; the hook does, once the person sends it.
   // A button whose click ends in that prompt another way, `onClick`, is
   // drawn as "执行" stands too.
-  const executeButton = (number, label, className, onClick = () => execute(number, { refused: error => notFilled(error, label), retry: `再点“${label}”重试。` })) => {
+  const executeButton = (number, label, className, onClick = () => execute(number, {
+    refused: error => notFilled(error, label),
+    retry: `再点“${label}”重试。`,
+    failed: failure => showResult('没有填入输入框', noPrompt(failure, '重跑配置之后恢复。', `再点“${label}”重试。`)),
+  })) => {
     const button = el('button', className, label)
     button.type = 'button'
     button.dataset.execute = String(number)
@@ -1620,13 +1624,21 @@ button.dk-row{color:inherit}
     button.disabled = filled !== undefined || implement?.copy !== 'same'
     button.textContent = filled?.filled ? '已填入' : button.dataset.label
   }
+  // Why the Deck service gave no Execute Prompt, in the Pane's words, and how
+  // to go on: `rerun` where the Skill Source wants configuring again, else
+  // `retry`.
+  const noPrompt = ({ kind, message }, rerun, retry) =>
+    kind === 'unknown-skill' ? `Skill Source 里没有 implement。${rerun}`
+    : kind === 'missing' ? `找不到 Skill Source。${rerun}`
+    : `Deck 服务出错：${message}。${retry}`
   // `before` runs first, every "执行" of the Task off meanwhile; answering
-  // false, nothing is filled in. A prompt the Host refuses is not filled in
-  // either: "执行" is on again at once, and `refused` says so, given the
-  // Host's error and the prompt. Not answered in 10 seconds, "执行" is on
-  // again and the notice says so, with `retry`; an answer after that counts
-  // while the Task has had no execution since.
-  const execute = async (number, { refused, retry }, before = async () => true) => {
+  // false, nothing is filled in. Nor is a prompt the Deck service does not
+  // give: `failed` says why, given its failure. A prompt the Host refuses is
+  // not filled in either: "执行" is on again at once, and
+  // `refused` says so, given the Host's error and the prompt. Not answered in
+  // 10 seconds, "执行" is on again and the notice says so, with `retry`; an
+  // answer after that counts while the Task has had no execution since.
+  const execute = async (number, { refused, retry, failed }, before = async () => true) => {
     closeResult()
     const execution = { filled: false }
     executed.set(number, execution)
@@ -1635,8 +1647,19 @@ button.dk-row{color:inherit}
     try {
       if (!(await before())) return
       // The Skill Source holding no implement by now, nothing is filled in.
-      const answer = await callTool('deck_execute', { task: number })
-      if (!answer.ok) return
+      let answer
+      try {
+        answer = await callTool('deck_execute', { task: number })
+      } catch (error) {
+        answer = { ok: false, failure: { message: error.message } }
+      }
+      // Read again at once, as after a release: "执行" goes by implement as
+      // the Skill Source now holds it, with no wait for the timed read.
+      if (!answer.ok) {
+        if (executed.get(number) === execution) failed(answer.failure)
+        read()
+        return
+      }
       const { prompt } = answer
       let unanswered
       try {
@@ -1818,18 +1841,21 @@ button.dk-row{color:inherit}
   // read again, and the Execute Prompt is filled in as "执行" fills it in.
   // Not moved, nothing is filled in: the asking says why, or closes where the
   // Task is closed or gone, or held by a third Session by now, as the Tasks
-  // read again show. Moved, and the Execute Prompt refused by the Host, the
-  // Occupancy stays this Session's: the result notice says how to go on, and
-  // gives the Execute Prompt as the Deck service gave it.
-  const takeOver = (number, from) =>
+  // read again show. Moved, and the Execute Prompt not filled in, the
+  // Occupancy stays this Session's: the result notice says why and how to go
+  // on; refused by the Host, it gives the Execute Prompt as the Deck service
+  // gave it.
+  const takeOver = (number, from) => {
+    const movedTitle = `#${number} 已转给本 Session，Execute Prompt 没有填入`
     // A button of an asking closed since, still in the page, does nothing.
-    takeover === undefined ? undefined : execute(number, {
+    return takeover === undefined ? undefined : execute(number, {
       refused: (error, prompt) => showResult(
-        `#${number} 已转给本 Session，Execute Prompt 没有填入`,
+        movedTitle,
         `${refusal(error)}点“释放”之后再点“执行”，或者把下面这段 Execute Prompt 填进输入框自己发送。`,
         el('span', 'dk-raw mono', prompt),
       ),
       retry: '点“释放”之后再点“执行”重试。',
+      failed: failure => showResult(movedTitle, noPrompt(failure, '重跑配置之后，点“释放”再点“执行”。', '点“释放”之后再点“执行”重试。')),
     }, async () => {
       takeover.moving = true
       showTakeOver()
@@ -1870,11 +1896,20 @@ button.dk-row{color:inherit}
       }
       if (!(answer.ok && answer.occupied)) return false
       // Read again, the project may be not configured by now, or implement
-      // not the same copy: nothing is filled in then. A read that fails
-      // cannot say: nothing is filled in either, and the next read that
-      // answers draws the Task as this Session's.
-      return (await readAgain) && implement?.copy === 'same'
+      // not the same copy: nothing is filled in then, and the result notice
+      // says why. A read that fails, or is late and taken over by another,
+      // cannot say: nothing is filled in either, the notice says so, and the
+      // next read that answers draws the Task as this Session's.
+      const tasksRead = await readAgain
+      if (tasksRead && implement?.copy === 'same') return true
+      const unusable = unexecutable()
+      showResult(movedTitle,
+        tasksRead && !$('unconfigured').hidden ? '此项目未配置。配置之后，点“释放”再点“执行”。'
+        : tasksRead && unusable !== undefined ? `${unusable[0]}重跑配置之后，点“释放”再点“执行”。`
+        : '接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。')
+      return false
     })
+  }
 
   // Releases the Occupancy the Session `holder` has of the Task `number`,
   // then reads the Tasks again, which show it in the group it is in now.
