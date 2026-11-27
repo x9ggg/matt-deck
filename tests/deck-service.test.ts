@@ -999,6 +999,7 @@ test('deck_tasks groups the Tasks of the Task Source', async t => {
     occupantShort: null,
     isOrphaned: false,
     hasEvidence: false,
+    isExecutable: false,
   })
   assert.deepEqual(groups.done[0].blockers, [])
 })
@@ -4925,4 +4926,36 @@ test('the hook\'s tool answers within a second a prompt whose implement is follo
     await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: `$implement ${word}` })
     assert.ok(performance.now() - began < 1_000, `${word.slice(0, 20)}… took ${Math.round(performance.now() - began)} ms`)
   }
+})
+
+test('deck_tasks says of each Task, Spec and Map whether it is Executable: a ready Task and one held, by this Session, another or Orphaned, are; a blocked one, one waiting on triage or on more information, a closed one, and every Spec and Map are not', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 1 }),
+    issue({ number: 2, parent: 1 }),
+    issue({ number: 3, parent: 1 }),
+    issue({ number: 4, parent: 1 }),
+    issue({ number: 5, parent: 1 }),
+    issue({ number: 6, parent: 1, blockedBy: [2] }),
+    issue({ number: 7, parent: 1, labels: ['needs-triage'] }),
+    issue({ number: 8, parent: 1, labels: ['needs-info'] }),
+    issue({ number: 9, parent: 1, state: 'CLOSED', closedAt: '2026-11-12T09:00:00Z' }),
+    issue({ number: 20, labels: ['wayfinder:map'] }),
+  ])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user })
+  t.after(deck.stop)
+  for (const [task, session] of [[3, 'this-session'], [4, 'other-session'], [5, 'ended']] as const) {
+    await deck.callTool('deck_occupy', { session, task })
+    await deck.callTool('deck_heartbeat', { session })
+  }
+  await deck.callTool('deck_end_session', { session: 'ended' })
+
+  const { containers, groups } = (await deck.callTool('deck_tasks')).structuredContent
+  const executable = Object.fromEntries(
+    [...containers, ...Object.values(groups).flat()].map((each: any) => [each.number, each.isExecutable]),
+  )
+
+  assert.deepEqual(executable, { 1: false, 20: false, 2: true, 3: true, 4: true, 5: true, 6: false, 7: false, 8: false, 9: false })
+  assert.equal(groups.inProgress.find((each: any) => each.number === 5).isOrphaned, true)
 })

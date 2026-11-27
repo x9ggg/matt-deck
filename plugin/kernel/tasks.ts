@@ -81,6 +81,9 @@ export type Task = {
   occupantShort: string | null
   isOrphaned: boolean
   hasEvidence: boolean
+  // Executable: a Task, not a Spec or Map, ready or in progress, held by
+  // any Session or none.
+  isExecutable: boolean
 }
 
 // A Spec or a Map: a Task with Child Tasks, or a Map with none yet. `group`
@@ -161,6 +164,7 @@ export const listTasks = (
         occupantShort: named?.short ?? null,
         isOrphaned: occupancy?.isOrphaned === true,
         hasEvidence: evidenced.has(task.number),
+        isExecutable: false,
       } as Task,
     }
   })
@@ -179,6 +183,8 @@ export const listTasks = (
       const isPendingCloseout = kind === 'spec' && task.isOpen && progress.closed === progress.total
       containers.push({
         ...task,
+        // A Spec or Map is never executed itself.
+        isExecutable: false,
         kind,
         isPendingCloseout,
         group: groupOf(task),
@@ -187,7 +193,8 @@ export const listTasks = (
         closeoutPrompt: isPendingCloseout ? closeoutPrompt({ number: task.number, progress }) : null,
       })
     } else {
-      groups[groupOf(task)].push(task)
+      const group = groupOf(task)
+      groups[group].push({ ...task, isExecutable: group === 'ready' || group === 'inProgress' })
     }
   }
   groups.done.sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''))

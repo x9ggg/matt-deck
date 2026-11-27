@@ -203,7 +203,16 @@ const MAPS = {
 // deck_map's answer to a read of the Task Source: the list `tasks`, and the
 // Map Views `maps` of the same read; a list not read, as deck_map answers
 // a read that fails.
-const mapRead = (tasks: any, maps: any = MAPS) => answered(tasks.ok === false ? tasks : { ...tasks, maps: maps.maps })
+// Each item Executable as the Deck service says it is, unless the test says
+// otherwise: a ready Task or one in progress, never a Spec or Map.
+const executableOf = (tasks: any) => ({
+  ...tasks,
+  containers: tasks.containers.map((each: any) => ({ isExecutable: false, ...each })),
+  groups: Object.fromEntries(
+    Object.entries(tasks.groups).map(([group, each]: [string, any]) => [group, each.map((task: any) => ({ isExecutable: group === 'ready' || group === 'inProgress', ...task }))]),
+  ),
+})
+const mapRead = (tasks: any, maps: any = MAPS) => answered(tasks.ok === false ? tasks : { ...executableOf(tasks), maps: maps.maps })
 const mapReadOf = ({ tasks, maps }: { tasks: object; maps: object }) => mapRead(tasks, maps)
 
 // The Deck service of a Session started in the Workspace at `workspace`, its
@@ -1805,8 +1814,9 @@ test('a Recommendation shown follows the list as the timed reads find it: "执�
   const before = nextTab(page)
   assert.deepEqual(before.buttons, ['执行这个 Task', '再问一次'])
   // The card's "执行这个 Task" goes with the Task: kept for a Task another
-  // Session holds, to be taken over first; none for a closed one.
-  const after = { ...before, buttons: ['再问一次'] }
+  // Session holds, to be taken over first; none for a closed one, which
+  // says so in its place.
+  const after = { ...before, said: [...before.said, '#70 已关闭。'], buttons: ['再问一次'] }
 
   // #70, renamed, taken by another Session.
   const taken = task(70, 'Task 详情 9h2c', { occupant: OTHER_CODEX, occupantHost: 'codex', occupantShort: '77e0aa15' })
@@ -3326,7 +3336,7 @@ test('"执行" fills in nothing when the Deck service fails to give the Execute 
   assert.deepEqual(executeShown(rowExecute(page.document, 70)), ['执行', true])
 })
 
-test('the Recommendation\'s "执行这个 Task" puts the Execute Prompt of its Task in the prompt; none for a Task closed or for no Task', async t => {
+test('the Recommendation\'s "执行这个 Task" puts the Execute Prompt of its Task in the prompt; none for a Task closed, blocked or not in the list, or for no Task', async t => {
   const deck = deckThatRecommends()
   const page = await openNext(deck)
   t.after(page.close)
@@ -3341,10 +3351,11 @@ test('the Recommendation\'s "执行这个 Task" puts the Execute Prompt of its T
     [await recommended(66, 1), await recommended(null, 2)],
     [undefined, undefined],
   )
-  // This Session's, a blocked one, and one the list does not hold have it;
-  // one another Session holds, or Orphaned, too, to be taken over first.
+  // This Session's has it; one another Session holds, or Orphaned, too, to
+  // be taken over first. A blocked one and one the list does not hold, not
+  // Executable, have none.
   assert.deepEqual([await recommended(72, 3), await recommended(75, 4)], Array(2).fill(['执行这个 Task', true]))
-  assert.deepEqual([await recommended(74, 5), await recommended(73, 6), await recommended(999, 7)], Array(3).fill(['执行这个 Task', true]))
+  assert.deepEqual([await recommended(74, 5), await recommended(73, 6), await recommended(999, 7)], [['执行这个 Task', true], undefined, undefined])
   assert.deepEqual(await recommended(70, 8), ['执行这个 Task', true])
   // The card's primary button, across it.
   assert.deepEqual([...page.document.querySelector('.dk-rec [data-execute]')!.classList], ['dk-btn', 'dk-btn--primary', 'dk-btn--block'])
@@ -7471,4 +7482,47 @@ test('"我现在该做什么" answered after the person moved the focus elsewher
   page.window.dispatchEvent(new page.window.FocusEvent('blur'))
   await page.advance(10_000)
   assert.equal(page.document.activeElement, page.document.body)
+})
+
+for (const [number, said] of [
+  [64, '#64 是 Spec，不能直接执行。'],
+  [50, '#50 是 Map，不能直接执行。'],
+  [73, '#73 被 #72 #70 阻塞，现在不能执行。'],
+  [19, '#19 在等 needs-triage，现在不能执行。'],
+  [66, '#66 已关闭。'],
+  [99, '任务列表里没有 #99。'],
+] as const) {
+  test(`a Recommendation of #${number}, which the list says cannot be executed, has no "执行这个 Task" but "${said}" in its place${number === 64 || number === 50 ? ', with "地图" into its Map View' : ''}`, async t => {
+    const deck = deckThatRecommends()
+    const page = await openNext(deck)
+    t.after(page.close)
+    const { document } = page
+    await page.click(button(page, '我现在该做什么'))
+    deck.reported.set('request-1', { ...RECOMMENDATION, task: number })
+    await page.advance(2_000)
+
+    const card = document.querySelector('.dk-rec')!
+    assert.equal(card.querySelector('[data-execute]'), null)
+    assert.equal(text(card.querySelector('.dk-rec__why')), said)
+    const map = [...card.querySelectorAll('button')].find(each => text(each) === '地图')
+    if (number === 64 || number === 50) {
+      await page.click(map!)
+      assert.equal(tabNamed(document, '地图').getAttribute('aria-selected'), 'true')
+      assert.equal(text(document.querySelector('#map .dk-spec .dk-id')), `#${number}`)
+    } else {
+      assert.equal(map, undefined)
+    }
+  })
+}
+
+test('the Recommendation\'s "执行这个 Task" goes by what the list says of the Task alone: one the list says is Executable has it, wherever it stands', async t => {
+  const deck = deckThatRecommends()
+  const listed = { ...TASKS, groups: { ...TASKS.groups, blocked: TASKS.groups.blocked.map(each => (each.number === 73 ? { ...each, isExecutable: true } : each)) } }
+  const page = await openNext({ answer: (name: string, args: any) => (name === 'deck_map' ? mapRead(listed) : deck.answer(name, args)) })
+  t.after(page.close)
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', { ...RECOMMENDATION, task: 73 })
+  await page.advance(2_000)
+
+  assert.deepEqual(executeShown(page.document.querySelector('.dk-rec [data-execute]')), ['执行这个 Task', true])
 })

@@ -1808,16 +1808,40 @@ export const drawPane = (
     )),
   ]
   const unreported = ['没有收到 deck_recommend 的回报。', '下面是这一回合的回答原文。']
-  // The screen's primary button once an open Task is recommended: execute
-  // it, after taking it over when another Session holds it.
-  const isRecommendedClosed = listed.some(task => task.number === recommendation?.task && !task.isOpen)
+  // Why the recommended Task cannot be executed, as the list says of it, in
+  // the primary button's place; with the Map View to go to, for a Spec or
+  // Map. Undefined where it can be, or nothing is recommended.
+  const recommendedNumber = recommendation?.task
+  const recommendedEntry = recommendedNumber == null ? undefined : listed.find(task => task.number === recommendedNumber)
+  const unexecutable: { said: string; map?: number } | undefined =
+    recommendedNumber == null || recommendedEntry?.isExecutable === true
+      ? undefined
+      : recommendedEntry === undefined
+        ? { said: `任务列表里没有 #${recommendedNumber}。` }
+        : 'kind' in recommendedEntry
+          ? { said: `#${recommendedNumber} 是 ${recommendedEntry.kind === 'spec' ? 'Spec' : 'Map'}，不能直接执行。`, map: recommendedNumber }
+          : !recommendedEntry.isOpen
+            ? { said: `#${recommendedNumber} 已关闭。` }
+            : recommendedEntry.blockers.length > 0
+              ? { said: `#${recommendedNumber} 被 ${refs(recommendedEntry.blockers)} 阻塞，现在不能执行。` }
+              : { said: `#${recommendedNumber} 在等 ${recommendedEntry.labels.find(label => label === 'needs-triage' || label === 'needs-info') ?? '分诊'}，现在不能执行。` }
+  // The screen's primary button once an Executable Task is recommended:
+  // execute it, after taking it over when another Session holds it.
   const isRecommendedOthers =
     list?.groups.inProgress.some(
       task => task.number === recommendation?.task && (task.isOrphaned || task.occupant !== view.sessionId),
     ) === true
   const recommendedTakeOver = takingOver !== undefined && takingOver.number === recommendation?.task ? takingOver : undefined
   const executeRecommended =
-    recommendation?.task == null || isRecommendedClosed ? undefined : (
+    recommendation?.task == null ? undefined : unexecutable !== undefined ? (
+      <Box flexDirection="row">
+        <Text color="inactive">{unexecutable.said}</Text>
+        {unexecutable.map !== undefined && <Text>{'  '}</Text>}
+        {unexecutable.map !== undefined && (
+          <Button key="recommended-map" plain hotkey="m" label="地图" onPress={() => actions.showMap(unexecutable.map!)} />
+        )}
+      </Box>
+    ) : (
       <Box flexDirection="row">
         <Button
           key="execute"

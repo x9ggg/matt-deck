@@ -2238,6 +2238,25 @@ button.dk-row{color:inherit}
     }, 2_000))
   }
 
+  // Why the Task `number`, as the list holds it, if it does, cannot be
+  // executed: in the primary button's place; a Spec or Map with "地图" to its
+  // Map View.
+  const notExecutable = (number, listed) => {
+    const said =
+      listed === undefined ? `任务列表里没有 #${number}。`
+      : listed.kind !== undefined ? `#${number} 是 ${listed.kind === 'spec' ? 'Spec' : 'Map'}，不能直接执行。`
+      : !listed.isOpen ? `#${number} 已关闭。`
+      : listed.blockers.length > 0 ? `#${number} 被 ${refs(listed.blockers)} 阻塞，现在不能执行。`
+      : `#${number} 在等 ${listed.labels.find(label => WAITING_LABELS.includes(label)) ?? '分诊'}，现在不能执行。`
+    const line = el('div', 'dk-next__line', el('span', 'dk-rec__why dk-why', said))
+    if (listed?.kind !== undefined) {
+      const map = smallButton('地图')
+      map.addEventListener('click', () => openMap(number))
+      line.append(map)
+    }
+    return line
+  }
+
   // The Recommendation as the "下一个成就" card: the Task by its number, with
   // its glyph and title where the list read holds it; "无" for a field with
   // nothing in it.
@@ -2266,11 +2285,13 @@ button.dk-row{color:inherit}
         ...field('理由', reason),
         ...field('阻塞', blockers),
       ),
-      // Executed unless there is no Task, or it is closed; held by another
+      // Executed where the list says the Task is Executable; held by another
       // Session or Orphaned, this Session's own Orphaned Task included, after
       // the person confirms taking it over, asked in the button's place.
-      ...(task === null || state === 'closed' ? []
-        : found !== undefined && isAsked(found[0], state, 'next') ? [takeOverAsk(found[0], state)]
+      // Not Executable, or not in the list, why in the button's place.
+      ...(task === null ? []
+        : found === undefined || !found[0].isExecutable ? [notExecutable(task, found?.[0])]
+        : isAsked(found[0], state, 'next') ? [takeOverAsk(found[0], state)]
         : state === 'other' || state === 'orphaned' ? [executeButton(task, '执行这个 Task', 'dk-btn dk-btn--primary dk-btn--block', () => askTakeOver(task, 'next'))]
         : [executeButton(task, '执行这个 Task', 'dk-btn dk-btn--primary dk-btn--block')]),
     )

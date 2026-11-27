@@ -37,6 +37,8 @@ export type Task = {
   occupantShort: string | null
   isOrphaned: boolean
   hasEvidence: boolean
+  // Executable: a Task, not a Spec or Map, ready or in progress.
+  isExecutable: boolean
 }
 
 // A Spec or a Map, in no group.

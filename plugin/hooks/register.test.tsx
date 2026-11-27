@@ -73,12 +73,14 @@ const tasks = (lists: {
   structuredContent: {
     ok: true,
     fetchedAt: NOW,
-    containers: lists.containers ?? [],
+    // Executable as the Deck service says it is, unless the test says
+    // otherwise: a ready Task or one in progress, never a Spec or Map.
+    containers: (lists.containers ?? []).map(each => ({ isExecutable: false, ...each })),
     groups: {
-      ready: lists.ready ?? [],
-      inProgress: lists.inProgress ?? [],
-      blocked: lists.blocked ?? [],
-      done: lists.done ?? [],
+      ready: (lists.ready ?? []).map(each => ({ isExecutable: true, ...each })),
+      inProgress: (lists.inProgress ?? []).map(each => ({ isExecutable: true, ...each })),
+      blocked: (lists.blocked ?? []).map(each => ({ isExecutable: false, ...each })),
+      done: (lists.done ?? []).map(each => ({ isExecutable: false, ...each })),
     },
   },
 })
@@ -4326,5 +4328,76 @@ test('a Map with all Child Tasks closed has no Pending Closeout entry', async ($
   await ui.press({ key: 'map' })
   expect(await ui.find({ key: 'closeout:1' })).toBeUndefined()
   expect(await texts(ui)).not.toContain('待收尾核对')
+  await ui.unmount()
+})
+
+// The project with a Recommendation the Pane cannot execute from: a Spec, a
+// Map, a Task blocked by two, one waiting on triage, one closed.
+const UNEXECUTABLE = tasks({
+  containers: [
+    spec(1, '规格：里程碑一', [3, 5], { closed: 0, inProgress: 0, total: 2 }),
+    { ...spec(40, '地图：要不要做', [], { closed: 0, inProgress: 0, total: 0 }), kind: 'map' },
+  ],
+  ready: [task(3, 'Pane 布局设计', { parent: 1 }), task(4, '另一个', {})],
+  blocked: [task(5, '任务列表', { parent: 1, blockers: [3, 4] }), task(6, '等分诊', { labels: ['needs-triage'] })],
+  done: [task(15, '配置技能', { isOpen: false, closedAt: '2026-11-11T14:07:00Z' })],
+})
+const recommending = (number: number) => () => ({
+  isError: false,
+  structuredContent: { found: true, recommendation: { task: number, nextStep: '下一步。', skill: '', reason: '理由。', blockers: '' } },
+})
+
+for (const [number, said] of [
+  [1, '#1 是 Spec，不能直接执行。'],
+  [40, '#40 是 Map，不能直接执行。'],
+  [5, '#5 被 #3 #4 阻塞，现在不能执行。'],
+  [6, '#6 在等 needs-triage，现在不能执行。'],
+  [15, '#15 已关闭。'],
+  [99, '任务列表里没有 #99。'],
+] as const) {
+  test(`a Recommendation of #${number}, which the list says cannot be executed, has no "执行这个 Task" but "${said}" in its place, in both placements${number === 1 || number === 40 ? ', with m: 地图 into its Map View' : ''}`, async ($, on) => {
+    const seen = engine(on, { config: { structuredContent: DIRECTORY, isError: false }, tasks: () => UNEXECUTABLE, recommendation: recommending(number) })
+    await start($)
+    await seen.clock.settle()
+    for (const target of [PANE_TARGET, INLINE]) {
+      const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+      await ui.press({ key: 'tab:next' })
+      if (target === PANE_TARGET) {
+        await ui.press({ key: 'ask' })
+        await turnStart($, 't1', 'Matt Deck Recommendation Request request-1. 快照 1')
+        await turnEnd($, 't1')
+        await seen.clock.settle()
+      }
+
+      expect(await ui.find({ key: 'execute' })).toBeUndefined()
+      expect(await texts(ui)).toEqual(expect.arrayContaining([expect.stringContaining(said)]))
+      if (number === 1 || number === 40) {
+        expect((await ui.find({ key: 'recommended-map' }))?.props.hotkey).toBe('m')
+        await ui.press({ key: 'recommended-map' })
+        expect((await ui.find({ key: 'tab:map' }))?.children).toEqual([
+          expect.objectContaining({ props: expect.objectContaining({ bold: true, underline: true }) }),
+        ])
+        expect(await texts(ui)).toEqual(expect.arrayContaining([expect.stringContaining(`#${number}`)]))
+      } else {
+        expect(await ui.find({ key: 'recommended-map' })).toBeUndefined()
+      }
+      await ui.unmount()
+    }
+  })
+}
+
+test('the Recommendation\'s "执行这个 Task" goes by what the list says of the Task alone: one the list says is Executable has it, wherever it stands', async ($, on) => {
+  const listed = tasks({ blocked: [task(5, '任务列表', { blockers: [3], isExecutable: true })] })
+  const seen = engine(on, { config: { structuredContent: DIRECTORY, isError: false }, tasks: () => listed, recommendation: recommending(5) })
+  await start($)
+  await seen.clock.settle()
+  const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+  await ui.press({ key: 'tab:next' })
+  await ui.press({ key: 'ask' })
+  await turnStart($, 't1', 'Matt Deck Recommendation Request request-1. 快照 1')
+  await turnEnd($, 't1')
+  await seen.clock.settle()
+
+  expect((await ui.find({ key: 'execute' }))?.text).toBe('执行这个 Task')
   await ui.unmount()
 })
