@@ -6845,16 +6845,20 @@ test('a description takes a time to draw that grows with its length, whatever it
   // Each kind timed at a quarter of the length GitHub allows and at all of
   // it, the shortest of three tries each: a draw that grows with the length
   // takes about 4 times as long at four times the length, one that grows
-  // with its square 16 times, however busy the machine is.
+  // with its square 16 times, however busy the machine is: the time is the
+  // time this process spent, not the time on the wall.
   let description = ''
   const answer = deckAt('/work/matt-deck')
   const page = await openPage({ answer: (name, args: any) => (name === 'deck_task' && args.number === 70 ? answered(detail(70, 'Task 详情', { description })) : answer(name, args)) })
   t.after(page.close)
   const drawn = async (made: string, length: number) => {
     description = made.slice(0, length)
-    const started = performance.now()
+    // The time this process spent drawing it, not the time on the wall: the
+    // page draws in it, and other processes busy at the time count not.
+    const started = process.cpuUsage()
     await page.click(rowOf(page.document, 70))
-    const took = performance.now() - started
+    const { user, system } = process.cpuUsage(started)
+    const took = (user + system) / 1000
     assert.ok(proseOf(page.document, '描述'))
     await page.click(barButton(page.document, '返回'))
     return took
@@ -6877,7 +6881,7 @@ test('a description takes a time to draw that grows with its length, whatever it
       quarter = Math.min(quarter, await drawn(made, 16_384))
       all = Math.min(all, await drawn(made, 65_536))
     }
-    assert.ok(all < 8 * quarter, `${name}: ${Math.round(quarter)} ms at 16384 characters, ${Math.round(all)} ms at 65536`)
+    assert.ok(all < 8 * quarter, `${name}: ${Math.round(quarter)} ms of this process at 16384 characters, ${Math.round(all)} ms at 65536`)
   }
 })
 
