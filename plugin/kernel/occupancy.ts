@@ -53,12 +53,14 @@ export const readOccupancies = (home: string, source: string, now: number) => {
 // where text follows it with no space.
 const AFTER_REFERENCE = new Set('.,;:!?。，；：！？')
 const FULL_WIDTH = /[。，；：！？]/
-// A Task by its number, `#12` or `12`, with punctuation or nothing after
-// it; an issue of github.com by its link,
+// A Task by its number, `#12` or `12`: the word ends there, or with
+// punctuation alone, or full-width punctuation follows it whatever comes
+// after; `12.5`, `12:30` or `#12.md` is no reference. An issue of
+// github.com by its link,
 // `https://github.com/owner/name/issues/12`, with a `/`, a query or a
 // fragment after it if any. Each is read in a time that grows with its
 // length alone: no part of it can match in more than one way.
-const BY_NUMBER = /^#?(\d+)(?:[.,;:!?。，；：！？]|$)/
+const BY_NUMBER = /^#?(\d+)(?:[.,;:!?]*$|[。，；：！？])/
 const BY_LINK = /^https:\/\/github\.com\/([^/\s?#]+\/[^/\s?#]+)\/issues\/(\d+)\/?(?:[?#]\S*)?$/
 
 // The Task the first word of `text` refers to, with the repository a link

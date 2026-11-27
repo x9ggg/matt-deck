@@ -4878,7 +4878,7 @@ test('deck_execute calls implement as the Skill Source does on each host: /<plug
 // How the Task references a test sends after implement are read: each one
 // that names #12 of the Task Source, and each that names nothing.
 const REFERENCES_TO_12 = ['#12', '12', '#12.', '#12，', '#12，接着做', '12。', 'https://github.com/acme/shop/issues/12', 'https://github.com/acme/shop/issues/12#issuecomment-1', 'https://github.com/acme/shop/issues/12，再看']
-const NO_REFERENCES = ['https://gitlab.com/acme/shop/issues/9', 'https://github.com/evil/x/acme/shop/issues/11', 'https://github.com/acme/shop/pull/12']
+const NO_REFERENCES = ['https://gitlab.com/acme/shop/issues/9', 'https://github.com/evil/x/acme/shop/issues/11', 'https://github.com/acme/shop/pull/12', '12.5', '#12.5', '1.2.3', '12:30', '12,000', '#12.md']
 
 test('the hook\'s tool reads after $implement #12 and 12, punctuation after it left out, and a link to an issue of github.com, whatever its fragment; no other host, longer path or pull request', async t => {
   for (const reference of [...REFERENCES_TO_12, ...NO_REFERENCES]) {
