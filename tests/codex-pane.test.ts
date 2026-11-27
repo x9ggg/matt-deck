@@ -6841,16 +6841,16 @@ test('Markdown read as GitHub reads it at its edges: a bare address ends before 
   assert.equal((prose.querySelector('ol') as HTMLOListElement).start, 3)
 })
 
-test('a description of the length GitHub allows takes about as long to draw as plain words, whatever it is made of', async t => {
-  // Timed in the one run, each against plain words as long: a draw that
-  // grows with the square of its length is many times slower at this
-  // length, one that grows with it is not, however busy the machine is.
-  const length = 65_536
+test('a description takes a time to draw that grows with its length, whatever it is made of', async t => {
+  // Each kind timed at a quarter of the length GitHub allows and at all of
+  // it, the shortest of three tries each: a draw that grows with the length
+  // takes about 4 times as long at four times the length, one that grows
+  // with its square 16 times, however busy the machine is.
   let description = ''
   const answer = deckAt('/work/matt-deck')
   const page = await openPage({ answer: (name, args: any) => (name === 'deck_task' && args.number === 70 ? answered(detail(70, 'Task 详情', { description })) : answer(name, args)) })
   t.after(page.close)
-  const drawn = async (made: string) => {
+  const drawn = async (made: string, length: number) => {
     description = made.slice(0, length)
     const started = performance.now()
     await page.click(rowOf(page.document, 70))
@@ -6859,20 +6859,25 @@ test('a description of the length GitHub allows takes about as long to draw as p
     await page.click(barButton(page.document, '返回'))
     return took
   }
-  const plain = Math.min(await drawn('一段普通的话 '.repeat(length)), await drawn('plain words '.repeat(length)))
   for (const [name, made] of [
-    ['[', '['.repeat(length)],
-    ['![', '!['.repeat(length)],
-    ['[a', '[a'.repeat(length)],
-    ['[a](', '[a]('.repeat(length)],
-    ['a fence a line', '```\n'.repeat(length)],
-    ['`a` in one paragraph', '`a` '.repeat(length)],
-    ['*', '*'.repeat(length)],
-    ['_', '_'.repeat(length)],
-    ['**a', '**a '.repeat(length)],
+    ['plain words', 'plain words '.repeat(65_536)],
+    ['[', '['.repeat(65_536)],
+    ['![', '!['.repeat(65_536)],
+    ['[a', '[a'.repeat(65_536)],
+    ['[a](', '[a]('.repeat(65_536)],
+    ['a fence a line', '```\n'.repeat(65_536)],
+    ['`a` in one paragraph', '`a` '.repeat(65_536)],
+    ['*', '*'.repeat(65_536)],
+    ['_', '_'.repeat(65_536)],
+    ['**a', '**a '.repeat(65_536)],
   ] as const) {
-    const took = await drawn(made)
-    assert.ok(took < 10 * plain + 500, `${name}: ${Math.round(took)} ms, plain words ${Math.round(plain)} ms`)
+    // Taken in turns, so a busy moment falls on both lengths alike.
+    let [quarter, all] = [Infinity, Infinity]
+    for (let tries = 0; tries < 3; tries += 1) {
+      quarter = Math.min(quarter, await drawn(made, 16_384))
+      all = Math.min(all, await drawn(made, 65_536))
+    }
+    assert.ok(all < 8 * quarter, `${name}: ${Math.round(quarter)} ms at 16384 characters, ${Math.round(all)} ms at 65536`)
   }
 })
 
