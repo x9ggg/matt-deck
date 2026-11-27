@@ -117,6 +117,10 @@ Deck 不解析 `config.toml`，按行认 `[mcp_servers.matt_deck]` 这种单独�
 
 `config.toml` 里有不合法的 UTF-8 字节时，install 和 uninstall 都以退出码 1 结束、什么都不改：Deck 按文字改写它，这些字节会被换掉（#109）。
 
+`config.toml` 里有数组、内联表或多行字符串到文件末尾都没闭合时，install 和 uninstall 都以退出码 1 结束、什么都不改（`config.toml`、配置技能、`agents/openai.yaml`、`hooks.json` 和它的备份都不动），说 Codex 读不了这份配置，补上之后再运行一次。没闭合的值把后面整份都当成它的一部分，Deck 认不出里面的表头和注册，照常改写会写出 Codex 仍然读不了的配置；所以不管 Deck 的表在没闭合处的前面还是后面、有没有注册，都停下。字符串和注释里的括号、引号不算，没闭合的单行字符串（如 `x = "abc`）、多出来的 `]` 这类别的不合法写法 Deck 不逐一认（#125）。
+
+一份配置有几种停下的理由时，只说第一种，依次是：不合法的 UTF-8 字节、没闭合的值、别的写法的注册、写成内联表的 `mcp_servers`（最后这一种只有 install 停下）。
+
 ### install 和 uninstall 不动的钩子文件
 
 Deck 读进 `hooks.json` 之后整份重写，所以它只经手重写之后只差空白的文件。遇到下面这些，install 和 uninstall 都以退出码 1 结束，什么都不改，`hooks.json` 原样留着，改好之后再运行一次：

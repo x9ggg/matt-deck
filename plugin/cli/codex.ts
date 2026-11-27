@@ -17,7 +17,7 @@ const USAGE = `Usage: node <matt-deck>/cli/codex.ts <install|uninstall>
 
 install：把 Deck 服务注册进 Codex 的用户全局配置 ~/.codex/config.toml，原有内容保留；在 ~/.agents/skills 里生成配置技能 ${CODEX_CONFIGURE_SKILL}，在它旁边写 agents/openai.yaml，让 Codex 只在你用 $${CODEX_CONFIGURE_SKILL} 调用时用它（那里已有一份不是 Deck 写的就不改）；在 ~/.codex/hooks.json 里加上 Deck 的钩子，原有的钩子保留，改之前先备份。装完要在终端里运行一次 codex 信任这个钩子，再重启 Codex 桌面应用。注册和配置技能指向运行 install 的这一份插件，它挪了位置或更新之后要重新运行一次 install。
 uninstall：从 ~/.codex/config.toml 移除 Deck 服务的注册，别的内容不动；移除 Deck 生成的 ${CODEX_CONFIGURE_SKILL} 和 Deck 写的 agents/openai.yaml；从 ~/.codex/hooks.json 移除 Deck 的钩子。
-退出码：0 成功，1 读写失败、要写的位置写不进去或是链到不存在的文件的链接、config.toml 里有不是 UTF-8 的字节或 Deck 服务注册不是 [mcp_servers.matt_deck] 表头的写法、install 时 mcp_servers 写成了内联表、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
+退出码：0 成功，1 读写失败、要写的位置写不进去或是链到不存在的文件的链接、config.toml 里有不是 UTF-8 的字节、有到文件末尾都没闭合的数组、内联表或多行字符串，或者 Deck 服务注册不是 [mcp_servers.matt_deck] 表头的写法、install 时 mcp_servers 写成了内联表、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
 `
 const SERVER = 'matt_deck'
 const TABLE = `mcp_servers.${SERVER}`
@@ -81,14 +81,18 @@ const stringEnd = (line: string, i: number, quote: string) => {
   return -1
 }
 
-// The lines of a config, by index, that start inside a value: in a
-// multi-line string, or in an array or an inline table not closed yet. They
-// are part of that value, however they look, never a header, a key or a
-// comment. Each line is read from where the last left off, its strings and
-// comments skipped, the brackets in them not counted. A header's own
+// How a config's values run over its lines: the lines, by index, that start
+// inside a value, in a multi-line string or in an array or an inline table
+// not closed yet, which are part of that value, however they look, never a
+// header, a key or a comment; each bracket and comma outside strings and
+// comments, where it is and how deep in brackets it leaves the value; and
+// whether a value is still open at the end. Each line is read from where the
+// last left off, its strings and comments skipped, the brackets in them not
+// counted; a bracket closing none leaves the depth at 0. A header's own
 // brackets close on its line.
-const inValues = (lines: string[]) => {
+const scan = (lines: string[]) => {
   const inside = new Set<number>()
+  const marks: { line: number; at: number; mark: string; depth: number }[] = []
   let open: string | undefined
   let depth = 0
   lines.forEach((line, n) => {
@@ -111,6 +115,9 @@ const inValues = (lines: string[]) => {
         } else if ((line[i] === ']' || line[i] === '}') && depth > 0) {
           depth--
         }
+        if ('[]{},'.includes(line[i]!)) {
+          marks.push({ line: n, at: i, mark: line[i]!, depth })
+        }
         i++
         continue
       }
@@ -122,7 +129,7 @@ const inValues = (lines: string[]) => {
     }
   })
 
-  return inside
+  return { inside, marks, isOpen: open !== undefined || depth > 0 }
 }
 
 // The config without Deck's registration: its table, and the tables under it,
@@ -135,7 +142,7 @@ const unregistered = (text: string) => {
   let above: string[] = []
 
   const lines = text.split(/(?<=\n)/)
-  const inside = inValues(lines)
+  const { inside } = scan(lines)
   for (const [n, line] of lines.entries()) {
     const header = inside.has(n) ? null : line.match(/^\s*\[\[?\s*([^\]]*?)\s*\]\]?\s*(?:#.*)?\r?\n?$/)
     if (header !== null) {
@@ -207,7 +214,7 @@ const handWritten = (text: string) => {
   let table: string[] = []
   let found: 'inline' | undefined
   const lines = text.split(/\r?\n/)
-  const inside = inValues(lines)
+  const { inside, marks } = scan(lines)
   for (const [n, line] of lines.entries()) {
     if (inside.has(n)) {
       continue
@@ -233,37 +240,18 @@ const handWritten = (text: string) => {
       while (inside.has(end)) {
         end++
       }
-      const value = [key.rest, ...lines.slice(n + 1, end)].join('\n')
-      let depth = 0
-      for (let i = 1; i < value.length; ) {
-        const quote = quoteAt(value, i)
-        if (quote !== undefined) {
-          i = stringEnd(value, i + quote.length, quote)
-          if (i === -1) {
-            break
-          }
-          continue
-        }
-        if (value[i] === '#') {
-          i = value.indexOf('\n', i)
-          if (i === -1) {
-            break
-          }
-          continue
-        }
-        if (value[i] === '{' || value[i] === '[') {
-          depth++
-        } else if (value[i] === '}' || value[i] === ']') {
-          depth--
-        }
-        if (
+      const start = line.length - key.rest.length
+      const isRegistered = marks.some(
+        ({ line: m, at, mark, depth }) =>
+          m >= n &&
+          m < end &&
+          (m > n || at > start) &&
           depth === 1 &&
-          (value[i] === '{' || value[i] === ',') &&
-          keyAt(value.slice(i + 1).replace(/^(?:\s|#.*)*/, ''))?.parts[0] === SERVER
-        ) {
-          return 'registration'
-        }
-        i++
+          (mark === '{' || mark === ',') &&
+          keyAt([lines[m]!.slice(at + 1), ...lines.slice(m + 1, end)].join('\n').replace(/^(?:\s|#.*)*/, ''))?.parts[0] === SERVER,
+      )
+      if (isRegistered) {
+        return 'registration'
       }
       found = 'inline'
     }
@@ -407,6 +395,9 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
     const isHooked = typeof hooks !== 'string' && hooks.hooks?.UserPromptSubmit?.some(holdsDeckHook) === true
 
     const handwritten = handWritten(kept)
+    // A value open at the end takes in all after it, a registration there
+    // too: Deck cannot tell what the config holds, and Codex cannot read it.
+    const isUnclosed = scan((before ?? '').split(/\r?\n/)).isOpen
 
     // What install does with the hooks: a backup already there moves aside
     // unless it holds the hooks as they are, as an install that failed after
@@ -461,6 +452,11 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
       // decoded, would come back as another.
       process.stderr.write(
         `${config} 里有不是 UTF-8 的字节，Deck 改写它时会把这些字节换掉，没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。改好它之后再运行一次 ${args[0]}。\n`,
+      )
+      process.exitCode = 1
+    } else if (isUnclosed) {
+      process.stderr.write(
+        `${config} 里有没闭合的数组、内联表或多行字符串，Codex 读不了这份配置，没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。补上之后再运行一次 ${args[0]}。\n`,
       )
       process.exitCode = 1
     } else if (handwritten === 'registration') {

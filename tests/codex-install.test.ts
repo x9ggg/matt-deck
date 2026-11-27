@@ -804,6 +804,81 @@ test('install and uninstall stop when the Codex config holds a byte that is not 
   }
 })
 
+// Configs holding an array, an inline table or a multi-line string that runs
+// to the end of the file unclosed: Codex reads none of them. Deck's table
+// after it, or before it, or no registration at all.
+const UNCLOSED = [
+  'x = [\n  1,\n\n[mcp_servers.matt_deck]\ncommand = "old"\n',
+  'x = """\nabc\n\n[mcp_servers.matt_deck]\ncommand = "old"\n',
+  'x = { a = 1,\n\n[mcp_servers.matt_deck]\ncommand = "old"\n',
+  "x = '''\nabc\n\n[mcp_servers.matt_deck]\ncommand = \"old\"\n",
+  '[mcp_servers.matt_deck]\ncommand = "old"\n\n[other]\nx = [\n  1,\n',
+  'x = [\n  1,\n\n[other]\ny = 2\n',
+]
+
+// The message by which install or uninstall stops on such a config.
+const stopsOnUnclosed = (config: string, command: string) => (error: any) => {
+  assert.equal(error.code, 1, command)
+  assert.ok(error.stderr.includes(`${config} 里有没闭合的数组、内联表或多行字符串，Codex 读不了这份配置`), error.stderr)
+  assert.ok(error.stderr.includes(`再运行一次 ${command}`), error.stderr)
+  return true
+}
+
+test('install and uninstall stop when the Codex config holds an array, an inline table or a multi-line string not closed by its end, its lines ending in LF or CRLF, and change nothing', async () => {
+  for (const unclosed of UNCLOSED.flatMap(text => [text, crlf(text)])) {
+    for (const command of ['install', 'uninstall']) {
+      const { user, config } = await withConfig(unclosed)
+
+      await assert.rejects(run(user, command), stopsOnUnclosed(config, command))
+      assert.equal(await readFile(config, 'utf8'), unclosed, unclosed)
+      assert.deepEqual(await readdir(user), ['.codex'], unclosed)
+      assert.deepEqual(await readdir(join(user, '.codex')), ['config.toml'], unclosed)
+    }
+  }
+})
+
+test('uninstall stops where Deck is installed and the Codex config is left with an array not closed by its end, and keeps the skill and the hook', async () => {
+  const user = await home()
+  await run(user, 'install')
+  const config = join(user, '.codex', 'config.toml')
+  await writeFile(config, UNCLOSED[0]!)
+  const hooks = await readFile(hooksFile(user), 'utf8')
+  const skill = await readFile(configureSkill(user), 'utf8')
+
+  await assert.rejects(run(user, 'uninstall'), stopsOnUnclosed(config, 'uninstall'))
+  assert.equal(await readFile(config, 'utf8'), UNCLOSED[0])
+  assert.equal(await readFile(hooksFile(user), 'utf8'), hooks)
+  assert.equal(await readFile(configureSkill(user), 'utf8'), skill)
+  assert.ok((await readdir(join(configureSkill(user), '..', 'agents'))).includes('openai.yaml'))
+})
+
+test('install and uninstall say a value not closed by the end after a byte that is not UTF-8, and before a registration Deck does not write or mcp_servers as an inline table', async () => {
+  for (const command of ['install', 'uninstall']) {
+    const notUtf8 = await withConfig('')
+    await writeFile(notUtf8.config, Buffer.concat([CONFIG_NOT_UTF8, Buffer.from(UNCLOSED[5]!)]))
+    await assert.rejects(run(notUtf8.user, command), (error: any) => error.code === 1 && error.stderr.includes('不是 UTF-8 的字节') && !error.stderr.includes('没闭合'))
+
+    for (const first of ['[mcp_servers]\nmatt_deck = { command = "mine" }\n', 'mcp_servers = { other = { command = "other" } }\n']) {
+      const { user, config } = await withConfig(`${first}${UNCLOSED[5]}`)
+      await assert.rejects(run(user, command), stopsOnUnclosed(config, command))
+    }
+  }
+})
+
+test('install and uninstall take a bracket or a quote in a string or a comment for none: a value closed on its line is closed', async () => {
+  for (const theirs of ['x = "["\n', 'x = 1 # [\n', "x = ['''\n[\n''']\n", 'x = "{"\ny = \'"""\'\n'].flatMap(text => [`${text}${BEFORE}`, crlf(`${text}${BEFORE}`)])) {
+    const { user, config } = await withConfig(theirs)
+
+    await run(user, 'install')
+    const installed = await readFile(config, 'utf8')
+    await run(user, 'uninstall')
+
+    assert.ok(installed.startsWith(theirs), installed)
+    assert.equal(registration(installed).args.at(-1), 'codex', theirs)
+    assert.equal(await readFile(config, 'utf8'), theirs)
+  }
+})
+
 test('uninstall with a backup holding a byte that is not UTF-8 takes only Deck\'s hook out of the hooks and leaves the backup byte for byte', async () => {
   // The hooks before install as the backup would read were it decoded with
   // a replacement character: they are not what install wrote.
