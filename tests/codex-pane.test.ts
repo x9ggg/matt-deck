@@ -1881,8 +1881,9 @@ test('the detail shows the Task\'s state, triage label, assignees and time, its 
       ['执行记录', '还没有 Session 执行过这个 Task。'],
     ],
   })
-  // The description keeps its lines; a checked criterion is drawn checked.
-  assert.equal(document.querySelector('.dk-detail .dk-prose p')!.textContent, '从任务列表点开一个 Task。\n\n再返回列表。')
+  // The description keeps its lines, an empty one between two paragraphs; a
+  // checked criterion is drawn checked.
+  assert.deepEqual([...document.querySelectorAll('.dk-detail .dk-prose p')].map(each => each.textContent), ['从任务列表点开一个 Task。', '再返回列表。'])
   assert.equal(page.window.getComputedStyle(document.querySelector('.dk-detail .dk-prose p')!).whiteSpace, 'pre-wrap')
   assert.deepEqual([...document.querySelectorAll('.dk-detail li')].map(li => li.classList.contains('is-checked')), [true, false])
   // The number in the state's colour, as in its row.
@@ -6673,4 +6674,209 @@ test('a project no longer configured has no mark in its head, and configured aga
   configured = true
   await page.click(page.document.querySelector('.dk-head > button'))
   assert.equal(text(occupancyMark(page)!), '#74')
+})
+
+// A Task's detail whose own read gives `more` over #70's, opened from its
+// row; the Host answers the page's asking to open a link as `answerOpenLink`
+// says.
+const openDetailOf = async (more: object, answerOpenLink?: (params: object) => { result: object } | { error: { code: number; message: string } }) => {
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({
+    answer: (name, args: any) => (name === 'deck_task' && args.number === 70 ? answered(detail(70, 'Task 详情', more)) : answer(name, args)),
+    ...(answerOpenLink === undefined ? {} : { answerOpenLink }),
+  })
+  await page.click(rowOf(page.document, 70))
+  return page
+}
+// The rendered text of a section of the detail, by its head.
+const proseOf = (document: Document, head: '描述' | '验收条件') =>
+  [...document.querySelectorAll('.dk-detail .dk-section')].find(each => text(each.querySelector('.dk-section__head')) === head)!.querySelector('.dk-prose')!
+// An element as the elements and text it holds, every text as it is.
+const shapeOf = (node: Element): unknown[] => [
+  node.tagName.toLowerCase(),
+  ...[...node.childNodes].map(child => (child.nodeType === 3 ? child.textContent : shapeOf(child as Element))),
+]
+
+test('a Task\'s description is drawn from its Markdown: paragraphs, headings as a bold line, lists one level deep, quotes and fenced code', async t => {
+  const description = [
+    '段落一行，',
+    '第二行。',
+    '',
+    '## 标题',
+    '',
+    '- 一',
+    '- 二',
+    '  - 二之一',
+    '* 三',
+    '',
+    '1. 甲',
+    '2. 乙',
+    '',
+    '> 引用的话',
+    '',
+    '```sh',
+    '  npm test',
+    '```',
+  ].join('\n')
+  const page = await openDetailOf({ description })
+  t.after(page.close)
+  const prose = proseOf(page.document, '描述')
+
+  assert.deepEqual([...prose.children].map(shapeOf), [
+    ['p', '段落一行，\n第二行。'],
+    ['p', '标题'],
+    ['ul', ['li', '一'], ['li', '二', ['ul', ['li', '二之一']]], ['li', '三']],
+    ['ol', ['li', '甲'], ['li', '乙']],
+    ['blockquote', ['p', '引用的话']],
+    ['pre', ['code', '  npm test']],
+  ])
+  // A heading is a line in bold, as large as the text around it.
+  const style = (element: Element) => page.window.getComputedStyle(element)
+  assert.equal(style(prose.children[1]!).fontWeight, '700')
+  assert.equal(style(prose.children[1]!).fontSize, style(prose.children[0]!).fontSize)
+})
+
+test('fenced code in a description shows what is in it as written, no Markdown in it read', async t => {
+  const inside = ['**x**', '# x', '- [ ] x', '<b>x</b>', '`y`'].join('\n')
+  const page = await openDetailOf({ description: `~~~\n${inside}\n~~~\n\n\`\`\`\n${inside}\n\`\`\`` })
+  t.after(page.close)
+  const prose = proseOf(page.document, '描述')
+
+  assert.deepEqual([...prose.children].map(shapeOf), [
+    ['pre', ['code', inside]],
+    ['pre', ['code', inside]],
+  ])
+})
+
+test('Markdown a description has that the Pane does not read, HTML, images and tables, is the text it is, and asks for nothing', async t => {
+  const description = ['<b>x</b> 和 <img src=x onerror=alert(1)>', '![a](b)', '', '| 甲 | 乙 |', '| --- | --- |', '| 1 | 2 |', '', '~~删~~'].join('\n')
+  const page = await openDetailOf({ description })
+  t.after(page.close)
+  const prose = proseOf(page.document, '描述')
+
+  assert.deepEqual([...prose.children].map(shapeOf), [
+    ['p', '<b>x</b> 和 <img src=x onerror=alert(1)>\n![a](b)'],
+    ['p', '| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |'],
+    ['p', '~~删~~'],
+  ])
+  assert.equal(page.document.querySelector('.dk-detail b, .dk-detail img, .dk-detail table, .dk-detail button.dk-prose__link'), null)
+  assert.deepEqual(page.fetched, [])
+})
+
+test('a link in a description to an http or https address, written out or bare, opens through the Host; one to any other address is the text it is', async t => {
+  const description = ['看 [这份说明](https://tasks.example/doc?a=1) 和 https://tasks.example/bare。', '', '[脚本](javascript:alert(1)) [相对](./x) [邮件](mailto:a@b.c) #88'].join('\n')
+  const page = await openDetailOf({ description })
+  t.after(page.close)
+  const prose = proseOf(page.document, '描述')
+  const opened = () => page.sent.filter(message => message.method === 'ui/open-link').map(({ params }) => params)
+
+  assert.deepEqual([...prose.children].map(shapeOf), [
+    ['p', '看 ', ['button', '这份说明'], ' 和 ', ['button', 'https://tasks.example/bare'], '。'],
+    ['p', '[脚本](javascript:alert(1)) [相对](./x) [邮件](mailto:a@b.c) #88'],
+  ])
+  const [written, bare] = [...prose.querySelectorAll('button')]
+  assert.equal((written as HTMLButtonElement).type, 'button')
+  await page.click(written!)
+  await page.click(bare!)
+  assert.deepEqual(opened(), [{ url: 'https://tasks.example/doc?a=1' }, { url: 'https://tasks.example/bare' }])
+  // The detail stays where it is.
+  assert.equal(detailShown(page)?.crumbs, '任务 / #70')
+})
+
+test('a link in a description the Host refuses to open says so in the result notice, as "在 GitHub 打开" does', async t => {
+  const page = await openDetailOf({ description: '[说明](https://tasks.example/doc)' }, () => ({ error: { code: -32000, message: 'not allowed' } }))
+  t.after(page.close)
+
+  await page.click(proseOf(page.document, '描述').querySelector('button'))
+  const notice = page.document.querySelector('#result .dk-notice')
+  assert.equal(text(notice?.querySelector('.dk-notice__title') ?? null), '没有打开链接')
+  assert.equal(text(notice?.querySelector('.dk-notice__text') ?? null), '宿主拒绝了这次打开：not allowed。再点一次重试。')
+})
+
+test('inline Markdown is read in a description and in each acceptance criterion: code, bold, italics and links, with no space put between them; a criterion is no heading', async t => {
+  const page = await openDetailOf({
+    description: '用 `deck_task` 读，**粗**、*斜*、_也斜_，snake_case_name 照旧。',
+    acceptance: [
+      { text: '有 `code` 和 **粗** 和 *斜*，见 [说明](https://tasks.example/a)', isChecked: true },
+      { text: '# x', isChecked: false },
+    ],
+  })
+  t.after(page.close)
+  const description = proseOf(page.document, '描述')
+  const criteria = proseOf(page.document, '验收条件')
+
+  assert.deepEqual([...description.children].map(shapeOf), [
+    ['p', '用 ', ['code', 'deck_task'], ' 读，', ['strong', '粗'], '、', ['em', '斜'], '、', ['em', '也斜'], '，snake_case_name 照旧。'],
+  ])
+  assert.equal(description.textContent, '用 deck_task 读，粗、斜、也斜，snake_case_name 照旧。')
+  assert.deepEqual([...criteria.querySelectorAll('li')].map(shapeOf), [
+    ['li', '有 ', ['code', 'code'], ' 和 ', ['strong', '粗'], ' 和 ', ['em', '斜'], '，见 ', ['button', '说明']],
+    ['li', '# x'],
+  ])
+  // Checked and not, drawn as before.
+  assert.deepEqual([...criteria.querySelectorAll('li')].map(each => each.className), ['is-checked', ''])
+  await page.click(criteria.querySelector('button'))
+  assert.deepEqual(page.sent.filter(message => message.method === 'ui/open-link').map(({ params }) => params), [{ url: 'https://tasks.example/a' }])
+})
+
+test('a description with no Markdown in it shows its text as before, each line break kept', async t => {
+  const page = await openDetailOf({ description: '第一行\n第二行\n\n另一段' })
+  t.after(page.close)
+
+  assert.deepEqual([...proseOf(page.document, '描述').children].map(shapeOf), [['p', '第一行\n第二行'], ['p', '另一段']])
+  assert.equal(page.window.getComputedStyle(proseOf(page.document, '描述').children[0]!).whiteSpace, 'pre-wrap')
+})
+
+test('a list whose first item is indented is a list all the same', async t => {
+  const page = await openDetailOf({ description: '  - 缩进的一\n- 二' })
+  t.after(page.close)
+
+  assert.deepEqual([...proseOf(page.document, '描述').children].map(shapeOf), [['ul', ['li', '缩进的一'], ['li', '二']]])
+})
+
+test('read again, a description drawn from the same Markdown is left as it is, and one whose Markdown changed is drawn anew', async t => {
+  let description = '**粗**'
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_task' && args.number === 70 ? answered(detail(70, 'Task 详情', { description })) : answer(name, args)) })
+  t.after(page.close)
+  await page.click(rowOf(page.document, 70))
+  const bold = proseOf(page.document, '描述').querySelector('strong')!
+
+  await page.advance(60_000)
+  assert.equal(bold.isConnected, true)
+
+  description = '*粗*'
+  await page.advance(60_000)
+  assert.deepEqual([...proseOf(page.document, '描述').children].map(shapeOf), [['p', ['em', '粗']]])
+})
+
+test('Markdown read as GitHub reads it at its edges: a bare address ends before the words after it, a list counts from its first number, a fence closes only on a line of the fence alone, and a rule is no list', async t => {
+  const description = [
+    '见 https://tasks.example/x，然后再说。',
+    '',
+    '3. 丙',
+    '4. 丁',
+    '',
+    '```',
+    'a',
+    '```js',
+    'b',
+    '```',
+    '',
+    '***重要***',
+    '',
+    '* * *',
+  ].join('\n')
+  const page = await openDetailOf({ description })
+  t.after(page.close)
+  const prose = proseOf(page.document, '描述')
+
+  assert.deepEqual([...prose.children].map(shapeOf), [
+    ['p', '见 ', ['button', 'https://tasks.example/x'], '，然后再说。'],
+    ['ol', ['li', '丙'], ['li', '丁']],
+    ['pre', ['code', 'a\n```js\nb']],
+    ['p', ['strong', ['em', '重要']]],
+    ['p', '* * *'],
+  ])
+  assert.equal((prose.querySelector('ol') as HTMLOListElement).start, 3)
 })

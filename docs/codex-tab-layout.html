@@ -183,6 +183,15 @@
 .dk-prose ul{display:flex;flex-direction:column;gap:var(--space-1)}
 .dk-prose li{position:relative;padding-left:var(--space-6)}
 .dk-prose li::before{content:"";position:absolute;top:4px;left:var(--space-1);width:12px;height:12px;border:1px solid var(--line-strong);border-radius:var(--radius-xs)}
+.dk-prose__heading{font-weight:700}
+.dk-prose .dk-prose__list{display:flex;flex-direction:column;gap:var(--space-1);margin:0;padding-left:var(--space-6);list-style:disc}
+.dk-prose .dk-prose__list.is-ordered{list-style:decimal}
+.dk-prose__list li{padding-left:0;white-space:pre-wrap}
+.dk-prose__list li::before{content:none}
+.dk-prose__list .dk-prose__list{margin-top:var(--space-1)}
+.dk-prose__quote{margin:0;padding-left:var(--space-3);border-left:2px solid var(--line-strong);color:var(--ink-muted)}
+.dk-prose__code{margin:0;padding:var(--space-2) var(--space-3);overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface-sunken);white-space:pre}
+.dk-prose__link{display:inline;padding:0;border:0;background:none;color:var(--progress);font:inherit;text-align:left;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere;cursor:pointer}
 .dk-edge{display:flex;align-items:center;gap:var(--space-2);min-width:0;color:var(--ink-muted)}
 .dk-edge svg{flex:none;width:10px;height:10px;color:var(--ink-faint)}
 .dk-edge>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1010,7 +1019,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
   <h2>Task 详情</h2>
   <section class="shot" id="detail">
     <h3>被阻塞的 Task<code>#detail</code></h3>
-    <p>从“地图”钻进来。返回栏：返回、来路、这个 Task 的动作、在 GitHub 打开。被阻塞的 Task 没有动作。</p>
+    <p>从“地图”钻进来。返回栏：返回、来路、这个 Task 的动作、在 GitHub 打开。被阻塞的 Task 没有动作。描述按 Markdown 画，正文里的链接是按钮，经宿主打开。</p>
     <div class="shot__frame"><div class="dk-pane">
       <div class="dk-top">
       <header class="dk-head">
@@ -1039,7 +1048,14 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
         <div class="dk-parent caption"><span>属于</span><a href="#">Spec #64 规格：里程碑二，Codex 桌面应用上的 Matt Deck</a></div>
         <section class="dk-section">
           <header class="dk-section__head label">描述</header>
-          <div class="dk-prose"><p>对一个已被其他 Session 占用的 Task 发起执行时，Pane 先提示并要求明确接管，确认后 Occupancy 转给当前 Session，再预填 Execute Prompt。用户也可以手动释放一个 Occupancy，让别的 Session 接手。</p></div>
+          <div class="dk-prose">
+            <p>对一个已被其他 Session 占用的 Task 发起执行时，Pane 先提示并要求明确接管，确认后 Occupancy 转给当前 Session，再预填 Execute Prompt。用户也可以手动释放一个 Occupancy，让别的 Session 接手。</p>
+            <ul class="dk-prose__list">
+              <li>接管经 <code>deck_occupy</code>，带上 <code>takeOver</code></li>
+              <li>释放经 <code>deck_release</code>，不用确认</li>
+            </ul>
+            <p>手动释放的来由见 <button class="dk-prose__link" type="button">ADR-0004</button>。</p>
+          </div>
         </section>
         <section class="dk-section">
           <header class="dk-section__head label">验收条件</header>
