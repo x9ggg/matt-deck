@@ -17,7 +17,7 @@ const USAGE = `Usage: node <matt-deck>/cli/codex.ts <install|uninstall>
 
 install：把 Deck 服务注册进 Codex 的用户全局配置 ~/.codex/config.toml，原有内容保留；在 ~/.agents/skills 里生成配置技能 ${CODEX_CONFIGURE_SKILL}，在它旁边写 agents/openai.yaml，让 Codex 只在你用 $${CODEX_CONFIGURE_SKILL} 调用时用它（那里已有一份不是 Deck 写的就不改）；在 ~/.codex/hooks.json 里加上 Deck 的钩子，原有的钩子保留，改之前先备份。装完要在终端里运行一次 codex 信任这个钩子，再重启 Codex 桌面应用。注册和配置技能指向运行 install 的这一份插件，它挪了位置或更新之后要重新运行一次 install。
 uninstall：从 ~/.codex/config.toml 移除 Deck 服务的注册，别的内容不动；移除 Deck 生成的 ${CODEX_CONFIGURE_SKILL} 和 Deck 写的 agents/openai.yaml；从 ~/.codex/hooks.json 移除 Deck 的钩子。
-退出码：0 成功，1 读写失败、要写的位置写不进去或是链到不存在的文件的链接、config.toml 里有不是 UTF-8 的字节、有到文件末尾都没闭合的数组、内联表或多行字符串，或者 Deck 服务注册不是 [mcp_servers.matt_deck] 表头的写法、install 时 mcp_servers 写成了内联表、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
+退出码：0 成功，1 读写失败、要写的位置写不进去或是链到不存在的文件的链接、config.toml 里有不是 UTF-8 的字节、config.toml 里有到文件末尾都没闭合的数组（或内联表、多行字符串）、Deck 服务注册不是 [mcp_servers.matt_deck] 表头的写法、install 时 mcp_servers 写成了内联表、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
 `
 const SERVER = 'matt_deck'
 const TABLE = `mcp_servers.${SERVER}`
@@ -85,14 +85,15 @@ const stringEnd = (line: string, i: number, quote: string) => {
 // inside a value, in a multi-line string or in an array or an inline table
 // not closed yet, which are part of that value, however they look, never a
 // header, a key or a comment; each bracket and comma outside strings and
-// comments, where it is and how deep in brackets it leaves the value; and
+// comments, by line, where it is in its line and how deep in brackets it
+// leaves the value; and
 // whether a value is still open at the end. Each line is read from where the
 // last left off, its strings and comments skipped, the brackets in them not
 // counted; a bracket closing none leaves the depth at 0. A header's own
 // brackets close on its line.
 const scan = (lines: string[]) => {
   const inside = new Set<number>()
-  const marks: { line: number; at: number; mark: string; depth: number }[] = []
+  const marks: { at: number; mark: string; depth: number }[][] = lines.map(() => [])
   let open: string | undefined
   let depth = 0
   lines.forEach((line, n) => {
@@ -116,7 +117,7 @@ const scan = (lines: string[]) => {
           depth--
         }
         if ('[]{},'.includes(line[i]!)) {
-          marks.push({ line: n, at: i, mark: line[i]!, depth })
+          marks[n]!.push({ at: i, mark: line[i]!, depth })
         }
         i++
         continue
@@ -240,18 +241,22 @@ const handWritten = (text: string) => {
       while (inside.has(end)) {
         end++
       }
-      const start = line.length - key.rest.length
-      const isRegistered = marks.some(
-        ({ line: m, at, mark, depth }) =>
-          m >= n &&
-          m < end &&
-          (m > n || at > start) &&
-          depth === 1 &&
-          (mark === '{' || mark === ',') &&
-          keyAt([lines[m]!.slice(at + 1), ...lines.slice(m + 1, end)].join('\n').replace(/^(?:\s|#.*)*/, ''))?.parts[0] === SERVER,
-      )
-      if (isRegistered) {
-        return 'registration'
+      // The table's text is joined once, each line found in it by where it
+      // starts, so that reading it takes time that grows with its length.
+      const value = lines.slice(n, end).join('\n')
+      let from = line.length - key.rest.length
+      for (let m = n, offset = 0; m < end; offset += lines[m]!.length + 1, m++) {
+        for (const { at, mark, depth } of marks[m]!) {
+          if (
+            at > from &&
+            depth === 1 &&
+            (mark === '{' || mark === ',') &&
+            keyAt(value.slice(offset + at + 1).replace(/^(?:\s|#.*)*/, ''))?.parts[0] === SERVER
+          ) {
+            return 'registration'
+          }
+        }
+        from = -1
       }
       found = 'inline'
     }

@@ -814,6 +814,8 @@ const UNCLOSED = [
   "x = '''\nabc\n\n[mcp_servers.matt_deck]\ncommand = \"old\"\n",
   '[mcp_servers.matt_deck]\ncommand = "old"\n\n[other]\nx = [\n  1,\n',
   'x = [\n  1,\n\n[other]\ny = 2\n',
+  // In Deck's own table, a person's table after it.
+  '[mcp_servers.matt_deck]\ncommand = "old"\nargs = [\n  "a",\n\n[other]\nk = 1\n',
 ]
 
 // The message by which install or uninstall stops on such a config.
@@ -1665,4 +1667,34 @@ test('a backup left before that is a link reaching no file is moved as the link,
   assert.equal(await readFile(BACKUP(user), 'utf8'), HOOKS_BEFORE)
   assert.equal(await lstat(gone).catch(() => undefined), undefined)
   assert.ok(stdout.includes(`之前留下的备份 ${BACKUP(user)} 已挪到 ${BACKUP(user)}.1。`), stdout)
+})
+
+// A run of the command line that says, as it exits, how much CPU time its
+// own process spent, start-up included: not the time on the wall, which holds
+// what the machine gave to other processes too.
+const CPU_AT_EXIT = `data:text/javascript,process.on('exit', () => { const { user, system } = process.cpuUsage(); process.stderr.write('cpu-ms ' + (user + system) / 1000 + '\\n') })`
+const cpuMs = async (user: string, command: string) => {
+  const { stderr } = await checked(user, () =>
+    exec(process.execPath, ['--import', CPU_AT_EXIT, CODEX, command], { env: { ...process.env, HOME: user } }).catch((error: any) => error),
+  )
+  return Number(stderr.match(/cpu-ms ([\d.]+)/)![1])
+}
+
+test('install and uninstall read mcp_servers as an inline table over many lines in time that grows with its length alone: closed, written many times, or not closed by the end', async () => {
+  for (const [name, config] of [
+    ['closed', (n: number) => `mcp_servers = {\n${Array.from({ length: n }, (_, k) => `  k${k} = { command = "x" },\n`).join('')}}\n`],
+    ['many times', (n: number) => 'mcp_servers = {}\n'.repeat(n)],
+    ['not closed', (n: number) => `mcp_servers = {\n${Array.from({ length: n }, (_, k) => `  k${k} = { command = "x" },\n`).join('')}`],
+  ] as const) {
+    for (const command of ['install', 'uninstall']) {
+      const times = []
+      for (const n of [5_000, 40_000]) {
+        const { user } = await withConfig(config(n))
+        times.push(await cpuMs(user, command))
+      }
+      // Eight times the length: eight times the time at most, start-up
+      // apart; in time that grows with its square, sixty-four.
+      assert.ok(times[1]! < times[0]! * 20, `${name} ${command}: ${times.join(' ms, ')} ms`)
+    }
+  }
 })
