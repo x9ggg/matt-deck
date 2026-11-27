@@ -158,7 +158,7 @@
 .dk-card.is-orphaned .dk-card__state{color:var(--warn)}
 .dk-card.is-closed .dk-card__state{color:var(--unlock)}
 .dk-card__title{display:-webkit-box;min-height:40px;overflow:hidden;color:var(--ink);-webkit-box-orient:vertical;-webkit-line-clamp:2}
-.dk-card__meta{overflow:hidden;color:var(--ink-muted);text-overflow:ellipsis;white-space:nowrap}
+.dk-card__meta{color:var(--ink-muted)}
 .dk-card__foot{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);min-height:33px;margin-top:auto;padding-top:var(--space-2);border-top:1px solid var(--line);color:var(--ink-muted);white-space:nowrap}
 .dk-card .dk-key{display:none}
 .dk-card.is-selected .dk-key{display:inline-block}
@@ -1101,7 +1101,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
   <h2>地图</h2>
   <section class="shot" id="map">
     <h3>Map View<code>#map</code></h3>
-    <p>档案卡，下面是成就墙，638px 时三列。Blocking Edge 写在卡片的第三行。</p>
+    <p>档案卡，下面是成就墙，638px 时三列。Blocking Edge 写在卡片的第三部分，放不下时折行，如 #76 那张；它挡着的是这个 Spec 之外的 Task。#81 没有阻塞者，只因带 needs-triage 进了“阻塞”，写这个标签。</p>
     <div class="shot__frame"><div class="dk-pane">
       <div class="dk-top">
       <header class="dk-head">
@@ -1173,13 +1173,13 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <article class="dk-card is-blocked" tabindex="0">
         <div class="dk-card__head"><span class="dk-plate is-blocked dk-plate--sm" role="img" aria-label="被阻塞"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span><span class="dk-id is-blocked">#76</span><span class="dk-card__state caption">阻塞</span></div>
         <span class="dk-card__title heading">接管与手动释放</span>
-        <span class="dk-card__meta caption">被 #74 阻塞</span>
+        <span class="dk-card__meta caption">被 #74 阻塞 · 挡着 #95 #96 #97</span>
         <div class="dk-card__foot caption"><span>更新 11-22</span></div>
       </article>
       <article class="dk-card is-blocked" tabindex="0">
-        <div class="dk-card__head"><span class="dk-plate is-blocked dk-plate--sm" role="img" aria-label="被阻塞"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span><span class="dk-id is-blocked">#77</span><span class="dk-card__state caption">阻塞</span></div>
-        <span class="dk-card__title heading">钩子未生效的提示</span>
-        <span class="dk-card__meta caption">被 #74 阻塞</span>
+        <div class="dk-card__head"><span class="dk-plate is-blocked dk-plate--sm" role="img" aria-label="被阻塞"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span><span class="dk-id is-blocked">#81</span><span class="dk-card__state caption">阻塞</span></div>
+        <span class="dk-card__title heading">Map View 卡片的关系那一行</span>
+        <span class="dk-card__meta caption"><span class="dk-tag">needs-triage</span></span>
         <div class="dk-card__foot caption"><span>更新 11-22</span></div>
       </article>
       <article class="dk-card is-closed" tabindex="0">

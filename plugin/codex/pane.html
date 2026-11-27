@@ -160,7 +160,7 @@
 .dk-card.is-orphaned .dk-card__state{color:var(--warn)}
 .dk-card.is-closed .dk-card__state{color:var(--unlock)}
 .dk-card__title{display:-webkit-box;min-height:40px;overflow:hidden;color:var(--ink);-webkit-box-orient:vertical;-webkit-line-clamp:2}
-.dk-card__meta{overflow:hidden;color:var(--ink-muted);text-overflow:ellipsis;white-space:nowrap}
+.dk-card__meta{color:var(--ink-muted)}
 .dk-card__foot{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);min-height:33px;margin-top:auto;padding-top:var(--space-2);border-top:1px solid var(--line);color:var(--ink-muted);white-space:nowrap}
 .dk-card .dk-key{display:none}
 .dk-card.is-selected .dk-key{display:inline-block}
@@ -992,18 +992,22 @@ body{margin:0;background:var(--ground)}
   }
 
   // A Child Task's card: its glyph, number and state; its title; what blocks
-  // it and what it blocks, else who holds it or whether it has Acceptance
-  // Evidence; when it was updated, or closed. Clicked, its detail, the way
+  // it, or the label it waits on, and what it blocks, else who holds it or
+  // whether it has Acceptance Evidence, in a line that wraps; when it was
+  // updated, or closed. Clicked, its detail, the way
   // going through the Map View `map`.
   const wallCard = (card, map) => {
     const state = stateOf(card, card.group)
     // Asked to take it over, the card's place holds the asking.
     if (isAsked(card, state, 'map')) return takeOverAsk(card, state)
+    // Blocked by no Task, a card in "阻塞" waits on the label its row shows.
+    const waiting = state === 'blocked' && card.blockers.length === 0 ? labelOf(card, state) : undefined
     const edges = [
+      ...(waiting !== undefined ? [el('span', 'dk-tag', waiting)] : []),
       ...(card.blockers.length > 0 ? [`被 ${refs(card.blockers)} 阻塞`] : []),
       ...(card.blocking.length > 0 ? [`挡着 ${refs(card.blocking)}`] : []),
     ]
-    const relation = edges.length > 0 ? [edges.join(' · ')]
+    const relation = edges.length > 0 ? edges.map((each, index) => (index === 0 ? each : `· ${each}`))
       : state === 'other' ? [...(card.occupantHost === session.sessionHost ? [] : [HOST_NAME[card.occupantHost]]), el('span', 'mono', card.occupantShort)]
       : state === 'orphaned' ? ['Session 已结束']
       : state === 'closed' ? [card.hasEvidence ? glyphed(el('span', 'is-pass', '验收证据'), CHECK) : '没有验收证据']

@@ -2355,7 +2355,8 @@ test('the "地图" tab shows the Map View of a Spec: its card, then its Child Ta
       '#75 Orphaned 心跳与 Orphaned Session 已结束 更新 11-22 接管',
       '#76 进行中 接管 挡着 #77 更新 11-22 接管',
       '#78 Orphaned 失联 挡着 #79 更新 11-22 接管',
-      '#19 阻塞 等分诊 更新 11-22',
+      // Blocked by no Task, it says the label it waits on.
+      '#19 阻塞 等分诊 needs-triage 更新 11-22',
       '#73 阻塞 推荐：我现在该做什么 被 #72 #70 阻塞 · 挡着 #99 #100 更新 11-22',
       '#66 已解锁 骨架 验收证据 11-22 01:40',
       '#65 已解锁 预先重构 没有验收证据 11-21 22:10',
@@ -2453,6 +2454,40 @@ test('the title, goal, Session and Blocking Edges the Deck service gives are put
   await page.click(document.querySelector('#map .dk-spec__head button'))
   assert.deepEqual([...document.querySelectorAll('#map .dk-row__title')].map(text), ['<i>规格</i>', '<i>旧地图</i>'])
   assert.equal(document.querySelector('#map .dk-row__title *'), null)
+})
+
+test('a card\'s relation line wraps where it does not fit, cut short nowhere', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '地图'))
+
+  const relation = page.document.querySelector('#map .dk-card__meta')!
+  assert.notEqual(page.window.getComputedStyle(relation).whiteSpace, 'nowrap')
+  assert.notEqual(page.window.getComputedStyle(relation).textOverflow, 'ellipsis')
+})
+
+test('a card blocked by no Task, only waiting on a person, says the label it waits on in its relation line, as its row in "任务" does; blocking another, after it', async t => {
+  const waiting = (number: number, labels: string[]) => task(number, `等人 ${number}`, { labels })
+  const wall = [
+    card(waiting(85, ['needs-triage']), 'blocked'),
+    card(waiting(86, ['ready-for-agent', 'needs-triage']), 'blocked', { blocking: [73] }),
+    card(waiting(87, ['needs-info']), 'blocked'),
+    card(waiting(88, ['wontfix', 'needs-info']), 'blocked', { blocking: [73, 79] }),
+    // Blocked by a Task, a card says what blocks it, as its row does, and no
+    // label.
+    card(task(89, '被挡', { labels: ['needs-triage'], blockers: [72], blockedBy: [72] }), 'blocked', { blocking: [73] }),
+  ]
+  const page = await openWithMaps(() => [viewOf(64, '规格', { wall })])
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '地图'))
+  // Past three blocked cards the rest are behind the button under the wall.
+  await page.click(document.querySelector('#map button.dk-group__more'))
+
+  const relations = [...document.querySelectorAll('#map .dk-card__meta')]
+  assert.deepEqual(relations.map(text), ['needs-triage', 'needs-triage · 挡着 #73', 'needs-info', 'needs-info · 挡着 #73 #79', '被 #72 阻塞 · 挡着 #73'])
+  // Drawn as the label of a row in "任务".
+  assert.deepEqual(relations.map(each => [...each.querySelectorAll('.dk-tag')].map(text)), [['needs-triage'], ['needs-triage'], ['needs-info'], ['needs-info'], []])
 })
 
 test('a wall shows three blocked Child Tasks and puts the rest behind "还有 N 个被阻塞", which shows them all, read again or not', async t => {
