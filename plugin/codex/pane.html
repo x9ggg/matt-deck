@@ -1136,15 +1136,15 @@ button.dk-row{color:inherit}
 
   const refs = numbers => numbers.map(number => `#${number}`).join(' ')
 
-  // The closeout check of the Pending Closeout Spec `number`, as its Map View,
-  // read in the same answer as the list, gives it; none for any other Task.
-  const closeoutOf = number => maps.find(map => map.number === number)?.closeoutPrompt ?? null
-  // "收尾核对" of the Spec `number`, which puts the closeout check in the
-  // prompt, off with none; on a row, it is no click on the row.
+  // The closeout check of the Pending Closeout Spec `number`, as the list
+  // gives it; none for any other Task.
+  const closeoutOf = number => list.containers.find(container => container.number === number)?.closeoutPrompt ?? null
+  // "收尾核对" of the Pending Closeout Spec `number`, which puts its closeout
+  // check `prompt` in the prompt; on a row, it is no click on the row.
   const closeoutButton = (number, prompt, className) => {
     const button = el('button', className, '收尾核对')
     button.type = 'button'
-    return prefiller(button, `closeout:${number}`, () => prompt, () => prompt === null)
+    return prefiller(button, `closeout:${number}`, () => prompt, () => false)
   }
   const CARD_STATE = { ready: '可执行', running: '进行中', other: '进行中', orphaned: 'Orphaned', blocked: '阻塞', closed: '已解锁' }
   // The card's four counts: the group, its glyph, its name.
@@ -1634,7 +1634,10 @@ button.dk-row{color:inherit}
     showExecutable()
     try {
       if (!(await before())) return
-      const { prompt } = await callTool('deck_execute', { task: number })
+      // The Skill Source holding no implement by now, nothing is filled in.
+      const answer = await callTool('deck_execute', { task: number })
+      if (!answer.ok) return
+      const { prompt } = answer
       let unanswered
       try {
         await fill(prompt, () => {

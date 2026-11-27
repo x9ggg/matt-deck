@@ -93,6 +93,8 @@ export type Container = Task & {
   group: Group
   children: number[]
   progress: { closed: number; inProgress: number; total: number }
+  // The closeout check the Panes prefill, Pending Closeout; else null.
+  closeoutPrompt: string | null
 }
 
 export type TaskList = {
@@ -174,13 +176,15 @@ export const listTasks = (
         total: children.length,
       }
       const kind = isMap ? 'map' : 'spec'
+      const isPendingCloseout = kind === 'spec' && task.isOpen && progress.closed === progress.total
       containers.push({
         ...task,
         kind,
-        isPendingCloseout: kind === 'spec' && task.isOpen && progress.closed === progress.total,
+        isPendingCloseout,
         group: groupOf(task),
         children: children.map(child => child.number),
         progress,
+        closeoutPrompt: isPendingCloseout ? closeoutPrompt({ number: task.number, progress }) : null,
       })
     } else {
       groups[groupOf(task)].push(task)
@@ -190,6 +194,20 @@ export const listTasks = (
 
   return { ok: true, fetchedAt, containers, groups }
 }
+
+// The closeout check of a Pending Closeout Spec, which both hosts' Panes
+// prefill: a check for the person to decide on, never a request to close the
+// Spec. Adapted from the reference project's specComplete template, pinned
+// by Spec #1 at 5d90182 (config/prompts/map-advancement.yaml).
+const closeoutPrompt = ({ number, progress }: { number: number; progress: Container['progress'] }) =>
+  `请对当前项目的 Spec #${number} 做收尾核对。Pane 显示 Child Task 已全部关闭` +
+  `（${progress.closed}/${progress.total}），这只是触发条件，不是完成或验收通过的证据。\n\n` +
+  '先重新读取 Spec 及其全部 Child Task 的正文、评论和当前状态。对照 Spec 的每条用户故事与验收条件，' +
+  '逐条核对 Child Task 的交付、最终代码、测试或运行结果，并列出可复核的 Acceptance Evidence 及出处；' +
+  '不要只依赖关闭状态或任务自述。说明改动所在的分支、提交或工作区及仓库检查结果，' +
+  '区分已验证、未验证和不满足的条目。以“不做”或“重复”关闭的 Child Task，说明原承诺如何满足以及是否有用户确认。\n\n' +
+  '在本 Session 中说明核对结论、剩余缺口、对应的 Spec 条目和建议下一步。' +
+  '本次只核对并报告，不关闭 Spec，也不自动重开或修改任何 Task；是否关闭 Spec 由用户决定。'
 
 // A Task as its detail shows it: the body split into the description and the
 // acceptance criteria, which are the body's checklist items.

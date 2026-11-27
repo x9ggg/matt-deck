@@ -46,6 +46,8 @@ export type Container = Task & {
   group: Group
   children: number[]
   progress: { closed: number; inProgress: number; total: number }
+  // The closeout check to prefill, Pending Closeout; else null.
+  closeoutPrompt: string | null
 }
 
 export type TaskList = {
@@ -99,14 +101,21 @@ export type DeckTaskAnswer = { ok: true; task: TaskDetail; reports: Report[] } |
 // and the Session holding the Task now, with its host and its id cut short,
 // and, when another Session holds it, whether that Occupancy is Orphaned; or
 // why the Task cannot be occupied.
-export type DeckOccupyAnswer =
+// Given a reference, it names as `task` the Task it read; one referring to
+// none answers kind no-reference.
+export type DeckOccupyAnswer = { task?: number } & (
   | { ok: true; occupied: true; occupant: string; occupantHost: Host; occupantShort: string }
   | { ok: true; occupied: false; occupant: string; occupantHost: Host; occupantShort: string; isOrphaned: boolean }
-  | { ok: false; failure: { kind: TaskFailure['kind'] | 'not-open'; message: string } }
+  | { ok: false; failure: { kind: TaskFailure['kind'] | 'not-open' | 'no-reference'; message: string } }
+)
 
 // What `deck_release` answers: whether the Session held an Occupancy of the
 // Task to release.
 export type DeckReleaseAnswer = { ok: true; released: boolean } | { ok: false; failure: TaskFailure }
+
+// What `deck_execute` answers: the Execute Prompt of a Task, or why the
+// Skill Source gives none.
+export type DeckExecuteAnswer = { ok: true; prompt: string } | { ok: false; failure: SkillFailure }
 
 // A skill of the Skill Source as `deck_skills` lists it: `call` is how this
 // Session invokes it, `path` its file.

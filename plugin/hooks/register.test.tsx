@@ -55,6 +55,7 @@ const spec = (number: number, title: string, children: number[], progress: objec
   group: 'ready',
   children,
   progress,
+  closeoutPrompt: null,
   ...more,
 })
 
@@ -228,6 +229,22 @@ let clock: MockClock
 // at each call; a clock that moves only when the test moves it; and a pane
 // list kept the way the engine keeps it. On a narrow terminal the first,
 // unasked open leaves the pane open but undrawn. Returns what the Mod did.
+// What this fake Deck service's deck_occupy answers its arguments, `occupy`
+// answering for a Session and a Task: given a reference, it plays the
+// service's reading only for a first word that begins with a Task's number,
+// `#12` or `12`, which it names in the answer, and answers any other
+// reference, a link included, as referring to none. How the service reads a
+// reference is tested on the service.
+const occupiedBy = (args: Record<string, unknown>, occupy: (session: string, task: number) => Answer): Answer => {
+  if (args.reference === undefined) return occupy(args.session as string, args.task as number)
+  const number = /^#?(\d+)/.exec((args.reference as string).trim())?.[1]
+  if (number === undefined) {
+    return { isError: false, structuredContent: { ok: false, failure: { kind: 'no-reference', message: 'refers to no Task' } } }
+  }
+  const answer = occupy(args.session as string, Number(number))
+  return { ...answer, structuredContent: { task: Number(number), ...(answer.structuredContent as object) } }
+}
+
 const engine = (
   on: On,
   {
@@ -245,6 +262,10 @@ const engine = (
     recommendation = () => ({ isError: false, structuredContent: { found: false } }),
     occupy = session => ({ isError: false, structuredContent: { ok: true, occupied: true, ...heldBy(session) } }),
     release = () => ({ isError: false, structuredContent: { ok: true, released: true } }),
+    execute = task =>
+      (skills().structuredContent as any)?.skills?.some((skill: any) => skill.name === 'implement')
+        ? { isError: false, structuredContent: { ok: true, prompt: executedBy(task) } }
+        : { isError: false, structuredContent: { ok: false, failure: { kind: 'unknown-skill', message: 'the Skill Source has no skill named implement' } } },
     isDropped = () => false,
     run = () => ({ exitCode: 0, stdout: '', stderr: '' }),
   }: {
@@ -270,6 +291,10 @@ const engine = (
     occupy?: (session: string, task: number) => Answer
     // What `deck_release` answers for a Task.
     release?: (task: number) => Answer
+    // What `deck_execute` answers for a Task: by default its Execute Prompt
+    // as this fake Deck service writes it where the Skill Source holds
+    // implement, else why not.
+    execute?: (task: number) => Answer
     // Whether a hook beneath stops a prompt sent with `text`.
     isDropped?: (text: string) => boolean
     // What a command the Mod runs on the host ends with; one that throws
@@ -334,10 +359,12 @@ const engine = (
                 : e.tool === 'deck_recommendation'
                   ? recommendation(e.args!.requestId as string)
                   : e.tool === 'deck_occupy'
-                    ? occupy(e.args!.session as string, e.args!.task as number)
+                    ? occupiedBy(e.args!, occupy)
                     : e.tool === 'deck_release'
                       ? release(e.args!.task as number)
-                      : config!
+                      : e.tool === 'deck_execute'
+                        ? execute(e.args!.task as number)
+                        : config!
 
     return {
       value: {
@@ -2745,8 +2772,13 @@ test('above the prompt the stages take the primary button\'s place in every tab,
   await ui.unmount()
 })
 
-// The Execute Prompt of the Task `number`, as the Pane puts it in the prompt
-// box: the Skill Source's /implement on the Task, and the ask to report.
+// The Execute Prompt of the Task `number` as this fake Deck service's
+// deck_execute writes it: no text the Mod could write itself, so a Mod that
+// prefills it took it from deck_execute.
+const executedBy = (number: number) => `Execute Prompt of #${number} as deck_execute writes it 9w3k`
+
+// The Execute Prompt of the Task `number` as the person sends it: the Skill
+// Source's /implement on the Task, and the ask to report.
 const executePrompt = (call: string, number: number) =>
   `${call} #${number}\n\n` +
   `When you finish, call the tool deck_report for Task #${number}: what you did, ` +
@@ -2777,7 +2809,7 @@ test('e on a ready Task puts its Execute Prompt in the prompt box, from the list
   await ui.press({ key: 'execute' })
   await seen.clock.settle()
 
-  expect(seen.filled.map(fill => fill.text)).toEqual(Array(3).fill(executePrompt('/mattpocock-skills:implement', 3)))
+  expect(seen.filled.map(fill => fill.text)).toEqual(Array(3).fill(`${executedBy(3)} `))
   expect(seen.calls.filter(call => call.tool === 'deck_occupy')).toEqual([])
   await ui.unmount()
 })
@@ -2801,7 +2833,7 @@ test('e on the Recommendation puts the recommended Task\'s Execute Prompt in the
     await ui.unmount()
   }
 
-  expect(seen.filled.map(fill => fill.text)).toEqual(Array(2).fill(executePrompt('/implement', 3)))
+  expect(seen.filled.map(fill => fill.text)).toEqual(Array(2).fill(`${executedBy(3)} `))
   expect(seen.calls.filter(call => call.tool === 'deck_occupy')).toEqual([])
 })
 
@@ -2824,7 +2856,7 @@ test('without /implement in the Skill Source, e says so and fills nothing', asyn
 const submit = ($: Engine, text: string, command?: { name: string; args: string }) =>
   $.prompt.submit({ text, ...(command === undefined ? {} : { command }), wait: false, origin: { kind: 'composer' } })
 
-test('a sent /implement with a Task reference occupies the Task for this Session, the Execute Prompt or typed by hand', async ($, on) => {
+test('a sent /implement hands its arguments, as sent, to the Deck service to occupy the Task they refer to for this Session, the Execute Prompt or typed by hand', async ($, on) => {
   const seen = engine(on, { config: { structuredContent: CONFIGURED, isError: false }, skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT })
   await start($)
   await seen.clock.settle()
@@ -2833,7 +2865,7 @@ test('a sent /implement with a Task reference occupies the Task for this Session
 
   await submit($, execute, { name: 'mattpocock-skills:implement', args: execute.slice(execute.indexOf(' ') + 1) })
   await seen.clock.settle()
-  expect(occupies()).toEqual([{ session: 'a1b2c3d4-session', task: 3 }])
+  expect(occupies()).toEqual([{ session: 'a1b2c3d4-session', reference: execute.slice(execute.indexOf(' ') + 1) }])
   // The Tasks are read again to show it.
   expect(seen.calls.at(-1)?.tool).toBe('deck_tasks')
 
@@ -2841,16 +2873,12 @@ test('a sent /implement with a Task reference occupies the Task for this Session
     await submit($, `/mattpocock-skills:implement ${args}`, { name: 'mattpocock-skills:implement', args })
   }
   await seen.clock.settle()
-  // A link says which repository it is in: the Deck service checks it is the
-  // Task Source's.
-  expect(occupies().slice(1)).toEqual([
-    { session: 'a1b2c3d4-session', task: 7 },
-    { session: 'a1b2c3d4-session', task: 7 },
-    { session: 'a1b2c3d4-session', task: 7, repository: 'acme/shop' },
-  ])
+  // The Deck service reads which Task each refers to, and checks a link is
+  // to the Task Source's repository.
+  expect(occupies().slice(1)).toEqual(['#7', '7 先写测试', 'https://github.com/acme/shop/issues/7'].map(reference => ({ session: 'a1b2c3d4-session', reference })))
 })
 
-test('nothing is occupied by a prompt that is not /implement on a Task, or that was not sent', async ($, on) => {
+test('a prompt that does not run /implement, or that was not sent, asks the Deck service nothing; /implement on no Task, told so, says nothing', async ($, on) => {
   const seen = engine(on, {
     config: { structuredContent: CONFIGURED, isError: false },
     skills: () => PLUGIN_SKILLS_WITH_IMPLEMENT,
@@ -2859,16 +2887,19 @@ test('nothing is occupied by a prompt that is not /implement on a Task, or that 
   await start($)
   await seen.clock.settle()
 
-  // Another skill on a Task, /implement on no Task, and the text of one
-  // that runs no command.
+  // Another skill on a Task, and the text of one that runs no command.
   await submit($, '/mattpocock-skills:tdd #3', { name: 'mattpocock-skills:tdd', args: '#3' })
-  await submit($, '/mattpocock-skills:implement 先看看', { name: 'mattpocock-skills:implement', args: '先看看' })
   await submit($, '帮我 /mattpocock-skills:implement #3')
   // Stopped by a hook beneath.
   await submit($, '/mattpocock-skills:implement #3 不发', { name: 'mattpocock-skills:implement', args: '#3 不发' })
   await seen.clock.settle()
-
   expect(seen.calls.filter(call => call.tool === 'deck_occupy')).toEqual([])
+
+  // /implement on no Task: the Deck service reads it and says so.
+  await submit($, '/mattpocock-skills:implement 先看看', { name: 'mattpocock-skills:implement', args: '先看看' })
+  await seen.clock.settle()
+  expect(seen.calls.filter(call => call.tool === 'deck_occupy').map(call => call.args)).toEqual([{ session: 'a1b2c3d4-session', reference: '先看看' }])
+  expect(seen.toasts).toEqual([])
 })
 
 test('a Task held by another Session stays with it, and the person is told who holds it', async ($, on) => {
@@ -2903,7 +2934,7 @@ test('a Task whose Session has ended stays Orphaned, and the person is told that
 
   expect(seen.toasts).toEqual(['#3 的 Session 已结束，本 Session 没有登记 Occupancy。在 Pane 里按 t 接管或 x 释放。'])
   expect(seen.calls.filter(call => call.tool === 'deck_occupy').map(call => call.args)).toEqual([
-    { session: 'a1b2c3d4-session', task: 3 },
+    { session: 'a1b2c3d4-session', reference: '#3' },
   ])
 })
 
@@ -3104,7 +3135,7 @@ test('a confirmed take-over moves the Occupancy to this Session, then puts the E
   expect(seen.calls.filter(call => call.tool === 'deck_occupy').map(call => call.args)).toEqual([
     { session: 'a1b2c3d4-session', task: 17, takeOver: '3f9c21d0-other' },
   ])
-  expect(seen.filled.map(fill => fill.text)).toEqual([executePrompt('/mattpocock-skills:implement', 17)])
+  expect(seen.filled.map(fill => fill.text)).toEqual([`${executedBy(17)} `])
   expect((await texts(ui)).join('\n')).not.toContain(TAKEOVER_LINES[0])
   expect((await ui.find({ key: 'task:17' }))?.text).toMatch(/^▶ #17 从本仓库安装 +本 Session$/)
   await ui.unmount()
@@ -3320,7 +3351,7 @@ test('e on the Recommendation of another Session\'s Task asks to take it over fi
   expect(seen.calls.filter(call => call.tool === 'deck_occupy').map(call => call.args)).toEqual([
     { session: 'a1b2c3d4-session', task: 17, takeOver: '3f9c21d0-other' },
   ])
-  expect(seen.filled.map(fill => fill.text)).toEqual([executePrompt('/implement', 17)])
+  expect(seen.filled.map(fill => fill.text)).toEqual([`${executedBy(17)} `])
   await ui.unmount()
 })
 
@@ -3558,7 +3589,7 @@ test('t on an Orphaned Task asks to confirm that its Session has ended, then tak
   await ui.press({ key: 'takeover:confirm' })
   await seen.clock.settle()
   expect(callsOf(seen, 'deck_occupy')).toEqual([{ session: 'a1b2c3d4-session', task: 4, takeOver: '9043fe32-ended' }])
-  expect(seen.filled.map(fill => fill.text)).toEqual([executePrompt('/mattpocock-skills:implement', 4)])
+  expect(seen.filled.map(fill => fill.text)).toEqual([`${executedBy(4)} `])
   await ui.unmount()
 })
 
@@ -3836,7 +3867,7 @@ test('a /implement sent first after a /clear while the pane is closed occupies t
   await turnStart($, 't1', '/mattpocock-skills:implement #3')
   await seen.clock.settle()
 
-  expect(callsOf(seen, 'deck_occupy')).toEqual([{ session: '2c9f224f-cleared', task: 3 }])
+  expect(callsOf(seen, 'deck_occupy')).toEqual([{ session: '2c9f224f-cleared', reference: '#3' }])
 })
 
 test('after a /clear without a project config the deck command answers at once while it is read, then says it is unconfigured', async ($, on) => {
@@ -3958,7 +3989,7 @@ test('a /implement sent while the project config is read waits on that read, the
   await seen.clock.settle()
 
   expect(callsOf(seen, 'deck_config')).toHaveLength(1)
-  expect(callsOf(seen, 'deck_occupy')).toEqual([{ session: 'a1b2c3d4-session', task: 3 }])
+  expect(callsOf(seen, 'deck_occupy')).toEqual([{ session: 'a1b2c3d4-session', reference: '#3' }])
 })
 
 const REPORT = 'mcp__plugin_matt-deck_deck__deck_report'
@@ -4124,9 +4155,13 @@ test('a report on a Task whose detail was read shows in it at once, read again p
   await ui.unmount()
 })
 
+// The closeout check as this fake Deck service words it in the list: no text
+// the Mod could write itself, so a Mod that prefills it took it from the list.
+const CLOSEOUT = '收尾核对 Spec #1 as the Deck service words it in the list 4q7z'
+
 const CLOSEOUT_PROJECT = tasks({
   containers: [
-    spec(1, '规格：交付一个 Pane', [2, 3], { closed: 2, inProgress: 0, total: 2 }, { isPendingCloseout: true }),
+    spec(1, '规格：交付一个 Pane', [2, 3], { closed: 2, inProgress: 0, total: 2 }, { isPendingCloseout: true, closeoutPrompt: CLOSEOUT }),
   ],
   done: [2, 3].map(number => task(number, `Child Task ${number}`, { parent: 1, isOpen: false })),
 })
@@ -4195,14 +4230,8 @@ test('k prefills a Spec closeout check from the list and Map View, never sending
 
   expect(seen.filled).toHaveLength(4)
   const prompt = seen.filled[0]!.text
-  expect(prompt).toContain('Spec #1')
-  expect(prompt).toContain('2/2')
-  expect(prompt).toContain('每条用户故事与验收条件')
-  expect(prompt).toContain('Acceptance Evidence 及出处')
-  expect(prompt).toContain('核对结论、剩余缺口')
-  expect(prompt).toContain('不关闭 Spec')
-  expect(prompt).toContain('是否关闭 Spec 由用户决定')
-  expect(prompt).not.toContain('/implement')
+  // As every prefill of the Mod, a space after it.
+  expect(prompt).toBe(`${CLOSEOUT} `)
   expect(seen.filled.every(fill => fill.text === prompt && fill.mode === 'replace')).toBe(true)
   expect(seen.ran).toEqual([])
   expect(seen.calls.filter(call => call.tool === 'deck_occupy')).toEqual([])
@@ -4244,7 +4273,7 @@ test('k copies the closeout check and says so when the host cannot prefill', asy
   await ui.press({ key: 'closeout:1' })
   await seen.clock.settle()
   expect(seen.filled).toEqual([])
-  expect(seen.copied).toEqual([expect.stringContaining('Spec #1')])
+  expect(seen.copied).toEqual([CLOSEOUT])
   expect(seen.toasts).toEqual([`不能预填输入框，已复制到剪贴板：${seen.copied[0]}`])
   expect(seen.ran).toEqual([])
   await ui.unmount()

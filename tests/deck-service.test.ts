@@ -3219,17 +3219,18 @@ test('deck_occupy occupies a Task a link refers to only in the Task Source\'s re
   const deck = startDeck(await configured(), { ...gh.env, HOME: user })
   t.after(deck.stop)
 
-  const other = await deck.callTool('deck_occupy', { session: 'session-a', task: 5, repository: 'acme/other' })
+  const other = await deck.callTool('deck_occupy', { session: 'session-a', reference: 'https://github.com/acme/other/issues/5' })
   // GitHub takes a repository's owner and name in any case.
-  const same = await deck.callTool('deck_occupy', { session: 'session-a', task: 3, repository: 'Acme/Shop' })
-  const malformed = await deck.callTool('deck_occupy', { session: 'session-a', task: 3, repository: 7 })
+  const same = await deck.callTool('deck_occupy', { session: 'session-a', reference: 'https://github.com/Acme/Shop/issues/3' })
+  const malformed = await deck.callTool('deck_occupy', { session: 'session-a', task: 3, reference: '#3' })
   const { groups } = (await deck.callTool('deck_tasks')).structuredContent
 
   assert.deepEqual(other.structuredContent, {
     ok: false,
+    task: 5,
     failure: { kind: 'not-open', message: '#5 of acme/other is not a Task of the Task Source, acme/shop' },
   })
-  assert.deepEqual(same.structuredContent, { ok: true, occupied: true, occupant: 'session-a', occupantHost: 'claude-code', occupantShort: 'session-' })
+  assert.deepEqual(same.structuredContent, { ok: true, task: 3, occupied: true, occupant: 'session-a', occupantHost: 'claude-code', occupantShort: 'session-' })
   assert.equal(malformed.isError, true)
   assert.deepEqual(occupants(groups.inProgress), { 3: 'session-a' })
 })
@@ -4024,7 +4025,9 @@ const callFrom = (deck: ReturnType<typeof startDeck>, session: string | undefine
 test('started for Codex, deck_execute answers the Execute Prompt of a Task, $implement on it and the ask to report through deck_report, for the page only', async t => {
   const gh = await fakeGh()
   await gh.issues([issue({ number: 1 }), issue({ number: 74 })])
-  const deck = startDeck(await configured(), gh.env, 'codex')
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  await skillFile(join(user, '.claude', 'skills'), 'implement', '开始做一个 Task。')
+  const deck = startDeck(dir, { ...gh.env, HOME: user }, 'codex')
   t.after(deck.stop)
 
   const { result: listed } = await deck.request('tools/list')
@@ -4035,6 +4038,7 @@ test('started for Codex, deck_execute answers the Execute Prompt of a Task, $imp
   assert.deepEqual(listed.tools.find((tool: any) => tool.name === 'deck_execute')._meta, { ui: { visibility: ['app'] } })
   assert.equal(result.isError, false)
   assert.deepEqual(result.structuredContent, {
+    ok: true,
     prompt:
       '$implement #74\n\nWhen you finish, call the tool deck_report for Task #74: what you did, and the Acceptance Evidence for each acceptance criterion with where it comes from.',
   })
@@ -4072,7 +4076,7 @@ test('started for Codex, the hook\'s tool records the Session\'s Occupancy of ea
       '$implement https://github.com/acme/other/issues/13',
       '$implement https://github.com/acme/shop/pull/9',
       '$implement #9x',
-      '$implement #9.',
+      '$implement #9-',
       '$implement 顺便看 #9',
       '',
       '$implement #3',
@@ -4454,7 +4458,7 @@ test('started for Codex, deck_report keeps a report sent with no Session under t
   assert.deepEqual(reports.map((report: any) => [report.session, report.result]), [[CODEX_SESSION, '做完了。'], [CODEX_NEIGHBOUR, '旁边的。']])
 })
 
-test('only started for Codex does the Deck service offer the hook\'s tool, deck_execute and deck_hook, all for the page only', async t => {
+test('only started for Codex does the Deck service offer the hook\'s tool and deck_hook, both for the page only; deck_execute it offers both hosts, for the page only in Codex', async t => {
   const claude = startDeck(await configured())
   t.after(claude.stop)
   const codex = startDeck(await configured(), {}, 'codex')
@@ -4466,13 +4470,14 @@ test('only started for Codex does the Deck service offer the hook\'s tool, deck_
   const refused = await Promise.all(
     [
       [HOOK_TOOL, { prompt: '$implement #3' }],
-      ['deck_execute', { task: 3 }],
       ['deck_hook', {}],
     ].map(([name, args]) => claude.request('tools/call', { name, arguments: args, _meta: { threadId: CODEX_SESSION } })),
   )
 
-  assert.deepEqual([named(forClaude, HOOK_TOOL), named(forClaude, 'deck_execute'), named(forClaude, 'deck_hook')], [undefined, undefined, undefined])
-  assert.deepEqual(refused.map(reply => reply.error?.code), [-32602, -32602, -32602])
+  assert.deepEqual([named(forClaude, HOOK_TOOL), named(forClaude, 'deck_hook')], [undefined, undefined])
+  assert.deepEqual(refused.map(reply => reply.error?.code), [-32602, -32602])
+  // Claude Code's Mod calls it: unmarked there.
+  assert.equal(named(forClaude, 'deck_execute')._meta, undefined)
   assert.deepEqual(named(forCodex, HOOK_TOOL)._meta, { ui: { visibility: ['app'] } })
   assert.deepEqual(named(forCodex, 'deck_execute')._meta, { ui: { visibility: ['app'] } })
 })
@@ -4810,4 +4815,114 @@ test('a read of the Task Source that takes 16 seconds is answered again for 15 s
   await clock.set(start + 16_000 + 15_000)
   await deck.callTool('deck_map', { session: CODEX_SESSION })
   assert.equal((await gh.calls()).length, 2)
+})
+
+test('deck_tasks gives each Spec and Map of the list its closeout check: a Pending Closeout Spec the one deck_map gives, word for word; every other one null', async t => {
+  const gh = await fakeGh()
+  await gh.issues([
+    issue({ number: 1 }),
+    issue({ number: 2, parent: 1, state: 'CLOSED' }),
+    issue({ number: 3, parent: 1, state: 'CLOSED' }),
+    issue({ number: 10 }),
+    issue({ number: 11, parent: 10, state: 'CLOSED' }),
+    issue({ number: 12, parent: 10 }),
+    issue({ number: 20, labels: ['wayfinder:map'] }),
+    issue({ number: 21, parent: 20, state: 'CLOSED' }),
+    issue({ number: 30, state: 'CLOSED' }),
+    issue({ number: 31, parent: 30, state: 'CLOSED' }),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { containers } = (await deck.callTool('deck_tasks')).structuredContent
+  const { maps } = (await deck.callTool('deck_map', { session: 'this-session' })).structuredContent
+
+  const prompts = (each: { number: number; closeoutPrompt: string | null }[]) => each.map(({ number, closeoutPrompt }) => [number, closeoutPrompt])
+  assert.deepEqual(prompts([...containers].sort((a: any, b: any) => a.number - b.number)), prompts(maps))
+  assert.match(containers.find((each: any) => each.number === 1).closeoutPrompt, /^请对当前项目的 Spec #1 做收尾核对。Pane 显示 Child Task 已全部关闭（2\/2）/)
+  assert.deepEqual(containers.filter((each: any) => each.number !== 1).map((each: any) => each.closeoutPrompt), [null, null, null])
+})
+
+// The Execute Prompt of the Task `task`, its call of implement `call`.
+const executePrompt = (call: string, task: number) =>
+  `${call} #${task}\n\nWhen you finish, call the tool deck_report for Task #${task}: what you did, and the Acceptance Evidence for each acceptance criterion with where it comes from.`
+
+test('deck_execute calls implement as the Skill Source does on each host: /<plugin>:implement or /implement in Claude Code, $implement in Codex; with no implement in it, it answers why', async t => {
+  const fromPlugin = await withSkillSource({ type: 'plugin', name: 'mattpocock-skills' })
+  const matt = join(fromPlugin.user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
+  await skillFile(join(matt, 'skills', 'engineering'), 'implement', '开始做一个 Task。')
+  await installedPlugins(fromPlugin.user, { 'mattpocock-skills@official': [{ scope: 'user', installPath: matt }] })
+  const fromDirectory = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  await skillFile(join(fromDirectory.user, '.claude', 'skills'), 'implement', '开始做一个 Task。')
+  const without = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  await skillFile(join(without.user, '.claude', 'skills'), 'tdd', '先写测试。')
+  const started = [
+    startDeck(fromPlugin.dir, { HOME: fromPlugin.user }),
+    startDeck(fromDirectory.dir, { HOME: fromDirectory.user }),
+    startDeck(fromDirectory.dir, { HOME: fromDirectory.user }, 'codex'),
+    startDeck(without.dir, { HOME: without.user }),
+  ]
+  for (const deck of started) t.after(deck.stop)
+
+  const answers = await Promise.all(started.map(deck => deck.callTool('deck_execute', { task: 7 })))
+
+  assert.deepEqual(answers.slice(0, 3).map(answer => answer.structuredContent), [
+    { ok: true, prompt: executePrompt('/mattpocock-skills:implement', 7) },
+    { ok: true, prompt: executePrompt('/implement', 7) },
+    { ok: true, prompt: executePrompt('$implement', 7) },
+  ])
+  assert.equal(answers[3].isError, false)
+  assert.deepEqual(answers[3].structuredContent, { ok: false, failure: { kind: 'unknown-skill', message: 'the Skill Source has no skill named implement' } })
+})
+
+// How the Task references a test sends after implement are read: each one
+// that names #12 of the Task Source, and each that names nothing.
+const REFERENCES_TO_12 = ['#12', '12', '#12.', '#12，', '#12，接着做', '12。', 'https://github.com/acme/shop/issues/12', 'https://github.com/acme/shop/issues/12#issuecomment-1', 'https://github.com/acme/shop/issues/12，再看']
+const NO_REFERENCES = ['https://gitlab.com/acme/shop/issues/9', 'https://github.com/evil/x/acme/shop/issues/11', 'https://github.com/acme/shop/pull/12']
+
+test('the hook\'s tool reads after $implement #12 and 12, punctuation after it left out, and a link to an issue of github.com, whatever its fragment; no other host, longer path or pull request', async t => {
+  for (const reference of [...REFERENCES_TO_12, ...NO_REFERENCES]) {
+    const user = await home()
+    const gh = await fakeGh()
+    await gh.issues([issue({ number: 9 }), issue({ number: 11 }), issue({ number: 12 })])
+    const deck = startDeck(await configured(), { ...gh.env, HOME: user }, 'codex')
+    await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: `$implement ${reference}` })
+    const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+    deck.stop()
+    assert.deepEqual(occupants(groups.inProgress), REFERENCES_TO_12.includes(reference) ? { 12: CODEX_SESSION } : {}, reference)
+  }
+})
+
+test('deck_occupy reads a reference as the hook\'s tool does, Claude Code\'s Mod passing it as sent, and names the Task it read; a reference to none occupies nothing', async t => {
+  for (const reference of [...REFERENCES_TO_12, ...NO_REFERENCES, '先看看']) {
+    const user = await home()
+    const gh = await fakeGh()
+    await gh.issues([issue({ number: 9 }), issue({ number: 11 }), issue({ number: 12 })])
+    const deck = startDeck(await configured(), { ...gh.env, HOME: user })
+    const answer = (await deck.callTool('deck_occupy', { session: 'session-a', reference: `${reference} 先写测试` })).structuredContent
+    const { groups } = (await deck.callTool('deck_tasks')).structuredContent
+    deck.stop()
+    if (REFERENCES_TO_12.includes(reference)) {
+      assert.deepEqual([answer.ok, answer.occupied, answer.task], [true, true, 12], reference)
+      assert.deepEqual(occupants(groups.inProgress), { 12: 'session-a' }, reference)
+    } else {
+      assert.deepEqual([answer.ok, answer.failure?.kind], [false, 'no-reference'], reference)
+      assert.deepEqual(occupants(groups.inProgress), {}, reference)
+    }
+  }
+})
+
+test('the hook\'s tool answers within a second a prompt whose implement is followed by one word of 60,000 characters', async t => {
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 12 })])
+  const deck = startDeck(await configured(), gh.env, 'codex')
+  t.after(deck.stop)
+  await deck.callTool('deck_tasks')
+  const words = ['a'.repeat(60_000), `${'a/'.repeat(30_000)}issues/12x`, `https://github.com/${'a'.repeat(60_000)}`]
+
+  for (const word of words) {
+    const began = performance.now()
+    await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: `$implement ${word}` })
+    assert.ok(performance.now() - began < 1_000, `${word.slice(0, 20)}… took ${Math.round(performance.now() - began)} ms`)
+  }
 })

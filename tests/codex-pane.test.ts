@@ -243,7 +243,7 @@ const deckAt =
       return answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS })
     }
     if (name === 'deck_execute') {
-      return answered({ prompt: executePromptOf(args.task) })
+      return answered({ ok: true, prompt: executePromptOf(args.task) })
     }
     throw new Error(`unexpected call of ${name}`)
   }
@@ -3032,6 +3032,7 @@ const closeoutProject = (pending: boolean, read = 1) => {
     group: 'ready',
     children,
     progress: { closed, inProgress: 0, total: children.length },
+    closeoutPrompt: isPendingCloseout ? closeoutPromptOf(read) : null,
   })
   const [pendingSpec, openSpec] = [spec(64, '规格：里程碑二', [66, 65], pending ? 2 : 1, pending), spec(80, '规格：里程碑三', [81, 82], 1, false)]
   const [ready, reopened] = [task(81, '还开着', { parent: 80 }), task(65, '预先重构', { parent: 64 })]
@@ -3048,8 +3049,8 @@ const closeoutProject = (pending: boolean, read = 1) => {
   const maps = {
     ...MAPS,
     maps: [
-      { ...pendingSpec, goal: null, wall: wallOf(64), closeoutPrompt: pending ? closeoutPromptOf(read) : null },
-      { ...openSpec, goal: null, wall: wallOf(80), closeoutPrompt: null },
+      { ...pendingSpec, goal: null, wall: wallOf(64) },
+      { ...openSpec, goal: null, wall: wallOf(80) },
     ],
   }
   return { tasks, maps }
@@ -5148,7 +5149,7 @@ test('a takeover that moved the Occupancy, its Execute Prompt refused by the Hos
   // An Execute Prompt of more than one line, as the Deck service may give it.
   const prompt = `${executePromptOf(72)}\n\n  第二段 <i>as given</i> 3v9c`
   const page = await openPage({
-    answer: (name, args: any) => (name === 'deck_execute' ? answered({ prompt }) : deck.answer(name, args)),
+    answer: (name, args: any) => (name === 'deck_execute' ? answered({ ok: true, prompt }) : deck.answer(name, args)),
     answerMessage: refuses(),
   })
   t.after(page.close)
@@ -7355,8 +7356,9 @@ test('a detail covered by another and gone back to has its prefills drawn as the
 test('"收尾核对" of one Spec leaves another Spec\'s on', async t => {
   const project = () => {
     const read: any = closeoutProject(true)
-    read.tasks.containers[1] = { ...read.tasks.containers[1], isPendingCloseout: true }
-    read.maps.maps[1] = { ...read.maps.maps[1], isPendingCloseout: true, closeoutPrompt: '收尾核对 #80 as the Deck service words it 3k5m' }
+    const closeout = { isPendingCloseout: true, closeoutPrompt: '收尾核对 #80 as the Deck service words it 3k5m' }
+    read.tasks.containers[1] = { ...read.tasks.containers[1], ...closeout }
+    read.maps.maps[1] = { ...read.maps.maps[1], ...closeout }
     return read
   }
   const page = await openPage({ answer: deckOfCloseout(project) })

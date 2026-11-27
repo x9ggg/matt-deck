@@ -10,6 +10,7 @@ import type {
   ConfigView,
   DeckAskAnswer,
   DeckConfigAnswer,
+  DeckExecuteAnswer,
   DeckOccupyAnswer,
   DeckRecommendationAnswer,
   DeckReleaseAnswer,
@@ -57,10 +58,6 @@ const FILTERS: Filter[] = ['all', 'ready', 'inProgress', 'blocked', 'done']
 
 // The skill an Execute Prompt runs, called as the Skill Source calls it.
 const IMPLEMENT = 'implement'
-
-// A Task reference as the first word of /implement's arguments: `#12`, `12`,
-// or a link ending in `owner/name/issues/12`, which names its repository.
-const TASK_REFERENCE = /^(?:#?(\d+)|\S*?([^/\s]+\/[^/\s]+)\/issues\/(\d+))$/
 
 const view = atom(
   { plugin: 'matt-deck', key: 'view' } as const,
@@ -303,42 +300,40 @@ const implementCall = async ($: EngineInterface) => {
   return skills.status === 'loaded' ? skills.skills.find(skill => skill.name === IMPLEMENT)?.call : undefined
 }
 
-// Puts the Execute Prompt of the Task `number` in the prompt box: the Skill
-// Source's /implement on the Task, and the ask to report the result and its
-// Acceptance Evidence through deck_report.
+// Puts the Execute Prompt of the Task `number` in the prompt box, as the Deck
+// service writes it: the Skill Source's /implement on the Task, and the ask
+// to report the result and its Acceptance Evidence through deck_report.
 const executeTask = async ($: EngineInterface, number: number, surface: RenderSurface) => {
-  const call = await implementCall($)
-  if (call === undefined) {
-    $.ui.toast(`Skill Source 里没有 ${IMPLEMENT} 技能，不能预填执行 #${number}。`)
+  const deck = await $.mcp.connect('deck')
+  let answer: DeckExecuteAnswer
+  if (!deck.isConnected) {
+    answer = { ok: false, failure: { kind: 'unreachable', message: deck.message } }
+  } else {
+    const result = await $.mcp.call(deck.server, 'deck_execute', { task: number })
+    answer = result.isError ? { ok: false, failure: { kind: 'failed', message: textOf(result) } } : JSON.parse(result.content[0]!.text!)
+  }
+  if (!answer.ok) {
+    $.ui.toast(
+      answer.failure.kind === 'unknown-skill'
+        ? `Skill Source 里没有 ${IMPLEMENT} 技能，不能预填执行 #${number}。`
+        : `不能预填执行 #${number}：${answer.failure.message}`,
+    )
     return
   }
-  const text =
-    `${call} #${number}\n\n` +
-    `When you finish, call the tool deck_report for Task #${number}: what you did, ` +
-    'and the Acceptance Evidence for each acceptance criterion with where it comes from.'
-  await prefill($, text, surface)
+  await prefill($, answer.prompt, surface)
 }
 
-// Adapted from the reference project's specComplete template, pinned by
-// Spec #1 at 5d90182 (config/prompts/map-advancement.yaml). Here the output
-// is a check for the user to decide on, never a request to close the Spec.
+// Puts the closeout check of the Spec `number` in the prompt box, as the
+// Deck service gives it with the list: a check for the person to decide on,
+// never a request to close the Spec.
 const closeoutSpec = async ($: EngineInterface, number: number, surface: RenderSurface) => {
   const { tasks } = await read($, view)
   const spec = tasks.status === 'loading' ? undefined : tasks.list?.containers.find(task => task.number === number)
-  if (spec?.isPendingCloseout !== true) {
+  if (spec?.closeoutPrompt == null) {
     $.ui.toast(`#${number} 当前不处于待收尾核对状态。`)
     return
   }
-  const text =
-    `请对当前项目的 Spec #${number} 做收尾核对。Pane 显示 Child Task 已全部关闭` +
-    `（${spec.progress.closed}/${spec.progress.total}），这只是触发条件，不是完成或验收通过的证据。\n\n` +
-    '先重新读取 Spec 及其全部 Child Task 的正文、评论和当前状态。对照 Spec 的每条用户故事与验收条件，' +
-    '逐条核对 Child Task 的交付、最终代码、测试或运行结果，并列出可复核的 Acceptance Evidence 及出处；' +
-    '不要只依赖关闭状态或任务自述。说明改动所在的分支、提交或工作区及仓库检查结果，' +
-    '区分已验证、未验证和不满足的条目。以“不做”或“重复”关闭的 Child Task，说明原承诺如何满足以及是否有用户确认。\n\n' +
-    '在本 Session 中说明核对结论、剩余缺口、对应的 Spec 条目和建议下一步。' +
-    '本次只核对并报告，不关闭 Spec，也不自动重开或修改任何 Task；是否关闭 Spec 由用户决定。'
-  await prefill($, text, surface, 'k')
+  await prefill($, spec.closeoutPrompt, surface, 'k')
 }
 
 // Takes the Task `number` over from the Session `from`, as the person
@@ -400,12 +395,12 @@ const releaseTask = async ($: EngineInterface, number: number, session: string) 
   await loadTasks($, false)
 }
 
-// Records this Session's Occupancy of the Task `number`, as a prompt
-// executing it is sent, and shows it. `repository` is the one a link to the
-// Task named: the Deck service occupies nothing in a repository that is not
-// the Task Source's. A Task another Session holds stays with it, an
-// Orphaned one too: the person is told.
-const occupyTask = async ($: EngineInterface, number: number, repository: string | undefined) => {
+// Records this Session's Occupancy of the Task the arguments of a sent
+// /implement, `reference`, refer to, and shows it: the Deck service reads
+// the reference, and occupies nothing where it refers to no Task, or to one
+// in a repository that is not the Task Source's. A Task another Session
+// holds stays with it, an Orphaned one too: the person is told.
+const occupyTask = async ($: EngineInterface, reference: string) => {
   const deck = await $.mcp.connect('deck')
   let answer: DeckOccupyAnswer
   if (!deck.isConnected) {
@@ -413,15 +408,17 @@ const occupyTask = async ($: EngineInterface, number: number, repository: string
   } else {
     const result = await $.mcp.call(deck.server, 'deck_occupy', {
       session: (await read($, view)).sessionId,
-      task: number,
-      repository,
+      reference,
     })
     answer = result.isError
       ? { ok: false, failure: { kind: 'failed', message: textOf(result) } }
       : JSON.parse(result.content[0]!.text!)
   }
-  if (!answer.ok) {
-    $.ui.toast(`#${number} 没有登记 Occupancy：${answer.failure.message}`)
+  const number = answer.task
+  if (!answer.ok && answer.failure.kind === 'no-reference') {
+    // A /implement on no Task: nothing to say.
+  } else if (!answer.ok) {
+    $.ui.toast(`${number === undefined ? '' : `#${number} `}没有登记 Occupancy：${answer.failure.message}`)
   } else if (!answer.occupied) {
     $.ui.toast(
       answer.isOrphaned
@@ -711,27 +708,27 @@ export const register: Register = on => {
     if (entered.drop !== undefined || e.command === undefined) {
       return entered
     }
-    const reference = (e.command.args.trim().split(/\s+/)[0] ?? '').match(TASK_REFERENCE)
-    if (reference !== null) {
-      const sent = `/${e.command.name}`
-      $.clock.after(
-        0,
-        () =>
-          void (async () => {
-            const sessionId = await $.session.id()
-            if ((await read($, view)).sessionId !== sessionId) {
-              await (reading?.sessionId === sessionId ? reading.done : readSession($, sessionId))
-            }
-            const { config, skills } = await read($, view)
-            if (config.status === 'configured' && skills.status === 'loading') {
-              await loadSkills($)
-            }
-            if ((await implementCall($)) === sent) {
-              await occupyTask($, Number(reference[1] ?? reference[3]), reference[2])
-            }
-          })(),
-      )
-    }
+    // Only /implement's arguments go to the Deck service, which reads which
+    // Task they refer to.
+    const { args } = e.command
+    const sent = `/${e.command.name}`
+    $.clock.after(
+      0,
+      () =>
+        void (async () => {
+          const sessionId = await $.session.id()
+          if ((await read($, view)).sessionId !== sessionId) {
+            await (reading?.sessionId === sessionId ? reading.done : readSession($, sessionId))
+          }
+          const { config, skills } = await read($, view)
+          if (config.status === 'configured' && skills.status === 'loading') {
+            await loadSkills($)
+          }
+          if ((await implementCall($)) === sent) {
+            await occupyTask($, args)
+          }
+        })(),
+    )
 
     return entered
   })

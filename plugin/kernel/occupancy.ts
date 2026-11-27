@@ -48,9 +48,33 @@ export const readOccupancies = (home: string, source: string, now: number) => {
   }
 }
 
-// A Task reference as the first word after the call: `#12`, `12`, or a link
-// ending in `owner/name/issues/12`, which names its repository.
-const TASK_REFERENCE = /^(?:#?(\d+)|\S*?([^/\s]+\/[^/\s]+)\/issues\/(\d+))$/
+// Punctuation that may follow a Task reference without being part of it;
+// the full-width kind is never part of a link either, so it ends one even
+// where text follows it with no space.
+const AFTER_REFERENCE = new Set('.,;:!?。，；：！？')
+const FULL_WIDTH = /[。，；：！？]/
+// A Task by its number, `#12` or `12`, with punctuation or nothing after
+// it; an issue of github.com by its link,
+// `https://github.com/owner/name/issues/12`, with a `/`, a query or a
+// fragment after it if any. Each is read in a time that grows with its
+// length alone: no part of it can match in more than one way.
+const BY_NUMBER = /^#?(\d+)(?:[.,;:!?。，；：！？]|$)/
+const BY_LINK = /^https:\/\/github\.com\/([^/\s?#]+\/[^/\s?#]+)\/issues\/(\d+)\/?(?:[?#]\S*)?$/
+
+// The Task the first word of `text` refers to, with the repository a link
+// names, if any; undefined where it refers to none. Punctuation right after
+// the reference is not part of it.
+export const taskReference = (text: string): { task: number; repository?: string } | undefined => {
+  const first = text.trimStart()
+  const word = first.slice(0, first.search(/\s|$/))
+  const byNumber = BY_NUMBER.exec(word)
+  if (byNumber !== null) return { task: Number(byNumber[1]) }
+  const cut = word.search(FULL_WIDTH)
+  let end = cut === -1 ? word.length : cut
+  while (end > 0 && AFTER_REFERENCE.has(word[end - 1]!)) end--
+  const byLink = BY_LINK.exec(word.slice(0, end))
+  return byLink === null ? undefined : { task: Number(byLink[2]), repository: byLink[1] }
+}
 
 // The Tasks a prompt runs `call`, the host's call of implement, on: each line
 // that begins with the call and a Task reference after it. Any line counts:
@@ -58,8 +82,8 @@ const TASK_REFERENCE = /^(?:#?(\d+)|\S*?([^/\s]+\/[^/\s]+)\/issues\/(\d+))$/
 export const implementedTasks = (prompt: string, call: string) =>
   prompt.split('\n').flatMap(line => {
     const rest = line.startsWith(call) ? line.slice(call.length) : ''
-    const reference = /^\s/.test(rest) ? rest.trim().split(/\s+/)[0]!.match(TASK_REFERENCE) : null
-    return reference === null ? [] : [{ task: Number(reference[1] ?? reference[3]), repository: reference[2] }]
+    const reference = /^\s/.test(rest) ? taskReference(rest) : undefined
+    return reference === undefined ? [] : [reference]
   })
 
 // Records a heartbeat of `session` at `now`, in the host `host`: the Session

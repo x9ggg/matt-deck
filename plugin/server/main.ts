@@ -13,7 +13,7 @@ import { readProjectConfig, writeProjectConfig } from '../kernel/config.ts'
 import { hookReceivedAt, receiveHookCall } from '../kernel/hook.ts'
 import { inspectProject } from '../kernel/inspect.ts'
 import { mapViews } from '../kernel/maps.ts'
-import { beat, endSession, implementedTasks, occupy, release, settleOccupancies } from '../kernel/occupancy.ts'
+import { beat, endSession, implementedTasks, occupy, release, settleOccupancies, taskReference } from '../kernel/occupancy.ts'
 import { askArgs, readRecommendation, saveRecommendation, snapshotOf } from '../kernel/recommend.ts'
 import { evidencedTasks, readReports, saveReport } from '../kernel/reports.ts'
 import { surveySetup } from '../kernel/setup.ts'
@@ -233,16 +233,13 @@ const tools = {
   },
   deck_occupy: {
     description:
-      'For the Pane: record that a Session executes a Task, as the prompt starting it is sent. A Task held by another Session stays with it unless takeOver names that Session; the answer names the Session holding it and, when it is another, whether that Occupancy is Orphaned.',
+      'For the Pane: record that a Session executes a Task, as the prompt starting it is sent. The Task is given by its number, or by reference: the arguments of implement as sent, whose first word refers to it (#12, 12, or a link to an issue of github.com), the answer then naming it as task; a reference to none answers so, kind no-reference. A Task held by another Session stays with it unless takeOver names that Session; the answer names the Session holding it and, when it is another, whether that Occupancy is Orphaned.',
     inputSchema: {
       type: 'object',
       properties: {
         session: { type: 'string', minLength: 1, description: 'The id of the Session executing the Task.' },
-        task: { type: 'integer', minimum: 1, description: 'The Task\'s number.' },
-        repository: {
-          type: 'string',
-          description: 'The repository a link to the Task named, as owner/name, when the Task was referred to by a link.',
-        },
+        task: { type: 'integer', minimum: 1, description: 'The Task\'s number; or reference instead.' },
+        reference: { type: 'string', description: 'The arguments of implement as sent, whose first word refers to the Task; or task instead.' },
         takeOver: {
           type: 'string',
           minLength: 1,
@@ -250,28 +247,34 @@ const tools = {
             'The id of the Session to move the Task\'s Occupancy from, to this one; only after the person confirmed taking it over from that Session. Held by a third Session by now, the Task stays with it.',
         },
       },
-      required: ['session', 'task'],
+      required: ['session'],
       additionalProperties: false,
     },
-    run: async ({ session, task, repository, takeOver }: any): Promise<ToolResult> => {
+    run: async ({ session, task: number, reference, takeOver }: any): Promise<ToolResult> => {
       if (
         typeof session !== 'string' ||
         session === '' ||
-        !Number.isInteger(task) ||
-        task < 1 ||
-        (repository !== undefined && typeof repository !== 'string') ||
+        (reference === undefined ? !Number.isInteger(number) || number < 1 : typeof reference !== 'string' || number !== undefined) ||
         (takeOver !== undefined && (typeof takeOver !== 'string' || takeOver === ''))
       ) {
         return {
           content: [
             {
               type: 'text',
-              text: 'deck_occupy takes the id of a Session, the number of a Task, the repository a link to it named, if any, and the id of the Session to take it over from, if any',
+              text: 'deck_occupy takes the id of a Session, the number of a Task or a reference to it, and the id of the Session to take it over from, if any',
             },
           ],
           isError: true,
         }
       }
+      const referred = reference === undefined ? { task: number as number } : taskReference(reference)
+      if (referred === undefined) {
+        const answer = { ok: false, failure: { kind: 'no-reference', message: `${JSON.stringify(reference)} refers to no Task` } }
+        return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
+      }
+      const { task, repository } = referred
+      // Given by reference, the answer names the Task it read.
+      const named = reference === undefined ? {} : { task }
       let answer: object
       try {
         // Read now, past the cache: a Task closed a moment ago is not occupied.
@@ -280,24 +283,24 @@ const tools = {
         // GitHub takes a repository's owner and name in any case.
         if (repository !== undefined && repository.toLowerCase() !== source.identity.toLowerCase()) {
           const message = `#${task} of ${repository} is not a Task of the Task Source, ${source.identity}`
-          answer = { ok: false, failure: { kind: 'not-open', message } }
+          answer = { ok: false, ...named, failure: { kind: 'not-open', message } }
         } else if (found === undefined || !found.isOpen) {
           const message = found === undefined ? `the Task Source has no Task #${task}` : `#${task} is closed`
-          answer = { ok: false, failure: { kind: 'not-open', message } }
+          answer = { ok: false, ...named, failure: { kind: 'not-open', message } }
         } else {
           const held = occupy(homedir(), source.identity, task, session, Date.now(), takeOver)
-          const named = nameSession(held.session, held.host)
-          const occupant = { occupant: held.session, occupantHost: named.host, occupantShort: named.short }
+          const holder = nameSession(held.session, held.host)
+          const occupant = { occupant: held.session, occupantHost: holder.host, occupantShort: holder.short }
           answer =
             held.session === session
-              ? { ok: true, occupied: true, ...occupant }
-              : { ok: true, occupied: false, ...occupant, isOrphaned: held.isOrphaned }
+              ? { ok: true, ...named, occupied: true, ...occupant }
+              : { ok: true, ...named, occupied: false, ...occupant, isOrphaned: held.isOrphaned }
         }
       } catch (error: any) {
         if (!(error instanceof TaskSourceError)) {
           throw error
         }
-        answer = { ok: false, failure: { kind: error.kind, message: error.message } }
+        answer = { ok: false, ...named, failure: { kind: error.kind, message: error.message } }
       }
 
       return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
@@ -511,6 +514,43 @@ const tools = {
         return { content: [{ type: 'text', text: 'deck_skill takes the name of a skill' }], isError: true }
       }
       return skillAnswer(async source => ({ skill: await readSkill(source, workspace, homedir(), callOf(host), name) }))
+    },
+  },
+  deck_execute: {
+    description:
+      'For the Pane: the Execute Prompt of a Task, which the Pane prefills: the project\'s implement called on the Task, as its Skill Source calls it on this host, and the ask to report through deck_report. The Occupancy is recorded as it is sent. With no implement in the Skill Source, it answers why.',
+    inputSchema: {
+      type: 'object',
+      properties: { task: { type: 'integer', minimum: 1, description: 'The Task\'s number.' } },
+      required: ['task'],
+      additionalProperties: false,
+    },
+    run: async ({ task }: any): Promise<ToolResult> => {
+      if (!Number.isInteger(task) || task < 1) {
+        return { content: [{ type: 'text', text: 'deck_execute takes the number of a Task, a whole number from 1' }], isError: true }
+      }
+      const project = await readProjectConfig(workspace)
+      if (!project.configured) {
+        throw new Error('This workspace is not a Configured Project: .matt-deck/config.json does not exist')
+      }
+      let answer: object
+      try {
+        const { call } = await readSkill(project.config.skillSource, workspace, homedir(), callOf(host), IMPLEMENT)
+        answer = {
+          ok: true,
+          prompt:
+            `${call} #${task}\n\n` +
+            `When you finish, call the tool deck_report for Task #${task}: what you did, ` +
+            'and the Acceptance Evidence for each acceptance criterion with where it comes from.',
+        }
+      } catch (error: any) {
+        if (!(error instanceof SkillSourceError)) {
+          throw error
+        }
+        answer = { ok: false, failure: { kind: error.kind, message: error.message } }
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(answer) }], structuredContent: answer, isError: false }
     },
   },
   deck_ask: {
@@ -729,30 +769,6 @@ const codexTools = {
       return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
     },
   },
-  deck_execute: {
-    description:
-      'For the Pane in a tab: the Execute Prompt of a Task, which the Pane prefills: implement called on the Task, and the ask to report through deck_report. The Occupancy is recorded as it is sent.',
-    inputSchema: {
-      type: 'object',
-      properties: { task: { type: 'integer', minimum: 1, description: 'The Task\'s number.' } },
-      required: ['task'],
-      additionalProperties: false,
-    },
-    _meta: { ui: { visibility: ['app'] } },
-    run: async ({ task }: any): Promise<ToolResult> => {
-      if (!Number.isInteger(task) || task < 1) {
-        return { content: [{ type: 'text', text: 'deck_execute takes the number of a Task, a whole number from 1' }], isError: true }
-      }
-      const result = {
-        prompt:
-          `${callOf(host)(IMPLEMENT, undefined)} #${task}\n\n` +
-          `When you finish, call the tool deck_report for Task #${task}: what you did, ` +
-          'and the Acceptance Evidence for each acceptance criterion with where it comes from.',
-      }
-
-      return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
-    },
-  },
   [CODEX_HOOK_TOOL]: {
     description:
       'For the Matt Deck hook on UserPromptSubmit, with the prompt sent; not for the agent to call. Records the Occupancy of each open Task a line of the prompt begins calling implement on, for the Session the call comes from. Answers nothing.',
@@ -846,7 +862,7 @@ type Tool = {
 // mark decides who sees a tool, and the tool answers whoever calls it. Claude
 // Code's are unmarked: whether it hides them is not known, and its Mod calls
 // them through this same service.
-const FOR_THE_PANE = ['deck_map', 'deck_occupy', 'deck_release', 'deck_heartbeat', 'deck_end_session', 'deck_ask', 'deck_recommendation']
+const FOR_THE_PANE = ['deck_map', 'deck_occupy', 'deck_release', 'deck_heartbeat', 'deck_end_session', 'deck_ask', 'deck_recommendation', 'deck_execute']
 
 // Only Codex opens the Pane in a tab and runs Deck's hook; Claude Code's
 // Pane is the Mod, and only Claude Code has permission rules to write.
