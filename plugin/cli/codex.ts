@@ -17,7 +17,7 @@ const USAGE = `Usage: node <matt-deck>/cli/codex.ts <install|uninstall>
 
 install：把 Deck 服务注册进 Codex 的用户全局配置 ~/.codex/config.toml，原有内容保留；在 ~/.agents/skills 里生成配置技能 ${CODEX_CONFIGURE_SKILL}，在它旁边写 agents/openai.yaml，让 Codex 只在你用 $${CODEX_CONFIGURE_SKILL} 调用时用它（那里已有一份不是 Deck 写的就不改）；在 ~/.codex/hooks.json 里加上 Deck 的钩子，原有的钩子保留，改之前先备份。装完要在终端里运行一次 codex 信任这个钩子，再重启 Codex 桌面应用。注册和配置技能指向运行 install 的这一份插件，它挪了位置或更新之后要重新运行一次 install。
 uninstall：从 ~/.codex/config.toml 移除 Deck 服务的注册，别的内容不动；移除 Deck 生成的 ${CODEX_CONFIGURE_SKILL} 和 Deck 写的 agents/openai.yaml；从 ~/.codex/hooks.json 移除 Deck 的钩子。
-退出码：0 成功，1 读写失败、要写的位置写不进去或是链到不存在的文件的链接、config.toml 里有不是 UTF-8 的字节、config.toml 里有到文件末尾都没闭合的数组（或内联表、多行字符串）、Deck 服务注册不是 [mcp_servers.matt_deck] 表头的写法、install 时 mcp_servers 写成了内联表、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
+退出码：0 成功，1 读写失败、要读的文件是一个目录（uninstall 时只算 config.toml 和 hooks.json）、要写的位置写不进去或是链到不存在的文件的链接、要写的位置上面的一级是文件或链到不存在的位置的链接、config.toml 里有不是 UTF-8 的字节、config.toml 里有到文件末尾都没闭合的数组（或内联表、多行字符串）、Deck 服务注册不是 [mcp_servers.matt_deck] 表头的写法、install 时 mcp_servers 写成了内联表、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
 `
 const SERVER = 'matt_deck'
 const TABLE = `mcp_servers.${SERVER}`
@@ -45,12 +45,12 @@ policy:
   allow_implicit_invocation: false
 `
 
-// What a file holds, or undefined when it is not there.
+// What a file holds, or undefined when it is not there, or a directory is.
 const readIfThere = async (path: string) => {
   try {
     return await readFile(path)
   } catch (error: any) {
-    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') {
+    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR' && error.code !== 'EISDIR') {
       throw error
     }
   }
@@ -341,33 +341,38 @@ const withoutDeckHook = (config: Record<string, any>, before: Record<string, any
   return Object.keys(hooks).length > 0 || before.hooks !== undefined ? { ...config, hooks } : rest
 }
 
-// Why a file cannot be written where it is, or made there, as a code; or
-// undefined when it can. A file there is written in place, so it must take
-// writing, a link the file it reaches; a file not there is made, so the
-// nearest directory that is there must take a new entry. A link reaching no
-// file is 'dangling': writing through it would make a file elsewhere, which
-// nothing then shows is Deck's. Asked of a directory, it is whether entries
-// can be made in it, removed or renamed. Checked before Deck writes anything,
-// so that a run stopping for it leaves everything as it was.
-const unwritable = async (path: string): Promise<string | undefined> => {
+// Why a file cannot be written where it is, or made there, as a code, and
+// the place that stops it; or undefined when it can. A file there is written
+// in place, so it must take writing, a link the file it reaches; a file not
+// there is made, so the nearest directory that is there must take a new
+// entry. A link reaching no file is 'dangling': writing through it would make
+// a file elsewhere, which nothing then shows is Deck's. Where the nearest
+// place that is there is no directory, it is that place that stops it: a
+// 'file', or a link reaching nowhere, 'nowhere'. Asked of a directory, it is
+// whether entries can be made in it, removed or renamed. Checked before Deck
+// writes anything, so that a run stopping for it leaves everything as it was.
+const unwritable = async (path: string): Promise<{ why: string; at: string } | undefined> => {
   const there = await lstat(path).catch(() => undefined)
   if (there?.isSymbolicLink() && (await stat(path).catch(() => undefined)) === undefined) {
-    return 'dangling'
+    return { why: 'dangling', at: path }
   }
   let reached = path
   if (there === undefined) {
     do {
       reached = dirname(reached)
     } while ((await lstat(reached).catch(() => undefined)) === undefined)
-    // A file there, not a directory, takes no entry.
-    if ((await stat(reached).catch(() => undefined))?.isDirectory() !== true) {
-      return 'ENOTDIR'
+    const reaches = await stat(reached).catch(() => undefined)
+    if (reaches === undefined) {
+      return { why: 'nowhere', at: reached }
+    }
+    if (!reaches.isDirectory()) {
+      return { why: 'file', at: reached }
     }
   }
   try {
     await access(reached, constants.W_OK)
   } catch (error: any) {
-    return error.code ?? String(error)
+    return { why: error.code ?? String(error), at: path }
   }
 }
 
@@ -400,6 +405,17 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
     const isHooked = typeof hooks !== 'string' && hooks.hooks?.UserPromptSubmit?.some(holdsDeckHook) === true
 
     const handwritten = handWritten(kept)
+    // The files read that are directories: no one's file, Deck's least of
+    // all. Install stops for any of them; uninstall for the config or the
+    // hooks, and leaves the skill or the policy where it is.
+    const skillFile = join(skillDir, 'SKILL.md')
+    const directories: string[] = []
+    for (const path of [config, skillFile, policyFile, hooksFile]) {
+      if ((await stat(path).catch(() => undefined))?.isDirectory() === true) {
+        directories.push(path)
+      }
+    }
+    const stoppingDirectory = directories.find(path => args[0] === 'install' || path === config || path === hooksFile)
     // A value open at the end takes in all after it, a registration there
     // too: Deck cannot tell what the config holds, and Codex cannot read it.
     const isUnclosed = scan((before ?? '').split(/\r?\n/)).isOpen
@@ -425,7 +441,6 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
     // Every place the run writes, makes or removes a file in, as it will.
     // Uninstall takes the policy's directory with it when nothing else is in
     // it, unless it is a link.
-    const skillFile = join(skillDir, 'SKILL.md')
     const agentsGoes =
       isOurPolicy && !(await lstat(dirname(policyFile))).isSymbolicLink() && (await readdir(dirname(policyFile))).length === 1
     const touched =
@@ -443,16 +458,20 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
               : []),
             ...(isHooked ? [hooksFile, ...(isRestored ? [dirname(backup)] : [])] : []),
           ]
-    let blocked: { path: string; why: string } | undefined
+    let blocked: { why: string; at: string } | undefined
     for (const path of touched) {
-      const why = await unwritable(path)
-      if (why !== undefined) {
-        blocked = { path, why }
+      blocked = await unwritable(path)
+      if (blocked !== undefined) {
         break
       }
     }
 
-    if (configBytes !== undefined && !isUtf8(configBytes)) {
+    if (stoppingDirectory !== undefined) {
+      process.stderr.write(
+        `${stoppingDirectory} 是一个目录，不是文件，没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。挪走它之后再运行一次 ${args[0]}。\n`,
+      )
+      process.exitCode = 1
+    } else if (configBytes !== undefined && !isUtf8(configBytes)) {
       // Deck writes the config back as text: a byte that is not UTF-8,
       // decoded, would come back as another.
       process.stderr.write(
@@ -486,9 +505,13 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
       )
       process.exitCode = 1
     } else if (blocked !== undefined) {
-      process.stderr.write(
-        `${blocked.path} ${blocked.why === 'dangling' ? '是一个链接，链到的文件不存在' : `写不进去（${blocked.why}）`}，没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。${blocked.why === 'dangling' ? '换成文件或者删掉它' : '改好权限'}之后再运行一次 ${args[0]}。\n`,
-      )
+      const { why, at } = blocked
+      const [problem, fix] = {
+        dangling: ['是一个链接，链到的文件不存在', '换成文件或者删掉它'],
+        file: ['是一个文件，不是目录', '挪走它或者换成目录'],
+        nowhere: ['是一个链接，链到的位置不存在', '挪走它或者换成目录'],
+      }[why] ?? [`写不进去（${why}）`, '改好权限']
+      process.stderr.write(`${at} ${problem}，没有${args[0] === 'install' ? '安装' : '卸载'}，什么都没改。${fix}之后再运行一次 ${args[0]}。\n`)
       process.exitCode = 1
     } else if (args[0] === 'install') {
       // The node registered is the first on install's PATH that is the node
@@ -568,6 +591,8 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
         process.stdout.write(`已移除 Deck 写的 ${policyFile}。\n`)
       } else if (isTheirPolicy) {
         process.stdout.write(`${policyFile} 不是 Deck 写的，没有动它。\n`)
+      } else if (directories.includes(policyFile)) {
+        process.stdout.write(`${policyFile} 是一个目录，没有动它。\n`)
       }
       if (isOurs) {
         // Only the file Deck generated goes. The directory goes after it
@@ -580,6 +605,8 @@ if (args.length !== 1 || (args[0] !== 'install' && args[0] !== 'uninstall')) {
         process.stdout.write(`已移除 Deck 生成的配置技能 ${join(skillDir, 'SKILL.md')}。\n`)
       } else if (skill !== undefined) {
         process.stdout.write(`${skillDir} 不是 Deck 生成的，没有动它。\n`)
+      } else if (directories.includes(skillFile)) {
+        process.stdout.write(`${skillFile} 是一个目录，没有动它。\n`)
       }
       if (isHooked) {
         if (isRestored) {

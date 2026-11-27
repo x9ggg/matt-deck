@@ -1495,7 +1495,7 @@ test('install stops before writing anything when a file is where it would make t
 
   await assert.rejects(run(user, 'install'), (error: any) => {
     assert.equal(error.code, 1)
-    assert.ok(error.stderr.includes(`${configurePolicy(user)} 写不进去（ENOTDIR），没有安装，什么都没改。`), error.stderr)
+    assert.ok(error.stderr.includes(`${agents} 是一个文件，不是目录，没有安装，什么都没改。挪走它或者换成目录之后再运行一次 install。`), error.stderr)
     return true
   })
   await unchanged(user, ['config.toml'], 'agents is a file')
@@ -1697,4 +1697,120 @@ test('install and uninstall read mcp_servers as an inline table over many lines 
       assert.ok(times[1]! < times[0]! * 20, `${name} ${command}: ${times.join(' ms, ')} ms`)
     }
   }
+})
+
+test('install stops when the policy beside the skill or the skill itself is a directory, says so, and writes nothing', async () => {
+  for (const path of [configurePolicy, configureSkill]) {
+    const { user } = await withConfig(BEFORE)
+    await mkdir(path(user), { recursive: true })
+
+    await assert.rejects(run(user, 'install'), (error: any) => {
+      assert.equal(error.code, 1)
+      assert.ok(error.stderr.includes(`${path(user)} 是一个目录，不是文件，没有安装，什么都没改。挪走它之后再运行一次 install。`), error.stderr)
+      assert.ok(!error.stderr.includes('EISDIR'), error.stderr)
+      return true
+    })
+    await unchanged(user, ['config.toml'], path(user))
+    assert.deepEqual(await readdir(path(user)), [])
+  }
+})
+
+test('uninstall leaves the policy beside the skill or the skill itself where it is a directory, says so, and removes the rest Deck wrote', async () => {
+  for (const [path, other] of [[configurePolicy, configureSkill], [configureSkill, configurePolicy]] as const) {
+    const { user, config } = await withConfig(BEFORE)
+    await run(user, 'install')
+    await rm(path(user))
+    await mkdir(path(user))
+
+    const { stdout } = await run(user, 'uninstall')
+
+    assert.ok(stdout.includes(`${path(user)} 是一个目录，没有动它。`), stdout)
+    assert.equal(await readFile(config, 'utf8'), BEFORE)
+    assert.equal(await lstat(other(user)).catch(() => undefined), undefined, other(user))
+    assert.ok(!(JSON.parse(await readFile(hooksFile(user), 'utf8')).hooks?.UserPromptSubmit ?? []).some((group: any) => group.hooks.some(isDeckHook)), path(user))
+    assert.deepEqual(await readdir(path(user)), [])
+  }
+})
+
+// Every entry under a home, with what each file holds.
+const contents = async (user: string) => {
+  const entries = (await readdir(user, { recursive: true })).sort()
+  return Promise.all(entries.map(async entry => [entry, await readFile(join(user, entry), 'utf8').catch(() => 'a directory')]))
+}
+
+test('install and uninstall stop when the Codex config or the Codex hooks are a directory, say so, and change nothing', async () => {
+  for (const path of [(user: string) => join(user, '.codex', 'config.toml'), hooksFile]) {
+    for (const command of ['install', 'uninstall']) {
+      const user = await home()
+      if (command === 'uninstall') {
+        await run(user, 'install')
+        await rm(path(user))
+      }
+      await mkdir(path(user), { recursive: true })
+      const before = await contents(user)
+
+      await assert.rejects(run(user, command), (error: any) => {
+        assert.equal(error.code, 1, command)
+        assert.ok(
+          error.stderr.includes(`${path(user)} 是一个目录，不是文件，没有${command === 'install' ? '安装' : '卸载'}，什么都没改。挪走它之后再运行一次 ${command}。`),
+          error.stderr,
+        )
+        assert.ok(!error.stderr.includes('EISDIR'), error.stderr)
+        return true
+      })
+      assert.deepEqual(await contents(user), before, `${path(user)} ${command}`)
+    }
+  }
+})
+
+test('install stops before writing anything where a directory it would write in is a file or a link reaching nowhere, and names that one; uninstall goes on', async () => {
+  const skills = (user: string) => join(user, '.agents', 'skills')
+  for (const [at, shape] of [
+    [(user: string) => join(skills(user), 'matt-deck-configure', 'agents'), 'file'],
+    [(user: string) => join(skills(user), 'matt-deck-configure', 'agents'), 'link'],
+    [(user: string) => join(skills(user), 'matt-deck-configure'), 'file'],
+    [(user: string) => join(skills(user), 'matt-deck-configure'), 'link'],
+  ] as const) {
+    for (const command of ['install', 'uninstall']) {
+      const { user, config } = await withConfig(BEFORE)
+      const elsewhere = await home()
+      await mkdir(join(at(user), '..'), { recursive: true })
+      if (shape === 'file') {
+        await writeFile(at(user), 'mine\n')
+      } else {
+        await symlink(join(elsewhere, 'gone 6p3c'), at(user))
+      }
+
+      if (command === 'uninstall') {
+        await run(user, 'uninstall')
+      } else {
+        await assert.rejects(run(user, 'install'), (error: any) => {
+          assert.equal(error.code, 1, `${at(user)} ${shape}`)
+          const is = shape === 'file' ? '是一个文件，不是目录' : '是一个链接，链到的位置不存在'
+          assert.ok(error.stderr.includes(`${at(user)} ${is}，没有安装，什么都没改。挪走它或者换成目录之后再运行一次 install。`), error.stderr)
+          assert.ok(!error.stderr.includes('改好权限'), error.stderr)
+          return true
+        })
+      }
+      assert.equal(await readFile(config, 'utf8'), BEFORE)
+      assert.deepEqual((await readdir(join(user, '.codex'))).sort(), ['config.toml'])
+      assert.deepEqual(await readdir(elsewhere), [])
+      assert.equal(shape === 'file' ? await readFile(at(user), 'utf8') : await readlink(at(user)), shape === 'file' ? 'mine\n' : join(elsewhere, 'gone 6p3c'))
+    }
+  }
+})
+
+test('uninstall where a skill Deck did not generate sits beside the policy Deck wrote removes the policy alone, leaves the skill, and says each', async () => {
+  const { user } = await withConfig(BEFORE)
+  await run(user, 'install')
+  const theirs = '---\nname: matt-deck-configure\ndescription: mine\n---\n\nMine.\n'
+  await writeFile(configureSkill(user), theirs)
+
+  const { stdout } = await run(user, 'uninstall')
+
+  const skillDir = join(user, '.agents', 'skills', 'matt-deck-configure')
+  assert.ok(stdout.includes(`已移除 Deck 写的 ${configurePolicy(user)}。`), stdout)
+  assert.ok(stdout.includes(`${skillDir} 不是 Deck 生成的，没有动它。`), stdout)
+  assert.equal(await readFile(configureSkill(user), 'utf8'), theirs)
+  assert.deepEqual(await readdir(skillDir), ['SKILL.md'])
 })
