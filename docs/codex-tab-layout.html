@@ -396,6 +396,29 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       <button class="dk-btn" type="button">再问一次</button>
     </div></div>
   </section>
+  <section class="shot" id="next-noexec">
+    <h3>已回答，“执行”不能用<code>#next-noexec</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>卡片上面是和“任务”里同一条提示，卡片里的“执行这个 Task”停用。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-next">
+        <div class="dk-phases caption"><span class="dk-phase is-done">已填入</span><span class="dk-phase is-done">等待回报</span><span class="dk-phase is-done">已回答</span></div>
+        <div class="dk-notice is-warn" role="status">
+          <div class="dk-notice__body">
+            <div class="dk-notice__line"><span class="dk-notice__title heading">Codex 里找不到 implement，不能预填执行。</span><button class="dk-btn dk-btn--sm" type="button">重跑配置</button></div>
+            <span class="dk-notice__text">所有 Task 的“执行”先停用，重跑配置之后恢复。</span>
+          </div>
+        </div>
+        <article class="dk-rec">
+          <div class="dk-rec__head">
+            <span class="dk-plate is-ready dk-plate--lg" role="img" aria-label="可执行"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.1 13.9 8 8 13.9 2.1 8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+            <div class="dk-rec__titles"><span class="dk-rec__overline label">下一个成就</span><span class="dk-rec__title title">Map View</span></div>
+            <span class="mono">#71</span>
+          </div>
+          <button class="dk-btn dk-btn--primary dk-btn--block" type="button" disabled>执行这个 Task</button>
+        </article>
+      </div>
+    </div></div>
+  </section>
   <section class="shot" id="next-timeout">
     <h3>超时停止<code>#next-timeout</code><span class="shot__part">只画变化的部分</span></h3>
     <p>当前那一格划线，主按钮回来。页面读不到回答，不显示原文。</p>
@@ -829,7 +852,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
   </section>
   <section class="shot" id="tasks-noexec">
     <h3>“执行”不能用<code>#tasks-noexec</code><span class="shot__part">只画变化的部分</span></h3>
-    <p>原因在内容最上面说一次，每一行的“执行”停用，不重复原因。</p>
+    <p>原因在内容最上面说一次，每一行的“执行”停用，不重复原因。标题按原因有四种：Codex 里找不到 implement、Codex 里的 implement 不是同一份、Skill Source 里没有 implement、读取 Skill Source 失败。</p>
     <div class="shot__frame"><div class="dk-pane">
       <div class="dk-notice is-warn" role="status">
         <div class="dk-notice__body">
@@ -909,7 +932,7 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
   </section>
   <section class="shot" id="tasks-error">
     <h3>读取失败<code>#tasks-error</code></h3>
-    <p>新鲜度的位置写“读取失败”。提示里不放按钮，重试用“刷新”。之前读到过的列表留在下面。</p>
+    <p>新鲜度的位置写“读取失败”。提示里不放按钮，重试用“刷新”（唯一的例外是技能页的 <code>#skills-missing</code>）。之前读到过的列表留在下面。</p>
     <div class="shot__frame"><div class="dk-pane">
       <div class="dk-top">
       <header class="dk-head">
@@ -1085,6 +1108,24 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
         <span class="dk-crumbs">任务 / <b>#70</b></span>
         <button class="dk-btn dk-btn--sm dk-btn--go" type="button">执行</button>
         <a class="dk-btn dk-btn--sm dk-btn--quiet" href="#">在 GitHub 打开</a>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="detail-noexec">
+    <h3>“执行”不能用<code>#detail-noexec</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>和“任务”里的同一条提示，放在返回栏下面；接管确认开着时排在它下面。返回栏里的“执行”停用。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-bar">
+        <button class="dk-btn dk-btn--sm" type="button">返回</button>
+        <span class="dk-crumbs">任务 / <b>#70</b></span>
+        <button class="dk-btn dk-btn--sm dk-btn--go" type="button" disabled>执行</button>
+        <a class="dk-btn dk-btn--sm dk-btn--quiet" href="#">在 GitHub 打开</a>
+      </div>
+      <div class="dk-notice is-warn" role="status">
+        <div class="dk-notice__body">
+          <div class="dk-notice__line"><span class="dk-notice__title heading">Codex 里找不到 implement，不能预填执行。</span><button class="dk-btn dk-btn--sm" type="button">重跑配置</button></div>
+          <span class="dk-notice__text">所有 Task 的“执行”先停用，重跑配置之后恢复。</span>
+        </div>
       </div>
     </div></div>
   </section>
@@ -1346,6 +1387,38 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
       </section>
     </div></div>
   </section>
+  <section class="shot" id="skills-loading">
+    <h3>正在读取技能<code>#skills-loading</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>第一次读到技能之前。之后每次读取（60 秒一次的、标签页重新显示时的、“刷新”）都重读技能，读到的没变就不重画。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <p class="dk-why">正在读取技能…</p>
+    </div></div>
+  </section>
+  <section class="shot" id="skills-missing">
+    <h3>找不到 Skill Source<code>#skills-missing</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>读取失败的提示里唯一带按钮的一条：要修的是配置，不是重试。别的原因读不到时没有按钮，重试用“刷新”。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-notice is-danger" role="status">
+        <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+        <div class="dk-notice__body">
+          <div class="dk-notice__line"><span class="dk-notice__title heading">读取 Skill Source 失败</span><button class="dk-btn dk-btn--sm" type="button">重跑配置</button></div>
+          <span class="dk-notice__text">找不到 Skill Source。重跑配置之后恢复。</span>
+        </div>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="skills-empty">
+    <h3>Skill Source 里没有技能<code>#skills-empty</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>Skill Source 那一行照旧，下面不画空分组。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-source caption"><span>Skill Source</span><span class="mono">目录 ~/.claude/skills</span></div>
+      <div class="dk-empty">
+        <span class="dk-empty__title heading">Skill Source 里没有技能。</span>
+        <span>确认它是 Matt skills 所在的位置，或重跑配置重新选定。</span>
+        <button class="dk-btn" type="button">重跑配置</button>
+      </div>
+    </div></div>
+  </section>
   <section class="shot" id="skill-text">
     <h3>技能原文<code>#skill-text</code><span class="shot__part">只画变化的部分</span></h3>
     <p>和 Task 详情用同一条返回栏。</p>
@@ -1359,6 +1432,24 @@ body{margin:0;color:var(--ink);font-family:var(--font-sans);font-size:14px;line-
         <div class="dk-detail__title title"><span class="dk-skill__name mono">$implement</span></div>
         <span class="dk-why mono">~/.claude/skills/implement/SKILL.md</span>
         <div class="dk-prose"><p>（技能文件 frontmatter 以下的正文，不改写）</p></div>
+      </div>
+    </div></div>
+  </section>
+  <section class="shot" id="skill-text-failed">
+    <h3>技能原文读取失败<code>#skill-text-failed</code><span class="shot__part">只画变化的部分</span></h3>
+    <p>返回栏留着；读到过的正文留在提示下面。</p>
+    <div class="shot__frame"><div class="dk-pane">
+      <div class="dk-bar">
+        <button class="dk-btn dk-btn--sm" type="button">返回</button>
+        <span class="dk-crumbs">技能 / <b>$implement</b></span>
+        <button class="dk-btn dk-btn--sm dk-btn--go" type="button">预填</button>
+      </div>
+      <div class="dk-notice is-danger" role="status">
+        <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+        <div class="dk-notice__body">
+          <span class="dk-notice__title heading">读取技能失败</span>
+          <span class="dk-notice__text">Skill Source 里已经没有这个技能。点“刷新”重新读取。</span>
+        </div>
       </div>
     </div></div>
   </section>

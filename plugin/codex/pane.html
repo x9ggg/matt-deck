@@ -433,6 +433,12 @@ body{margin:0;background:var(--ground)}
       <span class="dk-crumbs" id="crumbs"></span>
       <span id="into-end"></span>
     </div>
+    <div class="dk-notice is-warn" role="status" id="into-noexec" hidden>
+      <div class="dk-notice__body">
+        <div class="dk-notice__line"><span class="dk-notice__title heading"></span></div>
+        <span class="dk-notice__text"></span>
+      </div>
+    </div>
     <div id="into-body"></div>
   </div>
 </div>
@@ -1277,14 +1283,17 @@ body{margin:0;background:var(--ground)}
   let configureCall
 
   // Whether the skills the last read of them asked for were drawn, since the
-  // page opened, or since a read found the project not configured. A timed
-  // read, or the read as the tab is shown again, reads them only while it is
-  // false and no read of them is out for a read of the page still current;
-  // "刷新" reads them again whatever it is.
+  // page opened, or since a read found the project not configured; and
+  // whether a read of them is out for a read of the page still current.
+  // Opening 技能 or 下一步 reads them only while neither holds. Each read of
+  // the page reads them again unless one is out; "刷新" whatever it is.
   let skillsRead = false
-  const skillsUnread = () => !skillsRead && (skillsAsked === undefined || !skillsAsked.current())
-  // The skills the last read of the Skill Source listed.
+  const skillsOut = () => !skillsRead && skillsAsked !== undefined && skillsAsked.current()
+  const skillsUnread = () => !skillsRead && !skillsOut()
+  // The skills the last read of the Skill Source listed, and what that read
+  // came to: read the same again, the skills are drawn as they are.
   let skillsListed = []
+  let skillsKey
   // The read of the skills asked for last, with whether the read of the page
   // it is for is `current`: only its answer is shown, and an earlier one
   // answering after it is dropped.
@@ -1334,6 +1343,7 @@ body{margin:0;background:var(--ground)}
       if (!config.configured) {
         skillsRead = false
         skillsAsked = undefined
+        skillsKey = undefined
         implement = undefined
         showExecutable()
         const configured = await callTool('deck_configure')
@@ -1359,10 +1369,14 @@ body{margin:0;background:var(--ground)}
         tasksRead = await readTasks(refresh, current)
         if (!current()) return false
         // Read again, the page no longer says a request was not made.
-        if (refresh) asking = { ...asking, failure: undefined }
-        // Every tab's "执行" goes by the skills: they are read with the first
-        // read of the Tasks, and again with "刷新".
-        if (refresh || skillsUnread()) await readSkills(current)
+        if (refresh && asking.failure !== undefined) {
+          asking = { ...asking, failure: undefined }
+          showNext()
+        }
+        // Every tab's "执行" goes by the skills: they are read with each read
+        // of the Tasks, the timed one and the one as the tab is shown again
+        // too. A skill's text open is read again with "刷新" alone.
+        if (refresh || !skillsOut()) await readSkills(current)
         // A step drawn from the Tasks draws again with each read of them;
         // every step with "刷新", after what it is drawn from is read again.
         if (current() && (refresh || into?.steps.at(-1).withTasks)) await drawStep(current)
@@ -1814,23 +1828,35 @@ body{margin:0;background:var(--ground)}
   // every "执行" as it stands.
   const UNEXECUTABLE = { different: 'Codex 里的 implement 不是同一份，不能预填执行。', missing: 'Codex 里找不到 implement，不能预填执行。' }
   const UNTIL_RERUN = '所有 Task 的“执行”先停用，重跑配置之后恢复。'
+  const unexecutable = () =>
+    implement === undefined || implement?.copy === 'same' ? undefined
+    : implement === null ? ['Skill Source 里没有 implement，不能预填执行。', UNTIL_RERUN]
+    : implement.failure !== undefined ? ['读取 Skill Source 失败，不能预填执行。', skillFailure(implement.failure)]
+    : [UNEXECUTABLE[implement.copy], UNTIL_RERUN]
+  // The notice says why, with a "重跑配置" as the 技能 tab's: the one it
+  // has stays, the focus on it too.
+  const sayUnexecutable = (notice, why) => {
+    notice.querySelector('.dk-notice__title').textContent = why[0]
+    notice.querySelector('.dk-notice__text').textContent = why[1]
+    const line = notice.querySelector('.dk-notice__line')
+    if (line.querySelector('button') === null) line.append(rerunButton())
+  }
+  // The notice where 下一步 shows a Recommendation, above its card.
+  const unexecutableNotice = why => {
+    const notice = $('tasks-noexec').cloneNode(true)
+    notice.removeAttribute('id')
+    notice.hidden = false
+    // A copy holds a button that does nothing: it has one of its own.
+    notice.querySelector('.dk-notice__line button')?.remove()
+    sayUnexecutable(notice, why)
+    return notice
+  }
   const showExecutable = () => {
-    const why =
-      implement === undefined || implement?.copy === 'same' ? undefined
-      : implement === null ? ['Skill Source 里没有 implement，不能预填执行。', UNTIL_RERUN]
-      : implement.failure !== undefined ? ['读取 Skill Source 失败，不能预填执行。', skillFailure(implement.failure)]
-      : [UNEXECUTABLE[implement.copy], UNTIL_RERUN]
-    for (const notice of [$('tasks-noexec'), $('map-noexec')]) {
-      notice.hidden = why === undefined
-      if (why !== undefined) {
-        notice.querySelector('.dk-notice__title').textContent = why[0]
-        notice.querySelector('.dk-notice__text').textContent = why[1]
-        // Drawn anew, as the 技能 tab's: off while the Deck service has given
-        // no call of the configure skill.
-        const rerun = prefiller(smallButton('重跑配置'), 'configure', () => configureCall, () => configureCall === undefined)
-        const line = notice.querySelector('.dk-notice__line')
-        line.replaceChildren(line.firstElementChild, rerun)
-      }
+    const why = unexecutable()
+    // In 任务 and 地图 at the top; in a Task's detail under the way back.
+    for (const notice of [$('tasks-noexec'), $('map-noexec'), $('into-noexec')]) {
+      notice.hidden = why === undefined || (notice === $('into-noexec') && into?.steps.at(-1).task === undefined)
+      if (why !== undefined) sayUnexecutable(notice, why)
     }
     for (const button of document.querySelectorAll('[data-execute]')) drawExecute(button)
     // The asking's "接管" the focus was on, off until now, takes it again.
@@ -1843,6 +1869,13 @@ body{margin:0;background:var(--ground)}
     const button = el('button', `dk-btn dk-btn--sm ${className}`.trim(), label)
     button.type = 'button'
     return button
+  }
+  // A "重跑配置": it fills in the configure skill's call the Deck service
+  // gave, off while it gave none.
+  const rerunButton = (className = 'dk-btn dk-btn--sm') => {
+    const button = el('button', className, '重跑配置')
+    button.type = 'button'
+    return prefiller(button, 'configure', () => configureCall, () => configureCall === undefined)
   }
   const failedNotice = (title, text) => {
     const notice = el(
@@ -1940,7 +1973,16 @@ body{margin:0;background:var(--ground)}
     if (!answer.ok) {
       // Unread, no skill is known to be the same file Codex finds.
       skillsListed = []
-      $('skill-list').replaceChildren(failedNotice('读取 Skill Source 失败', skillFailure(answer.failure)))
+      const notice = failedNotice('读取 Skill Source 失败', skillFailure(answer.failure))
+      // Not found, it is the config to mend, not a read to try again: the
+      // notice has "重跑配置" at the end of its title's line.
+      if (answer.failure.kind === 'missing') {
+        const title = notice.querySelector('.dk-notice__title')
+        const line = el('div', 'dk-notice__line')
+        title.replaceWith(line)
+        line.append(title, rerunButton())
+      }
+      $('skill-list').replaceChildren(notice)
       return
     }
     const { source, skills } = answer
@@ -1955,7 +1997,7 @@ body{margin:0;background:var(--ground)}
     ]
     const unprefillable = skills.filter(skill => skill.copy !== 'same').length
     if (unprefillable > 0) {
-      const rerun = prefiller(smallButton('重跑配置'), 'configure', () => configureCall, () => configureCall === undefined)
+      const rerun = rerunButton()
       const notice = el(
         'div',
         'dk-notice is-warn',
@@ -1972,7 +2014,12 @@ body{margin:0;background:var(--ground)}
     const general = skills.filter(skill => skill.name === 'ask-matt')
     const others = skills.filter(skill => skill.name !== 'ask-matt')
     if (general.length > 0) shown.push(skillGroup('通用入口', undefined, general))
-    shown.push(skillGroup('技能', others.length, others))
+    // With no skill in it, the Skill Source may not be where Matt skills are.
+    if (skills.length === 0) {
+      shown.push(el('div', 'dk-empty', el('span', 'dk-empty__title heading', 'Skill Source 里没有技能。'), el('span', '', '确认它是 Matt skills 所在的位置，或重跑配置重新选定。'), rerunButton('dk-btn')))
+    } else {
+      shown.push(skillGroup('技能', others.length, others))
+    }
     $('skill-list').replaceChildren(...shown)
   }
 
@@ -1986,6 +2033,9 @@ body{margin:0;background:var(--ground)}
     // The call every "重跑配置" fills in; one not given leaves the one given
     // before, if any, and with none they are off.
     if (configure.status === 'fulfilled') configureCall = configure.value.call
+    const key = JSON.stringify([read.status === 'fulfilled' ? read.value : read.reason.message, configureCall])
+    if (key === skillsKey) return
+    skillsKey = key
     if (read.status === 'fulfilled') {
       const answer = read.value
       showSkills(answer)
@@ -2028,9 +2078,16 @@ body{margin:0;background:var(--ground)}
   // the Host has it in the prompt, reads its Recommendation every 2 seconds,
   // for 10 minutes at most. Refused by the Host, the request before is
   // waited for as it was, and the tab says why.
+  // The request being made, from the click until the Host takes it, turns
+  // it down, or leaves it 10 seconds unanswered: the tab drawn anew
+  // meanwhile keeps its buttons off.
+  let askOut
   const ask = async button => {
     closeResult()
-    const asked = (lastAsked = {})
+    const asked = (lastAsked = askOut = {})
+    const made = () => {
+      if (askOut === asked) askOut = undefined
+    }
     button.disabled = true
     let answer
     try {
@@ -2042,15 +2099,18 @@ body{margin:0;background:var(--ground)}
       try {
         // Not answered in 10 seconds, the tab says so, its button on again.
         await fill(answer.prompt, () => {
+          made()
           asking = { ...asking, failure: { unanswered: true } }
           showNext()
         })
       } catch (error) {
         answer = { ok: false, failure: { refused: error } }
       }
+      made()
       // Answered after that, it counts while nothing was asked since.
       if (asked !== lastAsked) return
     }
+    made()
     if (!answer.ok) {
       asking = { ...asking, failure: answer.failure }
       showNext()
@@ -2137,14 +2197,14 @@ body{margin:0;background:var(--ground)}
   }
 
   // The 下一步 tab as the request stands and the skills say: a read of the
-  // skills draws it again. The timed reads leave it, its buttons too, but
-  // for the Recommendation's card, drawn again from the list they read.
+  // skills that found them otherwise draws it again. A read of the Tasks
+  // draws the Recommendation's card again, from the list it read.
   const showNext = () => {
     const why = askMatt && askMatt.copy !== 'same' ? UNASKABLE[askMatt.copy] : undefined
     const askButton = (label, className) => {
       const button = el('button', className, label)
       button.type = 'button'
-      button.disabled = askMatt === undefined || why !== undefined
+      button.disabled = askMatt === undefined || why !== undefined || askOut !== undefined
       button.addEventListener('click', () => ask(button))
       return button
     }
@@ -2177,7 +2237,11 @@ body{margin:0;background:var(--ground)}
         el('div', 'dk-next__line', el('span', '', asking.again ? '已重新填入。输入框里上一份还在的话，先删掉再发送。' : '已填入输入框，等你发送。'), askButton('再问一次', 'dk-btn')),
       )
     }
-    if (asking.phase === 'answered') shown.push(phases('is-done', 'is-done', 'is-done'), recommendationCard(asking.recommendation))
+    if (asking.phase === 'answered') {
+      // "执行这个 Task" off as every "执行", it says why above the card.
+      const noExecute = unexecutable()
+      shown.push(phases('is-done', 'is-done', 'is-done'), ...(noExecute === undefined ? [] : [unexecutableNotice(noExecute)]), recommendationCard(asking.recommendation))
+    }
     if (asking.phase === 'stopped') {
       shown.push(phases('is-done', 'is-cancelled', ''), hint('等了 10 分钟，没有收到回报，已停止等待。回答在对话里。'), primary())
     }

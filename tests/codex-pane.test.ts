@@ -1083,7 +1083,7 @@ test('"原文" shows the skill\'s call, its file and its text as written, with "
 const failures = (page: { window: any; document: Document }) =>
   [...page.document.querySelectorAll('.dk-notice.is-danger[role="status"]')]
     .filter(notice => shown(page, notice))
-    .map(notice => parts(notice, '.dk-notice__body > *'))
+    .map(notice => parts(notice, ':is(.dk-notice__title, .dk-notice__text)'))
 
 test('the 技能 tab says in its own words that the Skill Source cannot be read, and the reason only when it has no words of its own', async t => {
   const missing = await openSkills((name: string, args: any) =>
@@ -1158,7 +1158,7 @@ test('a skill\'s text answered late shows only while it is the text opened', asy
   assert.equal(text(document.querySelector('.dk-detail .dk-skill__name')), '$ask-matt')
 })
 
-test('the reads every 60 seconds and as the tab is shown again leave a skill\'s text open and read no skills', async t => {
+test('the reads every 60 seconds and as the tab is shown again leave a skill\'s text open and read it no more, and read the skills each time', async t => {
   const page = await openSkills()
   t.after(page.close)
   const { document } = page
@@ -1176,13 +1176,14 @@ test('the reads every 60 seconds and as the tab is shown again leave a skill\'s 
   await page.show(false)
   await page.show(true)
 
-  // The page did read again: the Tasks, twice.
+  // The page did read again: the Tasks, twice, and the skills with them; the
+  // text open, only as it was opened.
   assert.equal(called('deck_tasks'), tasksRead + 2)
   assert.deepEqual(textShown(), [true, IMPLEMENT, false])
-  assert.deepEqual([called('deck_skills'), called('deck_skill')], [1, 1])
+  assert.deepEqual([called('deck_skills'), called('deck_skill')], [3, 1])
 })
 
-test('"刷新" reads the skills again, on whichever tab it is clicked, and opening 技能 reads none', async t => {
+test('"刷新" reads the skills again, on whichever tab it is clicked, as the timed read does, and opening 技能 reads none', async t => {
   // The first read finds tdd and wayfinder not the same, the second only
   // wayfinder, the third none.
   let reads = 0
@@ -1214,6 +1215,9 @@ test('"刷新" reads the skills again, on whichever tab it is clicked, and openi
   await page.click(tabs[1]!)
   await page.click(tabs[3]!)
   assert.equal(reads, 3)
+  // The read every 60 seconds reads them as "刷新" does.
+  await page.advance(60_000)
+  assert.equal(reads, 4)
 })
 
 test('whatever the person clicks, the Pane only puts text in the prompt and never sends a message itself', async t => {
@@ -6946,4 +6950,194 @@ test('a link to an address with no host after its scheme is the text it is', asy
   t.after(page.close)
 
   assert.deepEqual([...proseOf(page.document, '描述').children].map(shapeOf), [['p', '[x](http://) 和 [y](https://)']])
+})
+
+// The Deck service of a Configured Project whose Skill Source cannot be
+// found until `found()` says it is.
+const deckFindingSkills = (found: () => boolean) => {
+  const deck = deckThatRecommends()
+  return (name: string, args: any) =>
+    name === 'deck_skills' && !found() ? answered({ ok: false, failure: { kind: 'missing', message: 'no such directory' } }) : deck.answer(name, args)
+}
+
+test('each read reads the skills again, the timed one and the one as the tab is shown again too: found again, the 技能 tab lists them, and "下一步" and "执行" are on', async t => {
+  for (const how of ['timed', 'shown'] as const) {
+    let found = false
+    const page = await openSkills(deckFindingSkills(() => found))
+    t.after(page.close)
+    const { document } = page
+    assert.equal(text(document.querySelector('#skill-list .dk-notice__title')), '读取 Skill Source 失败', how)
+    assert.equal(document.querySelector('#tasks-noexec')!.hasAttribute('hidden'), false, how)
+
+    found = true
+    if (how === 'timed') await page.advance(60_000)
+    else {
+      await page.show(false)
+      await page.show(true)
+    }
+
+    assert.equal(document.querySelector('#skill-list .dk-notice.is-danger'), null, how)
+    assert.deepEqual([...document.querySelectorAll('#skill-list .dk-skill__name')].map(text), ['$ask-matt', IMPLEMENT, '$tdd', '$wayfinder'], how)
+    assert.equal(document.querySelector('#tasks-noexec')!.hasAttribute('hidden'), true, how)
+    assert.equal(executeShown(rowExecute(document, 70))?.[1], true, how)
+    await page.click(tabNamed(document, '下一步'))
+    assert.equal((button(page, '我现在该做什么') as HTMLButtonElement).disabled, false, how)
+  }
+})
+
+test('a skill\'s "预填" clicked stays off and says 已填入 for its 5 seconds through a read that draws the skills anew', async t => {
+  let skills = SKILLS
+  const page = await openSkills((name, args) => deckWithSkills(skills)(name, args))
+  t.after(page.close)
+  const { document } = page
+  const prefillOf = (call: string) =>
+    [...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === call)!.querySelector<HTMLButtonElement>('button')!
+  const before = prefillOf(IMPLEMENT)
+
+  await page.click(before)
+  // Read anew, and found otherwise: tdd is the same file now.
+  skills = SKILLS.map(skill => (skill.name === 'tdd' ? { ...skill, copy: 'same' } : skill))
+  await page.show(false)
+  await page.show(true)
+
+  assert.equal(before.isConnected, false)
+  assert.deepEqual([text(prefillOf(IMPLEMENT)), prefillOf(IMPLEMENT).disabled], ['已填入', true])
+  assert.equal(prefillOf('$tdd').disabled, false)
+  await page.advance(5_000)
+  assert.deepEqual([text(prefillOf(IMPLEMENT)), prefillOf(IMPLEMENT).disabled], ['预填', false])
+})
+
+test('a Skill Source that cannot be found has "重跑配置" in the 技能 tab\'s notice, which prefills the configure skill\'s call and is off for 5 seconds, and is off while the Deck service gives no call', async t => {
+  const page = await openSkills(deckFindingSkills(() => false))
+  t.after(page.close)
+  const notice = page.document.querySelector('#skill-list .dk-notice.is-danger')!
+  const rerun = () => notice.querySelector<HTMLButtonElement>('button')!
+
+  assert.deepEqual([text(notice.querySelector('.dk-notice__title')), text(notice.querySelector('.dk-notice__text'))], ['读取 Skill Source 失败', '找不到 Skill Source。重跑配置之后恢复。'])
+  assert.deepEqual([text(rerun()), rerun().disabled], ['重跑配置', false])
+  // On the line of the title, at its end.
+  assert.equal(rerun().parentElement, notice.querySelector('.dk-notice__title')!.parentElement)
+  await page.click(rerun())
+  assert.deepEqual(prefills(page), [prefilled(CONFIGURE_CALL)])
+  assert.deepEqual([text(rerun()), rerun().disabled], ['已填入', true])
+  await page.advance(5_000)
+  assert.deepEqual([text(rerun()), rerun().disabled], ['重跑配置', false])
+
+  const uncalled = await openSkills((name, args) => (name === 'deck_configure' ? answered({}) : deckFindingSkills(() => false)(name, args)))
+  t.after(uncalled.close)
+  assert.equal(uncalled.document.querySelector<HTMLButtonElement>('#skill-list .dk-notice.is-danger button')!.disabled, true)
+})
+
+test('a Skill Source that cannot be read for another reason has no "重跑配置" in its notice: "刷新" reads it again', async t => {
+  const answer = deckWithSkills()
+  const page = await openSkills((name, args) => (name === 'deck_skills' ? answered({ ok: false, failure: { kind: 'failed', message: 'disk on fire' } }) : answer(name, args)))
+  t.after(page.close)
+
+  assert.equal(text(page.document.querySelector('#skill-list .dk-notice__text')), 'Deck 服务出错：disk on fire。点“刷新”重试。')
+  assert.equal(page.document.querySelector('#skill-list .dk-notice button'), null)
+})
+
+test('a Skill Source with no skill in it says so in an empty list with "重跑配置", and draws no group of none', async t => {
+  const page = await openSkills(deckWithSkills([]))
+  t.after(page.close)
+  const { document } = page
+  const empty = document.querySelector('#skill-list .dk-empty')!
+
+  assert.equal(text(document.querySelector('#skill-list .dk-source')), 'Skill Source 目录 ~/.claude/skills')
+  assert.deepEqual([...empty.children].map(text), ['Skill Source 里没有技能。', '确认它是 Matt skills 所在的位置，或重跑配置重新选定。', '重跑配置'])
+  assert.equal(document.querySelector('#skill-list .dk-group'), null)
+  await page.click(empty.querySelector('button'))
+  assert.deepEqual(prefills(page), [prefilled(CONFIGURE_CALL)])
+})
+
+test('where "执行" cannot be used, a Task\'s detail says why under the way back, and 下一步 above the Recommendation, each of the four ways', async t => {
+  const without = (copy?: string) => (copy === undefined ? SKILLS.filter(skill => skill.name !== 'implement') : SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)))
+  for (const [skills, title, said] of [
+    [without('different'), 'Codex 里的 implement 不是同一份，不能预填执行。', '所有 Task 的“执行”先停用，重跑配置之后恢复。'],
+    [without('missing'), 'Codex 里找不到 implement，不能预填执行。', '所有 Task 的“执行”先停用，重跑配置之后恢复。'],
+    [without(), 'Skill Source 里没有 implement，不能预填执行。', '所有 Task 的“执行”先停用，重跑配置之后恢复。'],
+    [undefined, '读取 Skill Source 失败，不能预填执行。', '找不到 Skill Source。重跑配置之后恢复。'],
+  ] as const) {
+    const deck = deckThatRecommends(skills ?? SKILLS)
+    const answer = skills === undefined ? deckFindingSkills(() => false) : deck.answer
+    const page = await openPage({ answer: (name, args) => (name === 'deck_recommendation' ? deck.answer(name, args) : answer(name, args)) })
+    t.after(page.close)
+    const { document } = page
+    const noticeAfter = (element: Element | null | undefined) => {
+      const notice = element ?? null
+      return notice !== null && notice.matches('.dk-notice.is-warn') && shown(page, notice)
+        ? [text(notice.querySelector('.dk-notice__title')), text(notice.querySelector('.dk-notice__text')), [...notice.querySelectorAll('button')].map(text)]
+        : undefined
+    }
+
+    await page.click(rowOf(document, 70))
+    assert.deepEqual(noticeAfter(document.querySelector('#into .dk-bar')!.nextElementSibling), [title, said, ['重跑配置']], title)
+
+    await page.click(tabNamed(document, '下一步'))
+    await page.click(button(page, '我现在该做什么'))
+    deck.reported.set('request-1', RECOMMENDATION)
+    await page.advance(2_000)
+    assert.deepEqual(noticeAfter(document.querySelector('[data-panel="next"] .dk-rec')!.previousElementSibling), [title, said, ['重跑配置']], title)
+  }
+})
+
+test('in a Task\'s detail the notice that "执行" cannot be used stands above the asking to take the Task over', async t => {
+  // "接管" is off while "执行" is: the two stand together only where the
+  // asking was open as a read found implement no longer the same.
+  let copy = 'same'
+  const page = await openPage({ answer: (name, args) => deckThatRecommends(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill))).answer(name, args) })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowOf(document, 72))
+  await page.click(barButton(document, '接管'))
+  copy = 'missing'
+  await page.advance(60_000)
+  const notices = [...document.querySelectorAll('#into .dk-notice.is-warn')].filter(each => shown(page, each)).map(each => text(each.querySelector('.dk-notice__title')))
+  assert.deepEqual(notices, ['Codex 里找不到 implement，不能预填执行。', '#72 正由 Session 77e0aa15 执行'])
+})
+
+test('a read that draws 下一步 anew while its request is being filled in leaves "我现在该做什么" off: no second copy goes in the prompt', async t => {
+  let skills = SKILLS
+  const deck = deckThatRecommends()
+  const page = await openPage({
+    answer: (name, args) => (name === 'deck_skills' ? deckWithSkills(skills)(name, args) : deck.answer(name, args)),
+    // The Host takes its time with the prefill.
+    answerMessage: () => undefined,
+  })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+
+  // Read anew, and found otherwise, within the 10 seconds.
+  skills = SKILLS.map(skill => (skill.name === 'tdd' ? { ...skill, copy: 'same' } : skill))
+  await page.show(false)
+  await page.show(true)
+  assert.equal((button(page, '我现在该做什么') as HTMLButtonElement).disabled, true)
+  // Not answered in 10 seconds, it is on again.
+  await page.advance(10_000)
+  assert.equal((button(page, '我现在该做什么') as HTMLButtonElement).disabled, false)
+})
+
+test('the "重跑配置" of the notice that "执行" cannot be used keeps the focus through a read that draws the detail anew', async t => {
+  let description = '一'
+  const deck = deckThatRecommends(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy: 'different' } : skill)))
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_task' && args.number === 70 ? answered(detail(70, 'Task 详情', { description })) : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 70))
+  const rerun = document.querySelector<HTMLButtonElement>('#into .dk-notice.is-warn button')!
+  rerun.focus()
+
+  description = '二'
+  await page.advance(60_000)
+  assert.equal(text(proseOf(document, '描述')), '二')
+  assert.equal(document.activeElement, rerun)
+  // The one in 下一步 fills in the configure skill's call.
+  await page.click(tabNamed(document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+  await page.click(document.querySelector('[data-panel="next"] .dk-notice.is-warn button'))
+  assert.deepEqual(prefills(page).at(-1), prefilled(CONFIGURE_CALL))
 })
