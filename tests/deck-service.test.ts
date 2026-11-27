@@ -379,6 +379,52 @@ test('started for Codex, deck_setup_survey says of each copy of Matt skills whet
   ])
 })
 
+test('started for Codex, deck_setup_survey says of the existing Skill Source too whether $ask-matt in Codex calls its ask-matt, offered under another name or not', async t => {
+  const configured = async (skillSource: object) => {
+    const user = await home()
+    const dir = await workspace(JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource }))
+
+    return { dir, user }
+  }
+  // A plugin, whose ask-matt the user's Codex skills link: offered as
+  // ~/.agents/skills.
+  const plugin = await configured({ type: 'plugin', name: 'mattpocock-skills' })
+  const matt = join(plugin.user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
+  await skill(join(matt, 'skills', 'engineering'), 'ask-matt')
+  await installedPlugins(plugin.user, { 'mattpocock-skills@official': [{ scope: 'user', installPath: matt }] })
+  await mkdir(join(plugin.user, '.agents', 'skills'), { recursive: true })
+  await symlink(join(matt, 'skills', 'engineering', 'ask-matt'), join(plugin.user, '.agents', 'skills', 'ask-matt'))
+  // ~/.agents/skills, which ~/.claude/skills links: offered as
+  // ~/.claude/skills.
+  const agents = await configured({ type: 'directory', path: '~/.agents/skills' })
+  await skill(join(agents.user, '.agents', 'skills'), 'ask-matt')
+  await mkdir(join(agents.user, '.claude', 'skills'), { recursive: true })
+  await symlink(join(agents.user, '.agents', 'skills', 'ask-matt'), join(agents.user, '.claude', 'skills', 'ask-matt'))
+  // A directory of the user's own, which the user's Codex skills link.
+  const own = await configured({ type: 'directory', path: '~/my-skills' })
+  await skill(join(own.user, 'my-skills'), 'ask-matt')
+  await mkdir(join(own.user, '.agents', 'skills'), { recursive: true })
+  await symlink(join(own.user, 'my-skills', 'ask-matt'), join(own.user, '.agents', 'skills', 'ask-matt'))
+  // ~/.claude/skills, apart from the copy Codex calls.
+  const apart = await configured({ type: 'directory', path: '~/.claude/skills' })
+  await skill(join(apart.user, '.claude', 'skills'), 'ask-matt')
+  await skill(join(apart.user, '.agents', 'skills'), 'ask-matt')
+  const decks = [plugin, agents, own, apart].map(({ dir, user }) => startDeck(dir, { HOME: user }, 'codex'))
+  const claudeCode = startDeck(plugin.dir, { HOME: plugin.user })
+  for (const deck of [...decks, claudeCode]) {
+    t.after(deck.stop)
+  }
+
+  const results = await Promise.all(decks.map(deck => deck.callTool('deck_setup_survey')))
+  const forClaudeCode = await claudeCode.callTool('deck_setup_survey')
+
+  assert.deepEqual(
+    results.map(result => result.structuredContent.existing.hostCallsAskMatt),
+    [true, true, true, false],
+  )
+  assert.equal('hostCallsAskMatt' in forClaudeCode.structuredContent.existing, false)
+})
+
 test('started for Codex, deck_setup_survey offers first the copy of Matt skills whose ask-matt $ask-matt in Codex calls, the others after it in their order', async t => {
   const dir = await workspace()
   const user = await home()
@@ -483,6 +529,31 @@ test('deck_write_config replaces an existing config only when told to', async t 
   assert.deepEqual(kept.structuredContent.config, old)
   assert.equal(replaced.isError, false)
   assert.deepEqual(now.structuredContent.config, CONFIG)
+})
+
+test('deck_write_config writes of each source only its type and its path or name, leaving out what a survey added', async t => {
+  const dir = await workspace()
+  const plugin = await workspace()
+  const deck = startDeck(dir, {}, 'codex')
+  const forPlugin = startDeck(plugin, {}, 'codex')
+  t.after(deck.stop)
+  t.after(forPlugin.stop)
+
+  await deck.callTool('deck_write_config', {
+    config: { ...CONFIG, skillSource: { ...CONFIG.skillSource, hostCallsAskMatt: true } },
+  })
+  await forPlugin.callTool('deck_write_config', {
+    config: {
+      taskSource: { type: 'github-issues', tracker: 'GitHub' },
+      skillSource: { type: 'plugin', name: 'mattpocock-skills', path: '~/.claude/skills', hostCallsAskMatt: false },
+    },
+  })
+
+  assert.deepEqual(JSON.parse(await readFile(join(dir, '.matt-deck', 'config.json'), 'utf8')), CONFIG)
+  assert.deepEqual(JSON.parse(await readFile(join(plugin, '.matt-deck', 'config.json'), 'utf8')), {
+    taskSource: { type: 'github-issues' },
+    skillSource: { type: 'plugin', name: 'mattpocock-skills' },
+  })
 })
 
 test('deck_write_config writes nothing when the config is malformed', async t => {

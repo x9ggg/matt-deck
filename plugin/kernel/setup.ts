@@ -4,7 +4,7 @@ import { readdir, readFile, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { readProjectConfig } from './config.ts'
-import { hostCopies } from './skills.ts'
+import { hostCopies, listSkills, SkillSourceError } from './skills.ts'
 import type { ProjectConfig } from './config.ts'
 
 const ISSUE_TRACKER_DOC = 'docs/agents/issue-tracker.md'
@@ -121,8 +121,28 @@ const findSkillSources = async (
   return [...marked.filter(each => each.hostCallsAskMatt), ...marked.filter(each => !each.hostCallsAskMatt)]
 }
 
-export const surveySetup = async (workspace: string, home: string, hostDirectories: string[], markHostCalls: boolean) => ({
-  existing: await readExistingConfig(workspace),
-  taskSource: await readTaskSourcePrefill(workspace),
-  skillSources: await findSkillSources(workspace, home, hostDirectories, markHostCalls),
-})
+// With `markHostCalls`, an existing config also says whether the host calls
+// its Skill Source's ask-matt, judged as deck_skills judges it: the copy may
+// be offered under another name, or not found at all.
+export const surveySetup = async (workspace: string, home: string, hostDirectories: string[], markHostCalls: boolean) => {
+  let existing: ExistingConfig & { hostCallsAskMatt?: boolean } = await readExistingConfig(workspace)
+  if (markHostCalls && 'config' in existing) {
+    let calls = false
+    try {
+      // Only the copy is read here, not how the skill is called.
+      const skills = await listSkills(existing.config.skillSource, workspace, home, () => '', hostDirectories)
+      calls = skills.some(skill => skill.name === MARKER && skill.copy === 'same')
+    } catch (error) {
+      if (!(error instanceof SkillSourceError)) {
+        throw error
+      }
+    }
+    existing = { ...existing, hostCallsAskMatt: calls }
+  }
+
+  return {
+    existing,
+    taskSource: await readTaskSourcePrefill(workspace),
+    skillSources: await findSkillSources(workspace, home, hostDirectories, markHostCalls),
+  }
+}

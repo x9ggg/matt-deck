@@ -65,13 +65,21 @@ export const readProjectConfig = async (workspace: string): Promise<ProjectConfi
   return { configured: true, workspace, config: value as ProjectConfig }
 }
 
-// Writes the project config, making the workspace a Configured Project.
-// Throws when the config is malformed, or when one exists and `replace` is
-// not set: an existing config is never overwritten silently.
-export const writeProjectConfig = async (workspace: string, config: unknown, replace: boolean) => {
-  const problem = problemOf(config)
+// Writes the project config, making the workspace a Configured Project: of
+// each source only its type, and its path or name, so nothing a survey added
+// to a source (one machine's judgement at one moment) goes with the
+// repository. Throws when the config is malformed, or when one exists and
+// `replace` is not set: an existing config is never overwritten silently.
+export const writeProjectConfig = async (workspace: string, value: unknown, replace: boolean) => {
+  const problem = problemOf(value)
   if (problem !== undefined) {
     throw new Error(`Not written, the config is malformed: ${problem}`)
+  }
+  const { skillSource } = value as ProjectConfig
+  const config: ProjectConfig = {
+    taskSource: { type: 'github-issues' },
+    skillSource:
+      skillSource.type === 'directory' ? { type: 'directory', path: skillSource.path } : { type: 'plugin', name: skillSource.name },
   }
   const path = join(workspace, CONFIG_PATH)
   await mkdir(dirname(path), { recursive: true })
@@ -84,5 +92,5 @@ export const writeProjectConfig = async (workspace: string, config: unknown, rep
     throw error
   }
 
-  return config as ProjectConfig
+  return config
 }

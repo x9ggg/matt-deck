@@ -615,7 +615,7 @@ const tools = {
   },
   deck_write_config: {
     description:
-      'For the configure skill: write the project config (.matt-deck/config.json) of this workspace. Refuses to overwrite an existing config unless replace is true.',
+      'For the configure skill: write the project config (.matt-deck/config.json) of this workspace. Of each source only its type, and its path or name, is written; any other key, such as the hostCallsAskMatt deck_setup_survey adds, is left out. Refuses to overwrite an existing config unless replace is true.',
     inputSchema: {
       type: 'object',
       properties: {
