@@ -7294,6 +7294,13 @@ test('"我现在该做什么" clicked leaves the focus on "再问一次", which 
   assert.equal(document.activeElement, button(page, '再问一次'))
   await page.click(button(page, '再问一次'))
   assert.equal(document.activeElement, button(page, '再问一次'))
+  // A browser that moves the focus off the button as it goes off, before
+  // the tab is drawn again: the focus still ends on "再问一次".
+  const again = button(page, '再问一次') as HTMLElement
+  again.focus()
+  again.addEventListener('click', () => again.blur())
+  await page.click(again)
+  assert.equal(document.activeElement, button(page, '再问一次'))
 })
 
 test('the focus left on a row\'s button as the person went to the Host is not put back as the list is drawn again', async t => {

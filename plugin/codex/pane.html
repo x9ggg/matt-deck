@@ -2143,6 +2143,14 @@ button.dk-row{color:inherit}
     const made = () => {
       if (askOut === asked) askOut = undefined
     }
+    // Clicked with the focus on it, the tab drawn again puts the focus on
+    // the button that takes its place: the browser may move the focus off
+    // it as it goes off, before the tab is drawn.
+    const focused = document.activeElement === button
+    const drawn = () => {
+      showNext()
+      if (focused && !$('next').contains(document.activeElement)) $('next').querySelector('[data-focus="ask"]')?.focus({ preventScroll: true })
+    }
     button.disabled = true
     let answer
     try {
@@ -2156,7 +2164,7 @@ button.dk-row{color:inherit}
         await fill(answer.prompt, () => {
           made()
           asking = { ...asking, failure: { unanswered: true } }
-          showNext()
+          drawn()
         })
       } catch (error) {
         answer = { ok: false, failure: { refused: error } }
@@ -2168,14 +2176,14 @@ button.dk-row{color:inherit}
     made()
     if (!answer.ok) {
       asking = { ...asking, failure: answer.failure }
-      showNext()
+      drawn()
       return
     }
     const { requestId } = answer
     // Asked again while one waited, or once it stopped, the copy before may
     // still be in the prompt.
     asking = { phase: 'waiting', requestId, again: asking.phase === 'waiting' || asking.phase === 'stopped' }
-    showNext()
+    drawn()
     clearInterval(waitingFor)
     const askedAt = Date.now()
     // The last read, at 10 minutes, once it is asked for.
