@@ -750,7 +750,9 @@ body{margin:0;background:var(--ground)}
   // content or from the step shown: `crumb` names it in the way ('#70',
   // '$implement'); `draw` reads what it shows and answers { end, body, key },
   // the elements at the end of the bar and its content, and what they were
-  // drawn from, or { end, failed } where its read failed, `failed` the
+  // drawn from, or { key } alone where it was given that key, what it drew
+  // last was drawn from, and read the same again; or { end, failed } where
+  // its read failed, `failed` the
   // notice of why; `drawn` is what it shows until the first drawing answers;
   // `withTasks`, whether it is drawn from the Tasks. A step draws as it is
   // entered, as the way goes back to it, and with "刷新"; drawn from the
@@ -807,7 +809,7 @@ body{margin:0;background:var(--ground)}
     $('crumbs').replaceChildren(`${way.join(' / ')} / `, el('b', '', step.crumb))
     if (shownDrawn !== step.drawn) showStep(step)
     const drawing = (step.drawing = {})
-    const answer = await step.draw()
+    const answer = await step.draw(step.read?.key)
     if (!current() || step.drawing !== drawing) return
     // Read the same as before, the step keeps what it drew of it.
     if (answer.failed === undefined && answer.key !== step.read?.key) step.read = answer
@@ -838,7 +840,7 @@ body{margin:0;background:var(--ground)}
   // the list, the rest from its own read. Entered from a card on a wall,
   // `via` names the Map View it is on.
   const openTask = (number, via) =>
-    enter({ crumb: `#${number}`, task: number, withTasks: true, draw: () => drawTask(number), drawn: { end: [], body: [el('p', 'dk-why', `正在读取 #${number}…`)] } }, via)
+    enter({ crumb: `#${number}`, task: number, withTasks: true, draw: known => drawTask(number, known), drawn: { end: [], body: [el('p', 'dk-why', `正在读取 #${number}…`)] } }, via)
 
   // Asks the Host to open the address in the browser: the page holds no
   // link. Refused, the result notice says so; clicked again, it goes.
@@ -862,33 +864,41 @@ body{margin:0;background:var(--ground)}
   // is not, or an image, is the text it is, as is anything else. A link's
   // own words hold no link. A bare address ends at a space or at
   // punctuation. (The colon is escaped: the page's source names no address.)
-  const WEB = /^https?\:\/\//
-  const INLINE = /(!\[[^\]]*\]\([^)]*\))|`([^`]+)`|\*\*\*([^*]+)\*\*\*|\*\*(.+?)\*\*|\*([^\s*](?:[^*]*[^\s*])?)\*|(?<![A-Za-z0-9_])_([^\s_](?:[^_]*[^\s_])?)_(?![A-Za-z0-9_])|\[([^\]]+)\]\(([^)\s]+)\)|(https?\:\/\/[^\s<>()，。；：！？、（）「」]*[^\s<>().,;:!?'"，。；：！？、（）「」])/
+  const WEB = /^https?\:\/\/[^\s\/?#]/
+  // A link's words and address hold no bracket and are held short, and a
+  // link's words no line break: an opening bracket with no close is given
+  // up at once, so the read grows with the text, whatever it is made of.
+  const INLINE = /(!\[[^\[\]\n]{0,256}\]\([^\s()\[\]]{0,2048}\))|`([^`]+)`|\*\*\*([^*]+)\*\*\*|\*\*(.+?)\*\*|\*([^\s*](?:[^*]*[^\s*])?)\*|(?<![A-Za-z0-9_])_([^\s_](?:[^_]*[^\s_])?)_(?![A-Za-z0-9_])|\[([^\[\]\n]{1,256})\]\(([^\s()\[\]]{1,2048})\)|(https?\:\/\/[^\s<>()，。；：！？、（）「」]*[^\s<>().,;:!?'"，。；：！？、（）「」])/g
   const inline = (said, links = true) => {
     const parts = []
-    let rest = said
-    for (let found = INLINE.exec(rest); found !== null; found = INLINE.exec(rest)) {
+    // Text next to text is one run of it.
+    const add = part => {
+      if (part === '') return
+      if (typeof part === 'string' && typeof parts.at(-1) === 'string') parts[parts.length - 1] += part
+      else parts.push(part)
+    }
+    const link = (url, shown) => {
+      const button = made('button', 'dk-prose__link', shown)
+      button.type = 'button'
+      button.addEventListener('click', () => openLink(url))
+      return button
+    }
+    const read = new RegExp(INLINE)
+    let at = 0
+    for (let found = read.exec(said); found !== null; found = read.exec(said)) {
       const [whole, image, code, both, strong, em, underscored, words, target, bare] = found
-      const link = (url, shown) => {
-        const button = made('button', 'dk-prose__link', shown)
-        button.type = 'button'
-        button.addEventListener('click', () => openLink(url))
-        return button
-      }
-      parts.push(rest.slice(0, found.index),
-        image !== undefined ? whole
+      add(said.slice(at, found.index))
+      add(image !== undefined ? whole
         : code !== undefined ? el('code', '', code)
         : both !== undefined ? made('strong', '', [made('em', '', inline(both, links))])
         : strong !== undefined ? made('strong', '', inline(strong, links))
         : (em ?? underscored) !== undefined ? made('em', '', inline(em ?? underscored, links))
         : words !== undefined ? links && WEB.test(target) ? link(target, inline(words, false)) : whole
         : links ? link(bare, [bare]) : bare)
-      rest = rest.slice(found.index + whole.length)
+      at = read.lastIndex
     }
-    // Text next to text is one run of it.
-    return [...parts, rest]
-      .reduce((joined, part) => (typeof part === 'string' && typeof joined.at(-1) === 'string' ? [...joined.slice(0, -1), joined.at(-1) + part] : [...joined, part]), [])
-      .filter(part => part !== '')
+    add(said.slice(at))
+    return parts
   }
   // Line by line: paragraphs between empty lines, each line break kept;
   // headings as a line in bold; lists, one level within, an ordered one from
@@ -917,11 +927,11 @@ body{margin:0;background:var(--ground)}
       if (line.trim() === '') {
         at += 1
       } else if (fence !== null) {
-        const end = lines.findIndex((each, index) => {
-          const closing = FENCE.exec(each)
-          return index > at && closing !== null && closing[1].startsWith(fence[1]) && closing[2].trim() === ''
-        })
-        const close = end === -1 ? lines.length : end
+        let close = at + 1
+        for (; close < lines.length; close += 1) {
+          const closing = FENCE.exec(lines[close])
+          if (closing !== null && closing[1].startsWith(fence[1]) && closing[2].trim() === '') break
+        }
         drawn.push(el('pre', 'dk-prose__code', el('code', '', lines.slice(at + 1, close).join('\n'))))
         at = close + 1
       } else if (heading !== null) {
@@ -963,7 +973,7 @@ body{margin:0;background:var(--ground)}
     return drawn
   }
 
-  const drawTask = async number => {
+  const drawTask = async (number, known) => {
     let answer
     let failure
     try {
@@ -980,6 +990,12 @@ body{margin:0;background:var(--ground)}
     const { task, reports } = answer
     const entryOf = wanted => entries().find(([each]) => each.number === wanted)
     const [entry, group] = entryOf(number) ?? []
+    // The Spec or Map it is under, as the list holds it; clicked, its Map View.
+    const parent = list.containers.find(container => container.number === entry?.parent)
+    // What it is drawn from: its own read, and what the list holds of it.
+    // Read the same as it was last drawn from, it is not drawn again.
+    const key = JSON.stringify([answer, entry, group, (entry?.blockers ?? []).map(entryOf), parent, closeoutOf(number), session.session])
+    if (key === known) return { key }
     const state = entry && stateOf(entry, group)
     const status = state === undefined ? [] : statusOf(entry, state)
     const label = labelOf({ blockers: [], ...entry, labels: task.labels }, state)
@@ -1011,16 +1027,13 @@ body{margin:0;background:var(--ground)}
     open.addEventListener('click', () => openLink(task.url))
 
     const closeout = entry?.isPendingCloseout ? [closeoutButton(number, closeoutOf(number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
-    // The Spec or Map it is under, as the list holds it; clicked, its Map View.
-    const parent = list.containers.find(container => container.number === entry?.parent)
     const up = el('button', 'dk-parent__link', parent === undefined ? '' : `${parent.kind === 'spec' ? 'Spec' : 'Map'} #${parent.number} ${parent.title}`)
     up.type = 'button'
     up.addEventListener('click', () => openMap(parent.number))
     const belongs = parent === undefined ? [] : [el('div', 'dk-parent caption', el('span', '', '属于'), up)]
 
     return {
-      // What it is drawn from: its own read, and what the list holds of it.
-      key: JSON.stringify([answer, entry, group, (entry?.blockers ?? []).map(entryOf), parent, closeoutOf(number), session.session]),
+      key,
       // The actions its row has, then the link: a ready Task is executed, a
       // held one released or taken over; a Spec or Map is neither, a Pending
       // Closeout one has its closeout.

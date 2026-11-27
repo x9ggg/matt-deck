@@ -6880,3 +6880,70 @@ test('Markdown read as GitHub reads it at its edges: a bare address ends before 
   ])
   assert.equal((prose.querySelector('ol') as HTMLOListElement).start, 3)
 })
+
+test('a description of the length GitHub allows takes about as long to draw as plain words, whatever it is made of', async t => {
+  // Timed in the one run, each against plain words as long: a draw that
+  // grows with the square of its length is many times slower at this
+  // length, one that grows with it is not, however busy the machine is.
+  const length = 65_536
+  let description = ''
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_task' && args.number === 70 ? answered(detail(70, 'Task 详情', { description })) : answer(name, args)) })
+  t.after(page.close)
+  const drawn = async (made: string) => {
+    description = made.slice(0, length)
+    const started = performance.now()
+    await page.click(rowOf(page.document, 70))
+    const took = performance.now() - started
+    assert.ok(proseOf(page.document, '描述'))
+    await page.click(barButton(page.document, '返回'))
+    return took
+  }
+  const plain = Math.min(await drawn('一段普通的话 '.repeat(length)), await drawn('plain words '.repeat(length)))
+  for (const [name, made] of [
+    ['[', '['.repeat(length)],
+    ['![', '!['.repeat(length)],
+    ['[a', '[a'.repeat(length)],
+    ['[a](', '[a]('.repeat(length)],
+    ['a fence a line', '```\n'.repeat(length)],
+    ['`a` in one paragraph', '`a` '.repeat(length)],
+    ['*', '*'.repeat(length)],
+    ['_', '_'.repeat(length)],
+    ['**a', '**a '.repeat(length)],
+  ] as const) {
+    const took = await drawn(made)
+    assert.ok(took < 10 * plain + 500, `${name}: ${Math.round(took)} ms, plain words ${Math.round(plain)} ms`)
+  }
+})
+
+test('a detail read again the same is not drawn from its Markdown again', async t => {
+  const answer = deckAt('/work/matt-deck')
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_task' && args.number === 70 ? answered(detail(70, 'Task 详情', { description: '> 引用的话\n\n**粗**' })) : answer(name, args)) })
+  t.after(page.close)
+  await page.click(rowOf(page.document, 70))
+  // What only the detail's Markdown makes: a quote, and bold.
+  const made: string[] = []
+  const create = page.document.createElement.bind(page.document)
+  page.document.createElement = ((tag: string, options?: ElementCreationOptions) => {
+    if (['blockquote', 'strong'].includes(tag)) made.push(tag)
+    return create(tag, options)
+  }) as typeof page.document.createElement
+
+  await page.advance(60_000)
+  await page.click(page.document.querySelector('.dk-head > button'))
+  assert.deepEqual(made, [])
+})
+
+test('the words of a link are text, a bare address and HTML in them too: no link within a link', async t => {
+  const page = await openDetailOf({ description: '[看 https://tasks.example/in <b>粗</b>](https://tasks.example/out)' })
+  t.after(page.close)
+
+  assert.deepEqual([...proseOf(page.document, '描述').children].map(shapeOf), [['p', ['button', '看 https://tasks.example/in <b>粗</b>']]])
+})
+
+test('a link to an address with no host after its scheme is the text it is', async t => {
+  const page = await openDetailOf({ description: '[x](http://) 和 [y](https://)' })
+  t.after(page.close)
+
+  assert.deepEqual([...proseOf(page.document, '描述').children].map(shapeOf), [['p', '[x](http://) 和 [y](https://)']])
+})
