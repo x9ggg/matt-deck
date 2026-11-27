@@ -43,10 +43,10 @@ test('the Deck service answers from a bare copy of the published plugin', async 
     cwd: workspace,
     stdio: ['pipe', 'pipe', 'inherit'],
   })
-  t.after(() => child.kill())
+  t.after(() => child.kill('SIGKILL'))
   const reply = new Promise<any>((resolve, reject) => {
     createInterface({ input: child.stdout }).once('line', line => resolve(JSON.parse(line)))
-    child.on('exit', code => reject(new Error(`Deck service exited (${code})`)))
+    child.on('exit', (code, signal) => reject(new Error(`Deck service exited (${code}${signal ? `, ${signal}` : ''})`)))
   })
   child.stdin.write(
     `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'deck_config', arguments: {} } })}\n`,

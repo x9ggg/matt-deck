@@ -14,4 +14,4 @@ Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agen
 
 ## Running Deck by hand
 
-Every manual run of the Deck service, `plugin/cli/end-session.ts`, the command line or the Codex install and uninstall gets a throwaway home: `HOME=$(mktemp -d) node …`. The real `~/.matt-deck`, `~/.codex` and `~/.agents` hold the person's live sessions. `npm test` already gives each Deck service its own.
+Every manual run of the Deck service, `plugin/cli/end-session.ts`, the command line or the Codex install and uninstall gets a throwaway home: `HOME=$(mktemp -d) node …`. The real `~/.matt-deck`, `~/.codex` and `~/.agents` hold the person's live sessions. `npm test` already gives each Deck service its own. Stop only the processes you started, by their pid: never `pkill` by a pattern that also matches another worktree's (for example `pkill -f "server/main.ts"`), since other sessions' tests are running Deck services on the same command line.

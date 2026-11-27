@@ -95,11 +95,11 @@ test('install registers the Deck service in the Codex config of the user, keepin
   const child = spawn(command, args, { cwd: workspace, env: { ...process.env, HOME: await home() }, stdio: ['pipe', 'pipe', 'inherit'] })
   const reply = new Promise<any>((resolve, reject) => {
     createInterface({ input: child.stdout }).once('line', line => resolve(JSON.parse(line)))
-    child.on('exit', code => reject(new Error(`Deck service exited (${code})`)))
+    child.on('exit', (code, signal) => reject(new Error(`Deck service exited (${code}${signal ? `, ${signal}` : ''})`)))
   })
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })}\n`)
   const listed = await reply
-  child.kill()
+  child.kill('SIGKILL')
   assert.ok(listed.result.tools.some((tool: any) => tool.name === 'deck_pane'))
 })
 

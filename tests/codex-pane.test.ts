@@ -1483,27 +1483,19 @@ test('"再问一次" makes a new request and waits for it alone; asked while one
 })
 
 test('a report read late, after the request was asked again, is not shown', async t => {
-  // The read of the first request answers only once the second is asked.
-  let release: () => void = () => {}
+  // The read of the first request is held, and answered only once the
+  // second is asked.
   const deck = deckThatRecommends()
   const page = await openNext({
     answer: (name: string, args: any) =>
-      name === 'deck_recommendation' && args.requestId === 'request-1'
-        ? new Promise(resolve => {
-            release = () => resolve(answered({ found: true, recommendation: RECOMMENDATION }))
-          })
-        : deck.answer(name, args),
+      name === 'deck_recommendation' && args.requestId === 'request-1' ? undefined : deck.answer(name, args),
   })
   t.after(page.close)
   await page.click(button(page, '我现在该做什么'))
-  // While the read is held, the page is never settled: wait a moment.
-  const moment = () => new Promise(resolve => setTimeout(resolve, 20))
-  const reading = page.advance(2_000)
-  await moment()
-  ;(button(page, '再问一次') as HTMLElement).click()
-  await moment()
-  release()
-  await reading
+  await page.advance(2_000)
+  const read = page.sent.find(message => message.method === 'tools/call' && message.params.arguments?.requestId === 'request-1')
+  await page.click(button(page, '再问一次'))
+  await page.respond(read, { result: answered({ found: true, recommendation: RECOMMENDATION }) })
 
   assert.equal(page.document.querySelector('.dk-rec'), null)
   assert.deepEqual(nextTab(page).said, ['已重新填入。输入框里上一份还在的话，先删掉再发送。'])

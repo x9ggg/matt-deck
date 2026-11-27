@@ -12,6 +12,8 @@
 
 行为的测试只通过对外接口写：任务内核的行为经 Deck 服务的 `deck_*` 工具验证，Claude Code 上 Pane 的行为经引擎测试工具下的 Mod 验证，Codex 标签页里 Pane 的行为经假宿主下的页面验证。内核新增的行为因此先成为一个 `deck_*` 工具。别的入口（例如命令行）只测自己那一层：参数、输出、退出状态，以及它写的文件。
 
+测耗时的测试量被测代码所在进程的 CPU 时间，不比墙上时间：页面测试量测试进程自己的（`process.cpuUsage()`），Deck 服务的量它那个子进程的（`tests/deck-service.test.ts` 的 `cpuMs`，用 `ps` 读）。墙上时间里还有机器忙时分给别的进程的时间。
+
 命令行写文件失败的路径也在这一层测，失败在临时目录里造：`chmod` 造写不进去；`chflags uchg` 造“目录能写、预检通过，删这个文件却失败”；`sandbox-exec` 的 `deny file-write*` 规则造“预检通过，新建这个文件却失败”，规则里的路径先用 `realpath` 解开 `/var` → `/private/var`。权限类的在 root 下跳过，后两种不在 darwin 或 `sandbox-exec` 起不来时也跳过；测试结束前撤掉 `uchg`，不然临时目录删不掉。例子在 `tests/codex-install.test.ts`。
 
 Codex 的安装卸载写的 `config.toml` 由解析器守：`tests/codex-install.test.ts` 里经 `run`（或 `checked`）运行的每一次 install 和 uninstall，只要改了 `config.toml`，改写后的内容就要能被 `smol-toml` 解析，去掉 Deck 的注册之后还要和改写前相同。新的用例经 `run` 运行就带上这项检查；按字节写的断言只留给逐字节还原这类要求。`smol-toml` 和 jsdom 一样是仓库根目录的开发依赖。

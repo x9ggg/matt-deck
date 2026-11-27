@@ -33,7 +33,7 @@ const startDeck = (cwd: string, env: Record<string, string> = {}, host = 'claude
     waiting.delete(message.id)
   })
   const exited = new Promise<never>((_, reject) =>
-    child.on('exit', code => reject(new Error(`Deck service exited (${code})`))),
+    child.on('exit', (code, signal) => reject(new Error(`Deck service exited (${code}${signal ? `, ${signal}` : ''})`))),
   )
   exited.catch(() => undefined)
   let nextId = 1
@@ -49,7 +49,17 @@ const startDeck = (cwd: string, env: Record<string, string> = {}, host = 'claude
     request,
     callTool: (name: string, args: object = {}) =>
       request('tools/call', { name, arguments: args }).then(reply => reply.result),
-    stop: () => child.kill(),
+    // Ends the Deck service by SIGKILL, so one stuck in synchronous code,
+    // where its SIGTERM handler never gets a turn, does not outlive its test.
+    stop: () => child.kill('SIGKILL'),
+    // The CPU time the Deck service's own process has spent so far, in
+    // milliseconds, as ps reads it to a hundredth of a second. A test times
+    // the service by this rather than by the clock on the wall, which also
+    // counts the turns a busy machine gives to other processes.
+    cpuMs: async () => {
+      const { stdout } = await exec('ps', ['-o', 'time=', '-p', String(child.pid)])
+      return Math.round(stdout.trim().split(':').reduce((ms, part) => ms * 60 + Number(part) * 1000, 0))
+    },
     // Closes the Deck service's input; answers the code it exited with.
     close: () =>
       new Promise<number | null>(resolve => {
@@ -1692,10 +1702,10 @@ test('deck_tasks reads `[text](…)` in a Parent section as a Markdown link only
   )
 })
 
-// How long deck_tasks takes, in milliseconds, when a body's Blocked by
-// section, its top Blocked by line and its Parent section each hold `line`
-// beside a reference, and when they hold as many characters of plain words
-// instead; and what it reads with `line`.
+// The CPU time the Deck service spends on deck_tasks, in milliseconds, when
+// a body's Blocked by section, its top Blocked by line and its Parent section
+// each hold `line` beside a reference, and when they hold as many characters
+// of plain words instead; and what it reads with `line`.
 const timedWithLine = async (t: { after: (fn: () => void) => void }, line: string) => {
   const gh = await fakeGh()
   const deck = startDeck(await configured(), gh.env)
@@ -1708,9 +1718,9 @@ const timedWithLine = async (t: { after: (fn: () => void) => void }, line: strin
       issue({ number: 6, body: `Blocked by: #3 ${text}\n` }),
       issue({ number: 7, body: `## Parent\n\n#10 ${text}\n` }),
     ])
-    const start = performance.now()
+    const start = await deck.cpuMs()
     const { structuredContent } = await deck.callTool('deck_tasks', { refresh: true })
-    return { ms: performance.now() - start, structuredContent }
+    return { ms: (await deck.cpuMs()) - start, structuredContent }
   }
   const plain = 'ab '.repeat(Math.ceil(line.length / 3)).slice(0, line.length)
   // The first read warms the Deck service up.
@@ -2062,9 +2072,9 @@ test('deck_map reads a goal from a long line of unclosed code, emphasis, links a
   const timed = async (text: string) => {
     await gh.issues([issue({ number: 10, labels: ['wayfinder:map'], body: `${text}\n` })])
     await deck.callTool('deck_tasks', { refresh: true })
-    const start = performance.now()
+    const start = await deck.cpuMs()
     const { structuredContent } = await deck.callTool('deck_map', { session: 'this-session' })
-    return { ms: performance.now() - start, goal: structuredContent.maps[0].goal }
+    return { ms: (await deck.cpuMs()) - start, goal: structuredContent.maps[0].goal }
   }
   const unit = '*a _a **a __a [a ![a '
   // A run of backticks no other run as long closes, then the rest.
@@ -4922,9 +4932,10 @@ test('the hook\'s tool answers within a second a prompt whose implement is follo
   const words = ['a'.repeat(60_000), `${'a/'.repeat(30_000)}issues/12x`, `https://github.com/${'a'.repeat(60_000)}`]
 
   for (const word of words) {
-    const began = performance.now()
+    const began = await deck.cpuMs()
     await callFrom(deck, CODEX_SESSION, HOOK_TOOL, { prompt: `$implement ${word}` })
-    assert.ok(performance.now() - began < 1_000, `${word.slice(0, 20)}… took ${Math.round(performance.now() - began)} ms`)
+    const ms = (await deck.cpuMs()) - began
+    assert.ok(ms < 1_000, `${word.slice(0, 20)}… took ${ms} ms`)
   }
 })
 
