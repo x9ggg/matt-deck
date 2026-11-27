@@ -6299,7 +6299,7 @@ const freshShown = (document: Document) => {
   return [text(fresh), fresh.classList.contains('is-stale')]
 }
 
-test('a timed read whose Tasks the Deck service does not answer is late at 10 seconds: the head says 没有应答, the content says so at its top, "刷新" is on, and the next timed read is made and drawn', async t => {
+test('a timed read whose Tasks the Deck service does not answer is late at 10 seconds: the head says 没有应答, the content says so at its top, "刷新" is on, and the next timed read waits for its answer, which is drawn', async t => {
   let dropping = false
   let tasks: any = TASKS
   const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' ? (dropping ? undefined : mapRead(tasks)) : deckWithSkills()(name, args)) })
@@ -6323,13 +6323,17 @@ test('a timed read whose Tasks the Deck service does not answer is late at 10 se
   dropping = false
   tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [...TASKS.groups.ready, task(90, '新读到的 9q2w')] } }
   await page.advance(50_000)
-  assert.equal(reads(), before + 1)
+  // The timed read waits for the late one.
+  assert.equal(reads(), before)
+  await page.respond(lastTasksRead(page), { result: mapRead(tasks) })
   assert.equal(text(rowOf(document, 90).querySelector('.dk-row__title')), '新读到的 9q2w')
   assert.equal(lateShown(page), undefined)
   assert.deepEqual(freshShown(document), ['刚刚', false])
+  await page.advance(60_000)
+  assert.equal(reads(), before + 1)
 })
 
-test('a read late on the skills, after "刷新" in 技能, or on a detail\'s Task, says so as a late read of the Tasks does, and the next timed read is made and drawn', async t => {
+test('a read late on the skills, after "刷新" in 技能, or on a detail\'s Task, says so as a late read of the Tasks does, and the next timed read waits for its answer, which is drawn', async t => {
   let dropping = ''
   let skills = SKILLS
   const page = await openPage({ answer: (name, args: any) => (name === dropping ? undefined : deckWithSkills(skills)(name, args)) })
@@ -6337,7 +6341,8 @@ test('a read late on the skills, after "刷新" in 技能, or on a detail\'s Tas
   const { document } = page
   const refresh = document.querySelector<HTMLButtonElement>('.dk-head > button')!
   const reads = () => calledWith(page, 'deck_map').length
-  // Late 10 seconds after the read began, and the next timed read made.
+  // Late 10 seconds after the read began; no timed read made until it
+  // answers, and the next made once it has.
   const lateFrom = async (begin: () => Promise<void>, wait: number) => {
     await begin()
     await page.advance(9_999)
@@ -6347,12 +6352,17 @@ test('a read late on the skills, after "刷新" in 技能, or on a detail\'s Tas
     assert.deepEqual(freshShown(document), ['没有应答', true])
     assert.deepEqual(lateShown(page), LATE)
     assert.equal(refresh.disabled, false)
+    const held = page.sent.filter(message => message.method === 'tools/call' && message.params.name === dropping).at(-1)
     dropping = ''
     const before = reads()
     await page.advance(wait)
-    assert.equal(reads(), before + 1)
+    assert.equal(reads(), before)
+    await page.respond(held, { result: deckWithSkills(skills)(held.params.name, held.params.arguments) })
     assert.equal(lateShown(page), undefined)
-    assert.deepEqual(freshShown(document), ['刚刚', false])
+    // As fresh as its Tasks, read as it began.
+    assert.deepEqual(freshShown(document), ['1 分钟前', false])
+    await page.advance(60_000)
+    assert.equal(reads(), before + 1)
   }
 
   await page.click(tabNamed(document, '技能'))
@@ -6371,6 +6381,108 @@ test('a read late on the skills, after "刷新" in 技能, or on a detail\'s Tas
 
 // The read of the Tasks the page asked for last, as sent.
 const lastTasksRead = (page: { sent: any[] }) => page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_map').at(-1)
+
+test('a timed read whose Tasks are answered 70 seconds late is drawn as they come: no timed read takes its place meanwhile, and the next is made at the 60 seconds after', async t => {
+  for (const failing of [false, true]) {
+    let slow = false
+    const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' && slow ? undefined : deckWithSkills()(name, args)) })
+    t.after(page.close)
+    const { document } = page
+    const reads = () => calledWith(page, 'deck_map').length
+
+    slow = true
+    await page.advance(60_000)
+    const lateRead = lastTasksRead(page)
+    const before = reads()
+    await page.advance(60_000)
+    assert.equal(reads(), before, `no read at 120 seconds, ${failing}`)
+    await page.advance(10_000)
+    await page.respond(lateRead, {
+      result: failing
+        ? mapRead({ ok: false, failure: { kind: 'offline', message: 'fetch failed 6t1q' } })
+        : mapRead({ ...TASKS, groups: { ...TASKS.groups, ready: [...TASKS.groups.ready, task(90, '慢慢读到的 2c6h')] } }),
+    })
+
+    assert.equal(lateShown(page), undefined)
+    if (failing) {
+      assert.equal(shown(page, document.getElementById('tasks-failed')), true)
+      assert.equal(text(document.getElementById('tasks-failed')!.querySelector('.dk-notice__title')), '读取 Task 失败')
+    } else {
+      assert.equal(text(rowOf(document, 90).querySelector('.dk-row__title')), '慢慢读到的 2c6h')
+      assert.deepEqual(freshShown(document), ['刚刚', false])
+    }
+    await page.advance(49_999)
+    assert.equal(reads(), before)
+    await page.advance(1)
+    assert.equal(reads(), before + 1)
+  }
+})
+
+test('a late read never answered stops the timed reads: for 10 minutes none is made, the head says 没有应答, the notice stays and "刷新" is on', async t => {
+  let dropping = false
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' && dropping ? undefined : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  // Each read begins with the project config.
+  const readsBegun = () => calledWith(page, 'deck_config').length
+
+  dropping = true
+  await page.advance(60_000)
+  const before = readsBegun()
+  await page.advance(10 * 60_000)
+
+  assert.equal(readsBegun(), before)
+  assert.deepEqual(freshShown(document), ['没有应答', true])
+  assert.deepEqual(lateShown(page), LATE)
+  assert.equal(document.querySelector<HTMLButtonElement>('.dk-head > button')!.disabled, false)
+})
+
+test('once a read is late, the tab hidden and shown again reads anew at once and draws it; the late read\'s answer coming after that draws nothing', async t => {
+  let dropping = false
+  let tasks: any = TASKS
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' ? (dropping ? undefined : mapRead(tasks)) : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+
+  dropping = true
+  await page.advance(60_000)
+  const lateRead = lastTasksRead(page)
+  await page.advance(10_000)
+  assert.deepEqual(lateShown(page), LATE)
+
+  dropping = false
+  tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [...TASKS.groups.ready, task(90, '新读到的 9q2w')] } }
+  await page.show(false)
+  await page.show(true)
+  assert.equal(text(rowOf(document, 90).querySelector('.dk-row__title')), '新读到的 9q2w')
+  assert.equal(lateShown(page), undefined)
+  const drawn = text(document.querySelector('#tasks'))
+
+  await page.respond(lateRead, { result: mapRead({ ...TASKS, groups: { ...TASKS.groups, ready: [task(91, '迟到的 4m7k')] } }) })
+  assert.equal(text(document.querySelector('#tasks')), drawn)
+  assert.deepEqual(freshShown(document), ['刚刚', false])
+})
+
+test('once a read is late, a release reads the Tasks again at once, not waiting for the late read', async t => {
+  const deck = deckThatOccupies()
+  let dropping = false
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' && dropping ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+
+  dropping = true
+  await page.advance(60_000)
+  await page.advance(10_000)
+  assert.deepEqual(lateShown(page), LATE)
+
+  dropping = false
+  await page.click(rowButton(document, 74, '释放'))
+
+  assert.deepEqual(calledWith(page, 'deck_release'), [{ task: 74, session: SESSION.session }])
+  assert.equal(lateShown(page), undefined)
+  assert.deepEqual(freshShown(document), ['刚刚', false])
+  assert.ok(rowOf(document, 74).closest('.dk-group')!.querySelector('.dk-group__head')!.textContent!.startsWith('可执行'))
+})
 
 test('once a read is late, "刷新" reads anew and draws it; the late read\'s answer coming after that draws nothing', async t => {
   let dropping = false

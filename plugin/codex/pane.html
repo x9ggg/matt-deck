@@ -2442,7 +2442,12 @@ button.dk-row{color:inherit}
   const readIfShown = () => {
     if (document.visibilityState === 'visible' && !$('refresh').disabled) read()
   }
-  setInterval(readIfShown, 60_000)
+  // The timed read takes no late read's place: one too slow for the next 60
+  // seconds is drawn all the same once it answers. Never answered, the timed
+  // reads stop until "刷新", or the tab shown again, reads anew.
+  setInterval(() => {
+    if (!isLate) readIfShown()
+  }, 60_000)
   document.addEventListener('visibilitychange', readIfShown)
 
   const configure = $('unconfigured').querySelector('button')
