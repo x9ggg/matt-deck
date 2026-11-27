@@ -200,6 +200,12 @@ const MAPS = {
   ],
 }
 
+// deck_map's answer to a read of the Task Source: the list `tasks`, and the
+// Map Views `maps` of the same read; a list not read, as deck_map answers
+// a read that fails.
+const mapRead = (tasks: any, maps: any = MAPS) => answered(tasks.ok === false ? tasks : { ...tasks, maps: maps.maps })
+const mapReadOf = ({ tasks, maps }: { tasks: object; maps: object }) => mapRead(tasks, maps)
+
 // The Deck service of a Session started in the Workspace at `workspace`, its
 // Task Source holding `tasks`, which its Map Views `maps` show.
 const deckAt =
@@ -226,14 +232,12 @@ const deckAt =
     if (name === 'deck_hook') {
       return answered({ receivedAt: Date.UTC(2026, 10, 22, 8, 0) })
     }
-    if (name === 'deck_tasks') {
-      return answered(tasks)
+    // The Tasks and their Map Views, from one read.
+    if (name === 'deck_map') {
+      return mapRead(tasks, maps)
     }
     if (name === 'deck_task' && DETAILS[args.number] !== undefined) {
       return answered(DETAILS[args.number]!)
-    }
-    if (name === 'deck_map') {
-      return answered(maps)
     }
     if (name === 'deck_skills') {
       return answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS })
@@ -296,7 +300,7 @@ test('in a Configured Project the Pane heads its four tabs with the project and 
     { name: 'deck_session', arguments: {} },
     // Whether Deck's hook ever ran, which Codex runs once it is trusted.
     { name: 'deck_hook', arguments: {} },
-    { name: 'deck_tasks', arguments: {} },
+    // The Tasks and their Map Views, in one answer.
     { name: 'deck_map', arguments: { session: SESSION.session } },
     // 下一步 reads the skills, to know whether Codex runs this ask-matt.
     { name: 'deck_skills', arguments: {} },
@@ -304,7 +308,7 @@ test('in a Configured Project the Pane heads its four tabs with the project and 
   ])
 
   await page.click(document.querySelector('.dk-head > button'))
-  assert.equal(calls().length, 14)
+  assert.equal(calls().length, 12)
   assert.equal(text(document.querySelector('.dk-head__fresh')), '刚刚')
 })
 
@@ -580,11 +584,11 @@ test('an empty list says it is empty and where to go, and so does a group the fi
 
 test('while the Pane reads again, the head still says how fresh the list it shows is', async t => {
   const answer = deckAt('/work/matt-deck')
-  // The freshness the head shows each time deck_tasks is called, before it answers.
+  // The freshness the head shows each time deck_map is called, before it answers.
   const whileReading: (string | undefined)[] = []
   const page = await openPage({
     answer: (name, _args, document) => {
-      if (name === 'deck_tasks') whileReading.push(text(document.querySelector('.dk-head__fresh')))
+      if (name === 'deck_map') whileReading.push(text(document.querySelector('.dk-head__fresh')))
       return answer(name)
     },
   })
@@ -599,7 +603,7 @@ test('while the Pane reads again, the head still says how fresh the list it show
 test('the Pane reads the Tasks every 60 seconds while its tab is shown, not while it is hidden, and once as it is shown again', async t => {
   const page = await openPage({ answer: deckAt('/work/matt-deck') })
   t.after(page.close)
-  const reads = () => page.sent.filter(message => message.params?.name === 'deck_tasks').length
+  const reads = () => page.sent.filter(message => message.params?.name === 'deck_map').length
 
   assert.equal(reads(), 1)
   await page.advance(59_999)
@@ -621,22 +625,23 @@ test('the Pane reads the Tasks every 60 seconds while its tab is shown, not whil
 test('"刷新" reads the Task Source again past the Deck service\'s cache; the other reads take what it has', async t => {
   const page = await openPage({ answer: deckAt('/work/matt-deck') })
   t.after(page.close)
-  const reads = () => page.sent.filter(message => message.params?.name === 'deck_tasks').map(({ params }) => params.arguments)
+  const reads = () => page.sent.filter(message => message.params?.name === 'deck_map').map(({ params }) => params.arguments)
 
   await page.advance(60_000)
   await page.show(false)
   await page.show(true)
   await page.click(page.document.querySelector('.dk-head > button'))
-  assert.deepEqual(reads(), [{}, {}, {}, { refresh: true }])
+  const asking = { session: SESSION.session }
+  assert.deepEqual(reads(), [asking, asking, asking, { ...asking, refresh: true }])
 })
 
 test('until the first read of the Tasks comes back, the "任务" tab says it is reading them', async t => {
   const answer = deckAt('/work/matt-deck')
-  // What the Pane shows while the Deck service has not answered deck_tasks.
+  // What the Pane shows while the Deck service has not answered deck_map.
   let whileReading: unknown[] | undefined
   const page = await openPage({
     answer: (name, _args, document) => {
-      if (name === 'deck_tasks' && whileReading === undefined) {
+      if (name === 'deck_map' && whileReading === undefined) {
         whileReading = [
           [...document.querySelectorAll('.dk-why')].filter(each => !each.closest('[hidden]')).map(text),
           document.querySelector('.dk-filter')!.closest('[hidden]') !== null,
@@ -656,7 +661,7 @@ test('when the Task Source cannot be read the Pane says why, over the list it re
   let failure: object | undefined = { kind: 'unauthenticated', message: 'gh auth status: not logged in' }
   const answer = deckAt('/work/matt-deck')
   const page = await openPage({
-    answer: name => (name === 'deck_tasks' && failure !== undefined ? answered({ ok: false, failure }) : answer(name)),
+    answer: name => (name === 'deck_map' && failure !== undefined ? answered({ ok: false, failure }) : answer(name)),
   })
   t.after(page.close)
   const { document } = page
@@ -714,14 +719,14 @@ test('the head\'s freshness says what the last read came to, and keeps saying it
     const fresh = document.querySelector('.dk-head__fresh')!
     return [text(fresh), fresh.classList.contains('is-failed'), fresh.classList.contains('is-stale')]
   }
-  // The freshness each time deck_tasks is called, before it answers.
+  // The freshness each time deck_map is called, before it answers.
   const whileReading: unknown[] = []
   const page = await openPage({
     answer: (name, _args, document) => {
       if (config === 'failing' && name === 'deck_config') {
         return { content: [{ type: 'text', text: 'config.json is not valid JSON' }], isError: true }
       }
-      if (name === 'deck_tasks') {
+      if (name === 'deck_map') {
         whileReading.push(freshness(document))
         if (tasksFail) return answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp' } })
       }
@@ -786,7 +791,7 @@ test('when the Deck service fails to list the Tasks the Pane says so in the "任
   const answer = deckAt('/work/matt-deck')
   const page = await openPage({
     answer: name =>
-      name === 'deck_tasks' ? { content: [{ type: 'text', text: 'database is locked' }], isError: true } : answer(name),
+      name === 'deck_map' ? { content: [{ type: 'text', text: 'database is locked' }], isError: true } : answer(name),
   })
   t.after(page.close)
   const notice = [...page.document.querySelectorAll('.dk-notice.is-danger')].find(each => shown(page, each))
@@ -886,7 +891,7 @@ test('a Task waiting on a person, blocked by no Task, shows the label it waits o
 test('a reason the Task Source or the Deck service gives is shown as it is, backticks too; only the Pane\'s own words are code', async t => {
   let answerOf: (name: string) => object = () => ({})
   const answer = deckAt('/work/matt-deck')
-  const page = await openPage({ answer: name => (name === 'deck_tasks' ? answerOf(name) : answer(name)) })
+  const page = await openPage({ answer: name => (name === 'deck_map' ? answerOf(name) : answer(name)) })
   t.after(page.close)
   const notice = () => {
     const shownText = [...page.document.querySelectorAll('.dk-notice.is-danger .dk-notice__text')].find(each => shown(page, each))!
@@ -1170,7 +1175,7 @@ test('the reads every 60 seconds and as the tab is shown again leave a skill\'s 
     text(document.querySelector('.dk-detail .dk-skill__name')),
     shown(page, row(IMPLEMENT)),
   ]
-  const tasksRead = called('deck_tasks')
+  const tasksRead = called('deck_map')
 
   await page.advance(60_000)
   await page.show(false)
@@ -1178,7 +1183,7 @@ test('the reads every 60 seconds and as the tab is shown again leave a skill\'s 
 
   // The page did read again: the Tasks, twice, and the skills with them; the
   // text open, only as it was opened.
-  assert.equal(called('deck_tasks'), tasksRead + 2)
+  assert.equal(called('deck_map'), tasksRead + 2)
   assert.deepEqual(textShown(), [true, IMPLEMENT, false])
   assert.deepEqual([called('deck_skills'), called('deck_skill')], [3, 1])
 })
@@ -1574,7 +1579,7 @@ test('a Recommendation\'s Task title is shown as text', async t => {
   const tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [task(70, '<b>Task</b> 详情')] } }
   const deck = deckThatRecommends()
   const page = await openNext({
-    answer: (name: string, args: any) => (name === 'deck_tasks' ? answered(tasks) : deck.answer(name, args)),
+    answer: (name: string, args: any) => (name === 'deck_map' ? mapRead(tasks) : deck.answer(name, args)),
   })
   t.after(page.close)
   await page.click(button(page, '我现在该做什么'))
@@ -1786,7 +1791,7 @@ test('"再问一次" that cannot make a request says why and keeps waiting for t
 test('a Recommendation shown follows the list as the timed reads find it: "执行这个 Task" goes with its Task, and "再问一次" stays', async t => {
   let tasks: any = TASKS
   const deck = deckThatRecommends()
-  const page = await openNext({ answer: (name: string, args: any) => (name === 'deck_tasks' ? answered(tasks) : deck.answer(name, args)) })
+  const page = await openNext({ answer: (name: string, args: any) => (name === 'deck_map' ? mapRead(tasks) : deck.answer(name, args)) })
   t.after(page.close)
   const card = () => [
     page.document.querySelector('.dk-rec__head .dk-plate')!.getAttribute('aria-label'),
@@ -2503,7 +2508,7 @@ test('a wall shows three blocked Child Tasks and puts the rest behind "还有 N 
   })
   let maps = wallOf(blocked.map(each => card(each, 'blocked')))
   const answer = deckAt('/work/matt-deck')
-  const page = await openPage({ answer: name => (name === 'deck_map' ? answered(maps) : answer(name)) })
+  const page = await openPage({ answer: name => (name === 'deck_map' ? mapRead(TASKS, maps) : answer(name)) })
   t.after(page.close)
   const { document } = page
   const numbersShown = () => mapShown(page).wall.map(each => Number(each!.split(' ')[0]!.slice(1)))
@@ -2529,7 +2534,7 @@ test('a wall shows three blocked Child Tasks and puts the rest behind "还有 N 
 
   // Three are all shown, with no button.
   maps = wallOf(blocked.slice(0, 3).map(each => card(each, 'blocked')))
-  const three = await openPage({ answer: name => (name === 'deck_map' ? answered(maps) : answer(name)) })
+  const three = await openPage({ answer: name => (name === 'deck_map' ? mapRead(TASKS, maps) : answer(name)) })
   t.after(three.close)
   await three.click(tabNamed(three.document, '地图'))
   assert.equal(mapShown(three).wall.length, 5)
@@ -2680,7 +2685,7 @@ test('the "地图" tab says it is reading until the first read comes back, and w
   let whileReading: unknown
   const page = await openPage({
     answer: (name, _args, document) => {
-      if (name === 'deck_tasks' && whileReading === undefined) {
+      if (name === 'deck_map' && whileReading === undefined) {
         whileReading = [...document.querySelectorAll('#map .dk-why')].filter(each => !each.hasAttribute('hidden')).map(text)
       }
       return name === 'deck_map' && failure !== undefined ? answered({ ok: false, failure }) : answer(name)
@@ -2719,7 +2724,7 @@ test('the timed reads and the read as the tab is shown again read the Map Views 
   const blocked = [80, 81, 82, 83, 84].map(number => card(task(number, `被挡 ${number}`, { blockers: [70], blockedBy: [70] }), 'blocked'))
   let maps = { ...MAPS, maps: [MAPS.maps[0], { ...MAPS.maps[1], wall: blocked }] }
   const answer = deckAt('/work/matt-deck')
-  const page = await openPage({ answer: name => (name === 'deck_map' ? answered(maps) : answer(name)) })
+  const page = await openPage({ answer: name => (name === 'deck_map' ? mapRead(TASKS, maps) : answer(name)) })
   t.after(page.close)
   const { document } = page
   const mapReads = () => page.sent.filter(message => message.params?.name === 'deck_map').map(({ params }) => params.arguments)
@@ -2749,12 +2754,12 @@ test('the timed reads and the read as the tab is shown again read the Map Views 
   assert.deepEqual(mapReads(), [1, 2, 3, 4].map(() => ({ session: SESSION.session })))
 })
 
-test('the Tasks and their Map Views are one read: when deck_map fails after deck_tasks answered, both tabs say why over what they showed before', async t => {
+test('the Tasks and their Map Views are one read: when deck_map cannot read, both tabs say why over what they showed before', async t => {
   let tasks: object = TASKS
-  let mapAnswer: () => object = () => answered(MAPS)
+  let mapAnswer: () => object = () => mapRead(tasks)
   const answer = deckAt('/work/matt-deck')
   const page = await openPage({
-    answer: name => (name === 'deck_tasks' ? answered(tasks) : name === 'deck_map' ? mapAnswer() : answer(name)),
+    answer: name => (name === 'deck_map' ? mapAnswer() : answer(name)),
   })
   t.after(page.close)
   const { document } = page
@@ -2782,7 +2787,7 @@ test('the Tasks and their Map Views are one read: when deck_map fails after deck
   assert.deepEqual(groupsShown(document), before)
 
   // Read again, both are what the Deck service now gives.
-  mapAnswer = () => answered(MAPS)
+  mapAnswer = () => mapRead(tasks)
   await page.click(document.querySelector('.dk-head > button'))
   assert.deepEqual(noticeIn('tasks'), [])
   assert.notDeepEqual(groupsShown(document), before)
@@ -2802,7 +2807,7 @@ const viewOf = (number: number, title: string, more: object = {}) => ({
 // A page whose deck_map answers what `maps()` gives at each call.
 const openWithMaps = async (maps: () => object[]) => {
   const answer = deckAt('/work/matt-deck')
-  return openPage({ answer: (name, args) => (name === 'deck_map' ? answered({ ...MAPS, maps: maps() }) : answer(name, args)) })
+  return openPage({ answer: (name, args) => (name === 'deck_map' ? mapRead(TASKS, { maps: maps() }) : answer(name, args)) })
 }
 const cardTitle = (page: { window: any; document: Document }) => text(page.document.querySelector('#map .dk-spec__title'))
 
@@ -2898,7 +2903,7 @@ test('the Map View chosen and its open wall stay through a read that fails and t
   const page = await openPage({
     answer: name =>
       name === 'deck_map'
-        ? answered(failing ? { ok: false, failure: { kind: 'offline', message: 'dial tcp' } } : { ...MAPS, maps })
+        ? failing ? answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp' } }) : mapRead(TASKS, { maps })
         : (configured ? yes : no)(name),
   })
   t.after(page.close)
@@ -2923,17 +2928,15 @@ test('the Map View chosen and its open wall stay through a read that fails and t
   assert.equal(mapShown(page).wall.length, 5)
 })
 
-test('a Recommendation shown keeps the Task as the list read before has it while deck_map fails, and follows the list once both read', async t => {
+test('a Recommendation shown keeps the Task as the list read before has it while a read fails, and follows the list once read', async t => {
   let tasks: any = TASKS
   let mapFails = false
   const deck = deckThatRecommends()
   const page = await openNext({
     answer: (name: string, args: any) =>
-      name === 'deck_tasks'
-        ? answered(tasks)
-        : name === 'deck_map' && mapFails
-          ? answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp' } })
-          : deck.answer(name, args),
+      name === 'deck_map'
+        ? mapFails ? answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp' } }) : mapRead(tasks)
+        : deck.answer(name, args),
   })
   t.after(page.close)
   const title = () => text(page.document.querySelector('.dk-rec__title'))
@@ -2942,7 +2945,7 @@ test('a Recommendation shown keeps the Task as the list read before has it while
   await page.advance(2_000)
   assert.equal(title(), 'Task 详情')
 
-  // #70 renamed, and deck_map cannot read: the list and the card are as before.
+  // #70 renamed, and the read fails: the list and the card are as before.
   tasks = { ...TASKS, groups: { ...TASKS.groups, ready: [task(70, 'Task 详情 3k8d')] } }
   mapFails = true
   await page.advance(58_000)
@@ -3053,8 +3056,7 @@ const closeoutProject = (pending: boolean, read = 1) => {
 }
 // The Deck service of that project, read after read as `project` says.
 const deckOfCloseout = (project: () => { tasks: object; maps: object }) => (name: string, args: any = {}) =>
-  name === 'deck_tasks' ? answered(project().tasks)
-  : name === 'deck_map' ? answered(project().maps)
+  name === 'deck_map' ? mapReadOf(project())
   : name === 'deck_task' && args.number === 80 ? answered(detail(80, '规格：里程碑三', { labels: [] }))
   : deckAt('/work/matt-deck')(name, args)
 
@@ -3175,23 +3177,6 @@ test('each read draws the closeout anew: a Child Task reopened takes "收尾核�
   await page.click(tabNamed(document, '地图'))
   await page.click(document.querySelector('#map .dk-spec__foot button'))
   assert.deepEqual(prefills(page), [1, 2, 3].map(() => prefilled(closeoutPromptOf(2))))
-})
-
-test('a Spec deck_tasks finds Pending Closeout while deck_map, answering from another read, does not or has no Map View of it, has "收尾核对" off', async t => {
-  const { tasks } = closeoutProject(true)
-  const { maps } = closeoutProject(false)
-  for (const viewed of [maps, { ...maps, maps: maps.maps.slice(1) }]) {
-    const page = await openPage({ answer: deckOfCloseout(() => ({ tasks, maps: viewed })) })
-    t.after(page.close)
-
-    const button = rowOf(page.document, 64).querySelector('button')!
-    assert.deepEqual([text(button), button.disabled], ['收尾核对', true])
-    await page.click(rowOf(page.document, 64))
-    assert.deepEqual(detailShown(page)!.bar, ['返回', '收尾核对', '在 GitHub 打开'])
-    assert.equal(page.document.querySelector<HTMLButtonElement>('#into-end button')!.disabled, true)
-    await page.click(page.document.querySelector('#into-end button'))
-    assert.deepEqual(prefills(page), [])
-  }
 })
 
 test('"待收尾核对" and the gold "收尾核对" are drawn in the closeout\'s pair of colours, dark and light: its words gold, the button\'s words on gold', async t => {
@@ -3577,7 +3562,7 @@ test('configured again, the detail\'s "执行" and the rows\' drawn before are o
   let whileReading: unknown
   const page = await openPage({
     answer: async (name, args, document) => {
-      if (name === 'deck_tasks' && hold) {
+      if (name === 'deck_map' && hold) {
         hold = false
         const bar = [...document.querySelectorAll('#into-end button')].find(each => text(each) === '执行')
         whileReading = [executeShown(bar), executeShown(rowExecute(document, 70))]
@@ -3672,7 +3657,7 @@ test('a read of the skills asked before a read finds the project not configured,
     answer: async (name, args, document) => {
       // 下一步 opened while the first read of the Tasks is out reads the
       // skills itself.
-      if (name === 'deck_tasks' && reads === 0) (tabNamed(document, '下一步') as HTMLElement).click()
+      if (name === 'deck_map' && reads === 0) (tabNamed(document, '下一步') as HTMLElement).click()
       if (name !== 'deck_skills') return deckAt('/work/matt-deck', configured)(name, args)
       reads++
       const at = copy
@@ -3730,7 +3715,7 @@ test('a read of the skills answered after a later one is dropped: "执行" goes 
   const page = await openPage({
     answer: async (name, args, document) => {
       // The 技能 tab opened while the Tasks are read reads the skills first.
-      if (name === 'deck_tasks' && reads === 0) (tabNamed(document, '技能') as HTMLElement).click()
+      if (name === 'deck_map' && reads === 0) (tabNamed(document, '技能') as HTMLElement).click()
       if (name !== 'deck_skills') return answer(name, args)
       reads++
       const copy = reads === 1 ? 'same' : 'different'
@@ -3991,7 +3976,7 @@ test('where the Deck service cannot say whether Deck\'s hook ever ran, the first
   assert.equal(hookNotice(page), undefined)
   assert.equal(shown(page, configFailed), false)
   assert.equal(shown(page, document.querySelector('[role="tablist"]')), true)
-  assert.deepEqual([called('deck_tasks'), called('deck_skills')], [1, 1])
+  assert.deepEqual([called('deck_map'), called('deck_skills')], [1, 1])
   assert.ok(shown(page, rowOf(document, 70)))
 })
 
@@ -4011,13 +3996,13 @@ test('where the Deck service can no longer say whether Deck\'s hook ever ran, a 
   assert.equal(hookNotice(page), undefined)
   assert.equal(shown(page, configFailed), false)
   assert.equal(shown(page, document.querySelector('[role="tablist"]')), true)
-  assert.deepEqual([called('deck_tasks'), called('deck_skills')], [2, 2])
+  assert.deepEqual([called('deck_map'), called('deck_skills')], [2, 2])
   assert.equal(text(document.querySelector('.dk-head__fresh')), '刚刚')
   assert.ok(shown(page, rowOf(document, 70)))
 })
 
 // A Deck service whose Occupancies deck_occupy and deck_release move, as its
-// deck_tasks and deck_map then list them: taken over, a Task is this
+// deck_map then lists them: taken over, a Task is this
 // Session's; released, it is ready. `occupy` answers deck_occupy instead,
 // where a test has it answer otherwise.
 type Held = Omit<ReturnType<typeof task>, 'occupant' | 'occupantHost' | 'occupantShort'> & {
@@ -4028,7 +4013,6 @@ type Held = Omit<ReturnType<typeof task>, 'occupant' | 'occupantHost' | 'occupan
 const deckThatOccupies = (inProgress: Held[] = TASKS.groups.inProgress, occupy?: (args: any) => object | Promise<object>) => {
   const groups = { ...TASKS.groups, ready: [...TASKS.groups.ready] as Held[], inProgress: [...inProgress] }
   const answer = (name: string, args: any) => {
-    if (name === 'deck_tasks') return answered({ ...TASKS, groups: { ...groups, ready: [...groups.ready], inProgress: [...groups.inProgress] } })
     if (name === 'deck_map') {
       const now = (listed: any) =>
         [...groups.ready.map(each => [each, 'ready']), ...groups.inProgress.map(each => [each, 'inProgress'])].find(([each]) => (each as any).number === listed.number)
@@ -4036,7 +4020,7 @@ const deckThatOccupies = (inProgress: Held[] = TASKS.groups.inProgress, occupy?:
         const found = now(each)
         return found === undefined ? each : card(found[0] as object, found[1] as string, { blocking: each.blocking })
       })
-      return answered({ ...MAPS, maps: [{ ...MAPS.maps[0], wall }, MAPS.maps[1]] })
+      return mapRead({ ...TASKS, groups: { ...groups, ready: [...groups.ready], inProgress: [...groups.inProgress] } }, { ...MAPS, maps: [{ ...MAPS.maps[0], wall }, MAPS.maps[1]] })
     }
     if (name === 'deck_occupy') {
       const held = groups.inProgress.findIndex(each => each.number === args.task)
@@ -4197,7 +4181,7 @@ test('"接管" in the confirmation moves the Occupancy to this Session, from the
     t.after(page.close)
     const { document } = page
     await page.click(rowButton(document, number, '接管'))
-    const readBefore = calledWith(page, 'deck_tasks').length
+    const readBefore = calledWith(page, 'deck_map').length
 
     await page.click(askButton(document, '接管'))
 
@@ -4211,7 +4195,7 @@ test('"接管" in the confirmation moves the Occupancy to this Session, from the
     // Moved first, then read again, then filled in.
     const order = page.sent.filter(each => each.method === 'ui/message' || ['deck_occupy', 'deck_execute'].includes(each.params?.name)).map(each => each.params.name ?? 'prefill')
     assert.deepEqual(order, ['deck_occupy', 'deck_execute', 'prefill'])
-    assert.equal(calledWith(page, 'deck_tasks').length, readBefore + 1)
+    assert.equal(calledWith(page, 'deck_map').length, readBefore + 1)
     assert.equal(askShown(page), undefined)
     assert.equal(text(rowOf(document, number).querySelector('.dk-row__meta')), '进行中 · 本 Session ready-for-agent')
     assert.deepEqual(buttonsIn(rowOf(document, number).querySelector('.dk-row__actions')), ['释放'])
@@ -4335,33 +4319,6 @@ test('on the wall, "接管" asks in the card\'s place and "释放" releases; tak
   await page.click(wallCard(document, 75)!.querySelector('button'))
   assert.equal(askShown(page)?.title, '#75 的 Session 已结束')
   assert.equal(document.querySelector('#map .dk-wall .dk-notice .dk-plate')!.classList.contains('dk-plate--sm'), true)
-})
-
-test('a card the Map View, read just after the Tasks, finds this Session\'s is drawn as this Session\'s, not asking, though the Tasks said another Session held it', async t => {
-  const deck = deckThatOccupies()
-  let isMoving = false
-  const page = await openPage({
-    answer: (name: string, args: any) => {
-      const answered = deck.answer(name, args)
-      if (name === 'deck_tasks' && isMoving) {
-        isMoving = false
-        const held = deck.groups.inProgress.findIndex(each => each.number === 72)
-        deck.groups.inProgress[held] = { ...deck.groups.inProgress[held]!, occupant: SESSION.session, occupantHost: 'codex', occupantShort: '045b96fc', isOrphaned: false }
-      }
-      return answered
-    },
-  })
-  t.after(page.close)
-  const { document } = page
-  await page.click(tabNamed(document, '地图'))
-  await page.click(wallCard(document, 72)!.querySelector('button'))
-  assert.equal(askShown(page)?.title, '#72 正由 Session 77e0aa15 执行')
-
-  isMoving = true
-  await page.advance(60_000)
-
-  assert.equal(askShown(page), undefined)
-  assert.deepEqual(buttonsIn(wallCard(document, 72)!.querySelector('.dk-card__foot')), ['释放', '详情'])
 })
 
 test('in a Task\'s detail, "接管" asks under the way back, and taken over the bar has "释放"; "释放" there releases and the bar has "执行"', async t => {
@@ -4693,8 +4650,8 @@ test('a takeover that moved nothing has "接管" on again, the focus on it, befo
     }
     const page = await openPage({
       answer: async (name, args, document) => {
-        if (name === 'deck_tasks' && clicked) seen.push(shownIn(document))
-        if (name === 'deck_tasks' && isHeld) {
+        if (name === 'deck_map' && clicked) seen.push(shownIn(document))
+        if (name === 'deck_map' && isHeld) {
           isHeld = false
           const confirm = askButton(document, '接管') as HTMLElement
           confirm.focus()
@@ -4733,7 +4690,7 @@ test('a takeover that moved the Occupancy, read again as the Task list cannot be
   const page = await openPage({
     answer: (name, args) => {
       if (name === 'deck_occupy') failing = true
-      return name === 'deck_tasks' && failing ? answered({ ok: false, failure: { kind: 'offline', message: 'fetch failed 6t1q' } }) : deck.answer(name, args)
+      return name === 'deck_map' && failing ? answered({ ok: false, failure: { kind: 'offline', message: 'fetch failed 6t1q' } }) : deck.answer(name, args)
     },
   })
   t.after(page.close)
@@ -4789,7 +4746,7 @@ test('a takeover or a release while a timed read is under way reads once that re
       answer: async (name, args, document) => {
         calls.push(name)
         if (name !== 'deck_occupy' && name !== 'deck_execute' && name !== 'deck_release') off.push((document.querySelector('.dk-head > button') as HTMLButtonElement).disabled)
-        if (name === 'deck_tasks' && isHeld) {
+        if (name === 'deck_map' && isHeld) {
           isHeld = false
           ;((act === '接管' ? askButton(document, '接管') : rowButton(document, 74, '释放')) as HTMLElement).click()
           await new Promise(resolve => setTimeout(resolve, 30))
@@ -4807,9 +4764,9 @@ test('a takeover or a release while a timed read is under way reads once that re
     isHeld = true
     await page.advance(60_000)
 
-    const held = calls.indexOf('deck_tasks')
+    const held = calls.indexOf('deck_map')
     const answeredAt = calls.indexOf('held answered')
-    assert.deepEqual(calls.slice(held + 1, answeredAt).filter(each => ['deck_config', 'deck_tasks'].includes(each)), [], act)
+    assert.deepEqual(calls.slice(held + 1, answeredAt).filter(each => ['deck_config', 'deck_map'].includes(each)), [], act)
     assert.ok(calls.indexOf('deck_config', answeredAt) > answeredAt, act)
     assert.ok(off.every(Boolean), act)
     assert.equal((document.querySelector('.dk-head > button') as HTMLButtonElement).disabled, false, act)
@@ -4830,12 +4787,12 @@ test('a release the Deck service does not make, or fails at, reads the Tasks aga
     const page = await openPage({ answer: (name, args) => (name === 'deck_release' ? failing : deck.answer(name, args)) })
     t.after(page.close)
     const { document } = page
-    const readBefore = calledWith(page, 'deck_tasks').length
+    const readBefore = calledWith(page, 'deck_map').length
 
     await page.click(rowButton(document, 74, '释放'))
 
     assert.deepEqual(errors, [])
-    assert.equal(calledWith(page, 'deck_tasks').length, readBefore + 1)
+    assert.equal(calledWith(page, 'deck_map').length, readBefore + 1)
     assert.equal(text(rowOf(document, 74).querySelector('.dk-row__meta')), '进行中 · 本 Session ready-for-agent')
     assert.deepEqual(buttonsIn(rowOf(document, 74).querySelector('.dk-row__actions')), ['释放'])
     assert.equal((document.querySelector('.dk-head > button') as HTMLButtonElement).disabled, false)
@@ -4938,7 +4895,7 @@ test('a read of the Tasks begun before a takeover, answering with the Tasks as t
   let isLate = false
   const page = await openPage({
     answer: async (name, args, document) => {
-      if (name === 'deck_tasks' && isLate) {
+      if (name === 'deck_map' && isLate) {
         isLate = false
         // The timed read, answered with the Tasks as they were.
         const before = deck.answer(name, args)
@@ -5253,7 +5210,7 @@ test('the result notice stays through the timed reads, the read as the tab is sh
   }
 
   await refused()
-  const reads = () => calledWith(page, 'deck_tasks').length
+  const reads = () => calledWith(page, 'deck_map').length
   const readBefore = reads()
   await page.advance(60_000)
   await page.show(false)
@@ -5395,7 +5352,7 @@ test('"释放" that releases nothing says so in the result notice: the reason an
   const page = await openPage({ answer: (name, args: any) => (name === 'deck_release' ? release() : deck.answer(name, args)) })
   t.after(page.close)
   const { document } = page
-  const reads = () => calledWith(page, 'deck_tasks').length
+  const reads = () => calledWith(page, 'deck_map').length
 
   let before = reads()
   await page.click(rowButton(document, 74, '释放'))
@@ -5568,11 +5525,11 @@ test('closed, an asking whose Task is closed by now, its place without a button,
   })
   const page = await openPage({
     answer: (name, args: any) => {
-      if (isClosed && name === 'deck_tasks') {
-        return answered({ ...TASKS, groups: { ...TASKS.groups, inProgress: TASKS.groups.inProgress.filter(each => each.number !== 72), done: [...TASKS.groups.done, closed] } })
-      }
       if (isClosed && name === 'deck_map') {
-        return answered({ ...MAPS, maps: [{ ...MAPS.maps[0], wall: MAPS.maps[0]!.wall.map((each: any) => (each.number === 72 ? card(closed, 'done') : each)) }, MAPS.maps[1]] })
+        return mapRead(
+          { ...TASKS, groups: { ...TASKS.groups, inProgress: TASKS.groups.inProgress.filter(each => each.number !== 72), done: [...TASKS.groups.done, closed] } },
+          { maps: [{ ...MAPS.maps[0], wall: MAPS.maps[0]!.wall.map((each: any) => (each.number === 72 ? card(closed, 'done') : each)) }, MAPS.maps[1]] },
+        )
       }
       return deck.answer(name, args)
     },
@@ -5667,7 +5624,7 @@ test('closed, an asking leaves the focus where it is once the person has gone to
   let release = () => {}
   const page = await openPage({
     answer: (name, args: any) =>
-      name === 'deck_tasks' && held !== undefined ? held.then(() => occupies.answer(name, args))
+      name === 'deck_map' && held !== undefined ? held.then(() => occupies.answer(name, args))
       : ['deck_ask', 'deck_recommendation'].includes(name) ? recommends.answer(name, args)
       : occupies.answer(name, args),
   })
@@ -6062,11 +6019,11 @@ const freshShown = (document: Document) => {
 test('a timed read whose Tasks the Deck service does not answer is late at 10 seconds: the head says 没有应答, the content says so at its top, "刷新" is on, and the next timed read is made and drawn', async t => {
   let dropping = false
   let tasks: any = TASKS
-  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' ? (dropping ? undefined : answered(tasks)) : deckWithSkills()(name, args)) })
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' ? (dropping ? undefined : mapRead(tasks)) : deckWithSkills()(name, args)) })
   t.after(page.close)
   const { document } = page
   const refresh = document.querySelector<HTMLButtonElement>('.dk-head > button')!
-  const reads = () => calledWith(page, 'deck_tasks').length
+  const reads = () => calledWith(page, 'deck_map').length
 
   dropping = true
   await page.advance(60_000)
@@ -6096,7 +6053,7 @@ test('a read late on the skills, after "刷新" in 技能, or on a detail\'s Tas
   t.after(page.close)
   const { document } = page
   const refresh = document.querySelector<HTMLButtonElement>('.dk-head > button')!
-  const reads = () => calledWith(page, 'deck_tasks').length
+  const reads = () => calledWith(page, 'deck_map').length
   // Late 10 seconds after the read began, and the next timed read made.
   const lateFrom = async (begin: () => Promise<void>, wait: number) => {
     await begin()
@@ -6130,12 +6087,12 @@ test('a read late on the skills, after "刷新" in 技能, or on a detail\'s Tas
 })
 
 // The read of the Tasks the page asked for last, as sent.
-const lastTasksRead = (page: { sent: any[] }) => page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_tasks').at(-1)
+const lastTasksRead = (page: { sent: any[] }) => page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_map').at(-1)
 
 test('once a read is late, "刷新" reads anew and draws it; the late read\'s answer coming after that draws nothing', async t => {
   let dropping = false
   let tasks: any = TASKS
-  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' ? (dropping ? undefined : answered(tasks)) : deckWithSkills()(name, args)) })
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' ? (dropping ? undefined : mapRead(tasks)) : deckWithSkills()(name, args)) })
   t.after(page.close)
   const { document } = page
 
@@ -6152,14 +6109,14 @@ test('once a read is late, "刷新" reads anew and draws it; the late read\'s an
   assert.equal(lateShown(page), undefined)
   const drawn = text(document.querySelector('#tasks'))
 
-  await page.respond(lateRead, { result: answered({ ...TASKS, groups: { ...TASKS.groups, ready: [task(91, '迟到的 4m7k')] } }) })
+  await page.respond(lateRead, { result: mapRead({ ...TASKS, groups: { ...TASKS.groups, ready: [task(91, '迟到的 4m7k')] } }) })
   assert.equal(text(document.querySelector('#tasks')), drawn)
   assert.deepEqual(freshShown(document), ['刚刚', false])
 })
 
 test('a read that answers at 15 seconds, no other begun meanwhile, says it is late at 10 and draws what it read as it answers', async t => {
   let dropping = false
-  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' && dropping ? undefined : deckWithSkills()(name, args)) })
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' && dropping ? undefined : deckWithSkills()(name, args)) })
   t.after(page.close)
   const { document } = page
 
@@ -6170,14 +6127,14 @@ test('a read that answers at 15 seconds, no other begun meanwhile, says it is la
   assert.deepEqual(lateShown(page), LATE)
   await page.advance(5_000)
 
-  await page.respond(lateRead, { result: answered({ ...TASKS, groups: { ...TASKS.groups, ready: [...TASKS.groups.ready, task(90, '慢慢读到的 2c6h')] } }) })
+  await page.respond(lateRead, { result: mapRead({ ...TASKS, groups: { ...TASKS.groups, ready: [...TASKS.groups.ready, task(90, '慢慢读到的 2c6h')] } }) })
   assert.equal(lateShown(page), undefined)
   assert.equal(text(rowOf(document, 90).querySelector('.dk-row__title')), '慢慢读到的 2c6h')
   assert.deepEqual(freshShown(document), ['刚刚', false])
 })
 
 test('a first read that is late says so in place of the line saying it reads: the project config, or the Tasks', async t => {
-  for (const [dropped, reading] of [['deck_config', '正在读取项目配置…'], ['deck_tasks', '正在读取 Task…']]) {
+  for (const [dropped, reading] of [['deck_config', '正在读取项目配置…'], ['deck_map', '正在读取 Task…']]) {
     const page = await openPage({ answer: (name, args: any) => (name === dropped ? undefined : deckWithSkills()(name, args)) })
     const { document } = page
     const line = [...document.querySelectorAll('.dk-why')].find(each => text(each) === reading)!
@@ -6191,7 +6148,7 @@ test('a first read that is late says so in place of the line saying it reads: th
 
 test('while a read is under way and not late, the timed read and the read as the tab is shown again begin no second read', async t => {
   let dropping = false
-  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' && dropping ? undefined : deckWithSkills()(name, args)) })
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' && dropping ? undefined : deckWithSkills()(name, args)) })
   t.after(page.close)
   const { document } = page
   const reads = () => calledWith(page, 'deck_config').length
@@ -6207,7 +6164,7 @@ test('while a read is under way and not late, the timed read and the read as the
   assert.equal(lateShown(page), undefined)
   // The read ends: none was asked for meanwhile to follow it.
   dropping = false
-  await page.respond(lastTasksRead(page), { result: answered(TASKS) })
+  await page.respond(lastTasksRead(page), { result: mapRead(TASKS) })
   assert.equal(reads(), before)
 })
 
@@ -6217,7 +6174,7 @@ test('a late "刷新" whose Tasks are answered while the read after it waits for
   t.after(page.close)
   const { document } = page
 
-  dropping = ['deck_tasks']
+  dropping = ['deck_map']
   await page.click(document.querySelector('.dk-head > button'))
   const lateRead = lastTasksRead(page)
   await page.advance(10_000)
@@ -6226,7 +6183,7 @@ test('a late "刷新" whose Tasks are answered while the read after it waits for
   dropping = ['deck_skills']
   await page.click(document.querySelector('.dk-head > button'))
   const skillsRead = page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_skills').at(-1)
-  await page.respond(lateRead, { result: answered(TASKS) })
+  await page.respond(lateRead, { result: mapRead(TASKS) })
   dropping = []
   const grill = { name: 'grill', call: '$grill-as-read-last-6t1x', description: '追问计划。', path: '~/.claude/skills/grill/SKILL.md', copy: 'same' }
   await page.respond(skillsRead, { result: answered({ ok: true, source: { type: 'directory', path: '~/.claude/skills' }, skills: [...SKILLS, grill] }) })
@@ -6307,7 +6264,7 @@ test('a detail whose read again fails keeps what it read under the notice of why
   assert.equal(document.querySelector('.dk-detail'), null)
 })
 
-test('a detail open while the Tasks or their Map Views cannot be read shows "读取 Task 失败" and why over it', async t => {
+test('a detail open while the Tasks cannot be read shows "读取 Task 失败" and why over it', async t => {
   let failing = ''
   const page = await openPage({
     answer: (name, args: any) =>
@@ -6317,19 +6274,17 @@ test('a detail open while the Tasks or their Map Views cannot be read shows "读
   const { document } = page
   await page.click(rowOf(document, 70))
 
-  for (const call of ['deck_tasks', 'deck_map']) {
-    failing = call
-    await page.advance(60_000)
-    const notices = [...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each))
-    assert.deepEqual(notices.map(each => [text(each.querySelector('.dk-notice__title')), text(each.querySelector('.dk-notice__text'))]), [
-      ['读取 Task 失败', '连不上 GitHub。检查网络后点“刷新”重试。'],
-    ], call)
-    assert.ok(notices[0]!.compareDocumentPosition(document.querySelector('.dk-detail')!) & 4)
+  failing = 'deck_map'
+  await page.advance(60_000)
+  const notices = [...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each))
+  assert.deepEqual(notices.map(each => [text(each.querySelector('.dk-notice__title')), text(each.querySelector('.dk-notice__text'))]), [
+    ['读取 Task 失败', '连不上 GitHub。检查网络后点“刷新”重试。'],
+  ])
+  assert.ok(notices[0]!.compareDocumentPosition(document.querySelector('.dk-detail')!) & 4)
 
-    failing = ''
-    await page.advance(60_000)
-    assert.deepEqual([...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each)), [])
-  }
+  failing = ''
+  await page.advance(60_000)
+  assert.deepEqual([...document.querySelectorAll('.dk-notice.is-danger')].filter(each => shown(page, each)), [])
 })
 
 test('a detail\'s read answering after a later read of it is dropped: the later one is shown', async t => {
@@ -6646,8 +6601,8 @@ test('the head marks nothing before the Tasks are read, and a read that fails le
   let holding = true
   const page = await openPage({
     answer: (name, args) =>
-      name === 'deck_tasks' && holding ? undefined
-      : name === 'deck_tasks' && failing ? answered({ ok: false, failure: { kind: 'offline', message: 'offline' } })
+      name === 'deck_map' && holding ? undefined
+      : name === 'deck_map' && failing ? answered({ ok: false, failure: { kind: 'offline', message: 'offline' } })
       : deckAt('/work/matt-deck')(name, args),
   })
   t.after(page.close)
@@ -7231,7 +7186,7 @@ test('the focus on a control of 任务 or of the wall stays on that control thro
   // Seven blocked, five shown and "还有 2 个".
   const blocked = [80, 81, 82, 83, 84].map(number => task(number, `被挡 ${number}`, { blockers: [70], blockedBy: [70] }))
   const tasks = { ...TASKS, groups: { ...TASKS.groups, blocked: [...TASKS.groups.blocked, ...blocked] } }
-  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' ? answered(tasks) : deckWithSkills()(name, args)) })
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' ? mapRead(tasks) : deckWithSkills()(name, args)) })
   t.after(page.close)
   const { document } = page
   const keeps = async (find: () => Element | null | undefined, then: [string | undefined, string]) => {
@@ -7263,7 +7218,7 @@ test('the focus on a control of 任务 or of the wall stays on that control thro
 
 test('the focus on a button whose Task changed state goes on its row; on a row filtered away, on the first control of the tab; outside what is drawn again, it stays', async t => {
   let tasks: any = TASKS
-  const page = await openPage({ answer: (name, args: any) => (name === 'deck_tasks' ? answered(tasks) : deckWithSkills()(name, args)) })
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' ? mapRead(tasks) : deckWithSkills()(name, args)) })
   t.after(page.close)
   const { document } = page
 
@@ -7421,7 +7376,7 @@ test('the focus on "还有 N 个" stays on it as N changes, under the list and u
   const maps = () => ({ ...MAPS, maps: [{ ...MAPS.maps[0], wall: [...MAPS.maps[0]!.wall, ...blocked(count).map(each => card(each, 'blocked'))] }, MAPS.maps[1]] })
   const deck = deckThatRecommends()
   const page = await openPage({
-    answer: (name, args: any) => (name === 'deck_tasks' ? answered(tasks()) : name === 'deck_map' ? answered(maps()) : deck.answer(name, args)),
+    answer: (name, args: any) => (name === 'deck_map' ? mapRead(tasks(), maps()) : deck.answer(name, args)),
   })
   t.after(page.close)
   const { document } = page
@@ -7455,7 +7410,7 @@ test('the focus on a row filtered away goes on the first control shown, not on o
   let tasks: any = TASKS
   const page = await openPage({
     answer: (name, args: any) =>
-      name === 'deck_tasks' ? answered(tasks) : deckWithSkills(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)))(name, args),
+      name === 'deck_map' ? mapRead(tasks) : deckWithSkills(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)))(name, args),
   })
   t.after(page.close)
   const { document } = page

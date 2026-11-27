@@ -1136,9 +1136,8 @@ button.dk-row{color:inherit}
 
   const refs = numbers => numbers.map(number => `#${number}`).join(' ')
 
-  // The closeout check of the Pending Closeout Spec `number`, as its Map View
-  // read with the list gives it; none where deck_map answered from a read
-  // that found it no Pending Closeout.
+  // The closeout check of the Pending Closeout Spec `number`, as its Map View,
+  // read in the same answer as the list, gives it; none for any other Task.
   const closeoutOf = number => maps.find(map => map.number === number)?.closeoutPrompt ?? null
   // "收尾核对" of the Spec `number`, which puts the closeout check in the
   // prompt, off with none; on a row, it is no click on the row.
@@ -1293,26 +1292,25 @@ button.dk-row{color:inherit}
   }
   $('occupied').addEventListener('click', () => openTask(occupied))
 
-  // Reads the Tasks, the Task Source again when `refresh` asks for it, then
-  // their Map Views from that read. A read that fails says why, in "任务" and
+  // Reads the Tasks and their Map Views in one answer, the Task Source again
+  // when `refresh` asks for it. A read that fails says why, in "任务" and
   // in "地图", above what was read before, if anything.
   // Answers whether the Tasks were read. A read no longer `current` draws
   // nothing of what it read.
   const readTasks = async (refresh, current) => {
     let failure
     try {
-      const answer = await callTool('deck_tasks', refresh ? { refresh: true } : {})
-      const viewed = answer.ok ? await callTool('deck_map', { session: session.session }) : answer
+      // The Tasks and their Map Views, from one read.
+      const answer = await callTool('deck_map', { session: session.session, ...(refresh ? { refresh: true } : {}) })
       if (!current()) return false
-      if (viewed.ok) {
-        list = answer
-        maps = viewed.maps
+      if (answer.ok) {
+        ;({ maps, ...list } = answer)
         // The Task asked to be taken over is asked no more once no other
         // Session holds it: released, closed, gone, or this Session's by now.
         const found = takeover === undefined ? undefined : entries().find(([each]) => each.number === takeover.number)
         if (found === undefined || !['other', 'orphaned'].includes(stateOf(...found))) takeover = undefined
       } else {
-        failure = FAILURE[viewed.failure.kind](viewed.failure.message)
+        failure = FAILURE[answer.failure.kind](answer.failure.message)
       }
     } catch (error) {
       failure = [`Deck 服务出错：${error.message}。点“刷新”重试。`]

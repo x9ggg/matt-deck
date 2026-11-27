@@ -4746,3 +4746,68 @@ test('started for Codex, a Deck service whose local state cannot be written stil
   assert.equal(answered.structuredContent.configured, true)
   assert.equal(await deck.end(), 'SIGTERM')
 })
+
+test('deck_map answers the list deck_tasks gives, every field of it, and Map Views that agree with it', async t => {
+  const user = await home()
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 1, title: '规格' }), issue({ number: 2, parent: 1 }), issue({ number: 3, parent: 1 }), issue({ number: 4, parent: 1, blockedBy: [2] })])
+  const deck = startDeck(await configured(), { ...gh.env, HOME: user }, 'codex')
+  t.after(deck.stop)
+  await deck.callTool('deck_occupy', { task: 3, session: CODEX_SESSION })
+
+  const tasks = (await deck.callTool('deck_tasks')).structuredContent
+  const { maps, ...list } = (await deck.callTool('deck_map', { session: CODEX_SESSION })).structuredContent
+
+  assert.deepEqual(list, tasks)
+  const listed = new Map<number, [string, any]>()
+  for (const [group, each] of Object.entries(list.groups) as [string, any[]][]) for (const task of each) listed.set(task.number, [group, task])
+  for (const card of maps[0].wall) {
+    const [group, task] = listed.get(card.number)!
+    assert.deepEqual([card.group, card.occupant, card.isOrphaned], [group, task.occupant, task.isOrphaned], `#${card.number}`)
+  }
+  assert.equal(maps[0].wall.find((card: any) => card.number === 3).occupant, CODEX_SESSION)
+})
+
+test('deck_map with refresh reads the Task Source again; without it, it answers from the cache', async t => {
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 1 }), issue({ number: 2, parent: 1 })])
+  const deck = startDeck(await configured(), gh.env, 'codex')
+  t.after(deck.stop)
+
+  await deck.callTool('deck_map', { session: CODEX_SESSION })
+  await deck.callTool('deck_map', { session: CODEX_SESSION })
+  assert.equal((await gh.calls()).length, 1)
+  await gh.issues([issue({ number: 1 }), issue({ number: 2, parent: 1, state: 'CLOSED', closedAt: '2026-11-12T09:00:00Z' })])
+  const refreshed = (await deck.callTool('deck_map', { session: CODEX_SESSION, refresh: true })).structuredContent
+  assert.equal((await gh.calls()).length, 2)
+  assert.deepEqual(numbers(refreshed.groups.done), [2])
+})
+
+test('a read of the Task Source that takes 16 seconds is answered again for 15 seconds from its end, its fetchedAt the time it began', async t => {
+  const start = 1_000_000
+  const clock = await fakeClock(start)
+  const gh = await fakeGh()
+  await gh.issues([issue({ number: 1 }), issue({ number: 2, parent: 1 })])
+  // A gh that takes 16 seconds of the Deck service's clock.
+  const ghDir = gh.env.PATH
+  await writeFile(
+    join(ghDir, 'gh'),
+    `#!/bin/sh\n"${process.execPath}" -e 'const f=process.argv[1];require("fs").writeFileSync(f,String(Number(require("fs").readFileSync(f,"utf8"))+16000))' "${clock.env.FAKE_CLOCK_FILE}"\nexec "${process.execPath}" "${join(import.meta.dirname, 'fake-gh.ts')}" "$@"\n`,
+    { mode: 0o755 },
+  )
+  const deck = startDeck(await configured(), { ...gh.env, ...clock.env }, 'codex')
+  t.after(deck.stop)
+
+  const first = (await deck.callTool('deck_tasks')).structuredContent
+  const map = (await deck.callTool('deck_map', { session: CODEX_SESSION })).structuredContent
+  const again = (await deck.callTool('deck_tasks')).structuredContent
+  assert.equal((await gh.calls()).length, 1)
+  assert.deepEqual([first.fetchedAt, map.fetchedAt, again.fetchedAt], [start, start, start])
+
+  await clock.set(start + 16_000 + 14_999)
+  await deck.callTool('deck_tasks')
+  assert.equal((await gh.calls()).length, 1)
+  await clock.set(start + 16_000 + 15_000)
+  await deck.callTool('deck_map', { session: CODEX_SESSION })
+  assert.equal((await gh.calls()).length, 2)
+})

@@ -41,13 +41,14 @@ if (host === undefined) {
 // repository it is the working directory itself.
 const workspace = workspaceAt(process.cwd())
 
-// The last read of the Task Source, answered again for this long to a read
-// that does not ask for a fresh one. A read that fails empties it: the read
-// after it reaches the Task Source again instead of answering with what was
-// read before the failure. Occupancy is not cached: every answer has it as
-// the local state holds it then, whichever Session recorded it.
+// The last read of the Task Source, answered again to a read that does not
+// ask for a fresh one for this long from the time it ended; it is fetched
+// as of the time it began. A read that fails empties it: the read after it
+// reaches the Task Source again instead of answering with what was read
+// before the failure. Occupancy is not cached: every answer has it as the
+// local state holds it then, whichever Session recorded it.
 const TASKS_CACHE_MS = 15_000
-let cachedRead: { source: SourceRead; fetchedAt: number } | undefined
+let cachedRead: { source: SourceRead; fetchedAt: number; endedAt: number } | undefined
 
 // The Task Source's identity as the last read named it. It outlives the
 // cache: a report is kept by it while the Task Source cannot be read.
@@ -57,9 +58,10 @@ let knownIdentity: string | undefined
 // the cache is too old. Throws a TaskSourceError.
 const readSource = async (refresh: boolean) => {
   const now = Date.now()
-  if (refresh || cachedRead === undefined || now - cachedRead.fetchedAt >= TASKS_CACHE_MS) {
+  if (refresh || cachedRead === undefined || now - cachedRead.endedAt >= TASKS_CACHE_MS) {
     cachedRead = undefined
-    cachedRead = { source: await githubIssues(workspace).read(), fetchedAt: now }
+    const source = await githubIssues(workspace).read()
+    cachedRead = { source, fetchedAt: now, endedAt: Date.now() }
     knownIdentity = cachedRead.source.identity
   }
 
@@ -198,21 +200,27 @@ const tools = {
   },
   deck_map: {
     description:
-      'For the Pane: every Spec and Map of this project, open ones first, each with its goal (the first sentence of the first paragraph of text in its body, past lists, quotes, tables, HTML and images, its Markdown as plain text, or null; the Pane shows at most two lines of it) and its Child Tasks in the order its Map View shows them: ready; in progress, the asking Session\'s first, then other Sessions\', then Orphaned; blocked, each blocker before the Tasks it blocks; closed. Each Child Task says when it was last updated and which open Tasks it blocks. A Pending Closeout Spec carries as closeoutPrompt the closeout check the Pane prefills; every other Spec or Map, null. Reads as deck_tasks does, from its cache.',
+      'For the Pane: the Tasks of this project as deck_tasks lists them, and, from the same read, as maps every Spec and Map of this project, open ones first, each with its goal (the first sentence of the first paragraph of text in its body, past lists, quotes, tables, HTML and images, its Markdown as plain text, or null; the Pane shows at most two lines of it) and its Child Tasks in the order its Map View shows them: ready; in progress, the asking Session\'s first, then other Sessions\', then Orphaned; blocked, each blocker before the Tasks it blocks; closed. Each Child Task says when it was last updated and which open Tasks it blocks. A Pending Closeout Spec carries as closeoutPrompt the closeout check the Pane prefills; every other Spec or Map, null. Reads as deck_tasks does, from its cache; refresh reads the Task Source again.',
     inputSchema: {
       type: 'object',
-      properties: { session: { type: 'string', minLength: 1, description: 'The id of the Session asking.' } },
+      properties: {
+        session: { type: 'string', minLength: 1, description: 'The id of the Session asking.' },
+        refresh: { type: 'boolean', description: 'Read the Task Source again instead of answering from the cache.' },
+      },
       required: ['session'],
       additionalProperties: false,
     },
-    run: async ({ session }: any): Promise<ToolResult> => {
+    run: async ({ session, refresh }: any): Promise<ToolResult> => {
       if (typeof session !== 'string' || session === '') {
         return { content: [{ type: 'text', text: 'deck_map takes the id of the Session asking' }], isError: true }
       }
       let answer: object
       try {
-        const read = await readSource(false)
-        answer = { ok: true, fetchedAt: read.fetchedAt, maps: mapViews(tasksOf(read), read.source, session) }
+        const read = await readSource(refresh === true)
+        // One list, its Occupancies settled once, for the Tasks and their
+        // Map Views alike.
+        const list = tasksOf(read)
+        answer = { ...list, maps: mapViews(list, read.source, session) }
       } catch (error: any) {
         if (!(error instanceof TaskSourceError)) {
           throw error
