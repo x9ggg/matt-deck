@@ -2438,6 +2438,68 @@ test('deck_task drops a `Part of` or `Blocked by:` line only at the top of the b
   assert.equal(task.description, '登录的一部分。\n\nPart of #2 的做法不适用。\nBlocked by: 上游还没定。')
 })
 
+// Bodies as long as GitHub lets one be, 65536 characters, whose lines are
+// blank or only white space until their end or until text, each with the
+// description and the goal read from it. A read whose time grows with the
+// body's length takes some milliseconds more on one; one whose time grows
+// with its square, seconds more.
+const BLANK_TOP = 65536
+const SENTENCE = 'Goal is this one.'
+const PART_OF = 'Part of #1\n'
+// Half the body blank lines, then as many `Part of` lines as fill the rest.
+const PARTS_OF = PART_OF.repeat(Math.floor(BLANK_TOP / 2 / PART_OF.length))
+const BLANK_TOPS = [
+  { body: '\n'.repeat(BLANK_TOP), description: '', goal: null },
+  { body: `${'\n'.repeat(BLANK_TOP - SENTENCE.length)}${SENTENCE}`, description: SENTENCE, goal: SENTENCE },
+  { body: '\r\n'.repeat(BLANK_TOP / 2), description: '', goal: null },
+  { body: ' \n'.repeat(BLANK_TOP / 2), description: '', goal: null },
+  { body: `${'\n'.repeat(BLANK_TOP - PARTS_OF.length)}${PARTS_OF}`, description: '', goal: null },
+]
+const PLAIN_BODY = 'ab '.repeat(BLANK_TOP / 2).slice(0, BLANK_TOP)
+
+test('deck_task reads a body whose top is a long run of blank lines about as fast as plain words, and as before', async t => {
+  const gh = await fakeGh()
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+  const timed = async (body: string) => {
+    await gh.answer({ stdout: viewed({ number: 9, body }) })
+    const start = await deck.cpuMs()
+    const { task } = (await deck.callTool('deck_task', { number: 9 })).structuredContent
+    return { ms: (await deck.cpuMs()) - start, task }
+  }
+  // The first read warms the Deck service up.
+  await timed(PLAIN_BODY)
+  const plainMs = (await timed(PLAIN_BODY)).ms
+
+  for (const [index, { body, description }] of BLANK_TOPS.entries()) {
+    const { ms, task } = await timed(body)
+    assert.deepEqual([task.description, task.acceptance], [description, []], `body ${index}`)
+    assert.ok(ms - plainMs < 1000, `body ${index}: ${ms} ms, ${plainMs} ms with plain words`)
+  }
+})
+
+test('deck_map reads the goal of a Map whose body\'s top is a long run of blank lines about as fast as from plain words, and as before', async t => {
+  const gh = await fakeGh()
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+  const timed = async (body: string) => {
+    await gh.issues([issue({ number: 10, labels: ['wayfinder:map'], body })])
+    await deck.callTool('deck_tasks', { refresh: true })
+    const start = await deck.cpuMs()
+    const { structuredContent } = await deck.callTool('deck_map', { session: 'this-session' })
+    return { ms: (await deck.cpuMs()) - start, goal: structuredContent.maps[0].goal }
+  }
+  // The first read warms the Deck service up.
+  await timed(PLAIN_BODY)
+  const plainMs = (await timed(PLAIN_BODY)).ms
+
+  for (const [index, { body, goal }] of BLANK_TOPS.entries()) {
+    const read = await timed(body)
+    assert.equal(read.goal, goal, `body ${index}`)
+    assert.ok(read.ms - plainMs < 1000, `body ${index}: ${read.ms} ms, ${plainMs} ms with plain words`)
+  }
+})
+
 test('deck_task says why the Task cannot be read, and takes only a Task number', async t => {
   const gh = await fakeGh()
   await gh.answer({ exitCode: 1, stderr: 'GraphQL: Could not resolve to an issue or pull request with the number of 999.\n' })

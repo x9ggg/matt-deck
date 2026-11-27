@@ -241,6 +241,9 @@ export const describe = (body: string): Pick<TaskDetail, 'description' | 'accept
   const acceptance: TaskDetail['acceptance'] = []
   const kept: string[] = []
   let isDropping = false
+  // Whether every line kept so far is blank or only white space: the top of
+  // the body.
+  let isAtTop = true
   // The fence that opened the code block a line is in.
   let fence: string | undefined
   for (const line of body.split(/\r?\n/)) {
@@ -265,7 +268,7 @@ export const describe = (body: string): Pick<TaskDetail, 'description' | 'accept
       // `Part of #n` and `Blocked by:` say what the Task belongs to and what
       // blocks it only at the top of the body, where the issue tracker doc
       // puts them.
-      if (kept.every(line => line.trim() === '') && /^\s*(part of #\d+|blocked by:)/i.test(line)) {
+      if (isAtTop && /^\s*(part of #\d+|blocked by:)/i.test(line)) {
         continue
       }
     }
@@ -273,6 +276,7 @@ export const describe = (body: string): Pick<TaskDetail, 'description' | 'accept
       continue
     }
     kept.push(line)
+    isAtTop &&= line.trim() === ''
   }
   const description = kept
     .join('\n')
