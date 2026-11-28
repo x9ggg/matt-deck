@@ -921,14 +921,18 @@ button.dk-row{color:inherit}
   }
   // Within a line: code, bold, italics, and links to an http or https
   // address, written out or bare, which open through the Host; a link that
-  // is not, or an image, is the text it is, as is anything else. A link's
-  // own words hold no link. A bare address ends at a space or at
-  // punctuation. (The colon is escaped: the page's source names no address.)
-  const WEB = /^https?\:\/\/[^\s\/?#]/
-  // A link's words and address hold no bracket and are held short, and a
-  // link's words no line break: an opening bracket with no close is given
-  // up at once, so the read grows with the text, whatever it is made of.
-  const INLINE = /(!\[[^\[\]\n]{0,256}\]\([^\s()\[\]]{0,2048}\))|`([^`]+)`|\*\*\*([^*]+)\*\*\*|\*\*(.+?)\*\*|\*([^\s*](?:[^*]*[^\s*])?)\*|(?<![A-Za-z0-9_])_([^\s_](?:[^_]*[^\s_])?)_(?![A-Za-z0-9_])|\[([^\[\]\n]{1,256})\]\(([^\s()\[\]]{1,2048})\)|(https?\:\/\/[^\s<>()，。；：！？、（）「」]*[^\s<>().,;:!?'"，。；：！？、（）「」])/g
+  // is not, or an image, is the text it is, as is anything else. A badge, an
+  // image within a link, is that link, in the image's words; the image is
+  // never asked for. A link's own words hold no link. An address may hold a
+  // pair of round brackets with none within. A bare address ends at a space,
+  // at a bracket with no pair, or at punctuation. (The colon is escaped: the
+  // page's source names no address.)
+  const WEB = /^https?\:\/\/[^\s\/?#()]/
+  // A link's words hold no bracket, and its address no square bracket and
+  // no round one but in a pair; both are held short, and a link's words hold
+  // no line break: an opening bracket with no close is given up at once, so
+  // the read grows with the text, whatever it is made of.
+  const INLINE = /\[!\[([^\[\]\n]{0,256})\]\((?:[^\s()\[\]]|\([^\s()\[\]]{0,2046}\)){0,2048}\)\]\(((?:[^\s()\[\]]|\([^\s()\[\]]{0,2046}\)){1,2048})\)|(!\[[^\[\]\n]{0,256}\]\((?:[^\s()\[\]]|\([^\s()\[\]]{0,2046}\)){0,2048}\))|`([^`]+)`|\*\*\*([^*]+)\*\*\*|\*\*(.+?)\*\*|\*([^\s*](?:[^*]*[^\s*])?)\*|(?<![A-Za-z0-9_])_([^\s_](?:[^_]*[^\s_])?)_(?![A-Za-z0-9_])|\[([^\[\]\n]{1,256})\]\(((?:[^\s()\[\]]|\([^\s()\[\]]{0,2046}\)){1,2048})\)|(https?\:\/\/(?!\()(?:[^\s<>()，。；：！？、（）「」]|\([^\s<>()，。；：！？、（）「」]*\))*(?:[^\s<>().,;:!?'"，。；：！？、（）「」]|\([^\s<>()，。；：！？、（）「」]*\)))/g
   const inline = (said, links = true) => {
     const parts = []
     // Text next to text is one run of it.
@@ -937,23 +941,32 @@ button.dk-row{color:inherit}
       if (typeof part === 'string' && typeof parts.at(-1) === 'string') parts[parts.length - 1] += part
       else parts.push(part)
     }
-    const link = (url, shown) => {
+    // A link written out names the address it opens: its words may not.
+    const link = (url, shown, named) => {
       const button = made('button', 'dk-prose__link', shown)
       button.type = 'button'
+      if (named) button.title = url
       button.addEventListener('click', () => openLink(url))
       return button
     }
     const read = new RegExp(INLINE)
     let at = 0
     for (let found = read.exec(said); found !== null; found = read.exec(said)) {
-      const [whole, image, code, both, strong, em, underscored, words, target, bare] = found
+      const [whole, shownBadge, badge, image, code, both, strong, em, underscored, words, target, bare] = found
+      // An address too long, with its brackets, is no link here: read on
+      // from the next character, as for a link not closed.
+      if ((badge ?? target ?? '').length > 2048) {
+        read.lastIndex = found.index + 1
+        continue
+      }
       add(said.slice(at, found.index))
-      add(image !== undefined ? whole
+      add(badge !== undefined ? links && WEB.test(badge) ? link(badge, [shownBadge === '' ? badge : shownBadge], true) : whole
+        : image !== undefined ? whole
         : code !== undefined ? el('code', '', code)
         : both !== undefined ? made('strong', '', [made('em', '', inline(both, links))])
         : strong !== undefined ? made('strong', '', inline(strong, links))
         : (em ?? underscored) !== undefined ? made('em', '', inline(em ?? underscored, links))
-        : words !== undefined ? links && WEB.test(target) ? link(target, inline(words, false)) : whole
+        : words !== undefined ? links && WEB.test(target) ? link(target, inline(words, false), true) : whole
         : links ? link(bare, [bare]) : bare)
       at = read.lastIndex
     }

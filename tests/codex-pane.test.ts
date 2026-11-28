@@ -7268,6 +7268,12 @@ test('a description takes a time to draw that grows with its length, whatever it
     ['*', '*'.repeat(65_536)],
     ['_', '_'.repeat(65_536)],
     ['**a', '**a '.repeat(65_536)],
+    ['(', '('.repeat(65_536)],
+    ['[a](b(', '[a](b('.repeat(65_536)],
+    ['[![a](b)](', '[![a](b)]('.repeat(65_536)],
+    ['a bare address and (', 'https://a.example/x('.repeat(65_536)],
+    ['a bare address and (b', 'https://a.example/x(b'.repeat(65_536)],
+    ['[a](b(c)', '[a](b(c)'.repeat(65_536)],
   ] as const) {
     // Taken in turns, so a busy moment falls on both lengths alike.
     let [quarter, all] = [Infinity, Infinity]
@@ -7309,6 +7315,120 @@ test('a link to an address with no host after its scheme is the text it is', asy
   t.after(page.close)
 
   assert.deepEqual([...proseOf(page.document, '描述').children].map(shapeOf), [['p', '[x](http://) 和 [y](https://)']])
+})
+
+test('an address holds one pair of round brackets, written out or bare; a bracket with no pair, or a pair within a pair, is not part of it', async t => {
+  const description = [
+    '[x](https://en.wikipedia.org/wiki/Foo_(bar))',
+    '裸写 https://en.wikipedia.org/wiki/Foo_(bar) 之后',
+    '(见 https://example.com/a)',
+    '(https://en.wikipedia.org/wiki/Foo_(bar))',
+    '见 https://en.wikipedia.org/wiki/Foo_(bar)。',
+    '[z](https://example.com/a_((b)))',
+    'https://(x) 和 [y](https://(x))',
+  ].join('\n\n')
+  const page = await openDetailOf({ description })
+  t.after(page.close)
+  const prose = proseOf(page.document, '描述')
+
+  assert.deepEqual([...prose.children].map(shapeOf), [
+    ['p', ['button', 'x']],
+    ['p', '裸写 ', ['button', 'https://en.wikipedia.org/wiki/Foo_(bar)'], ' 之后'],
+    ['p', '(见 ', ['button', 'https://example.com/a'], ')'],
+    ['p', '(', ['button', 'https://en.wikipedia.org/wiki/Foo_(bar)'], ')'],
+    ['p', '见 ', ['button', 'https://en.wikipedia.org/wiki/Foo_(bar)'], '。'],
+    ['p', '[z](', ['button', 'https://example.com/a_'], '((b)))'],
+    // A host is no bracket.
+    ['p', 'https://(x) 和 [y](https://(x))'],
+  ])
+  for (const button of prose.querySelectorAll('button')) await page.click(button)
+  assert.deepEqual(
+    page.sent.filter(message => message.method === 'ui/open-link').map(({ params }) => params.url),
+    [
+      'https://en.wikipedia.org/wiki/Foo_(bar)',
+      'https://en.wikipedia.org/wiki/Foo_(bar)',
+      'https://example.com/a',
+      'https://en.wikipedia.org/wiki/Foo_(bar)',
+      'https://en.wikipedia.org/wiki/Foo_(bar)',
+      'https://example.com/a_',
+    ],
+  )
+})
+
+test('an address of a link written out is held to 2048 characters, its round brackets counted: one longer is read as a bare address', async t => {
+  const address = (length: number) => `https://a.example/${'x'.repeat(length - 'https://a.example/(b)'.length)}(b)`
+  const page = await openDetailOf({ description: [`[甲](${address(2048)})`, `[乙](${address(2049)})`].join('\n\n') })
+  t.after(page.close)
+
+  assert.deepEqual([...proseOf(page.document, '描述').children].map(shapeOf), [
+    ['p', ['button', '甲']],
+    ['p', '[乙](', ['button', address(2049)], ')'],
+  ])
+})
+
+test('a link written out names the address it opens as its title, whatever its words say; a bare address, which shows its own, has none', async t => {
+  const page = await openDetailOf({ description: '[https://good.example](https://evil.example/x) 和 https://bare.example/y' })
+  t.after(page.close)
+  const [written, bare] = [...proseOf(page.document, '描述').querySelectorAll('button')] as HTMLButtonElement[]
+
+  assert.equal(text(written!), 'https://good.example')
+  assert.equal(written!.title, 'https://evil.example/x')
+  assert.equal(text(bare!), 'https://bare.example/y')
+  assert.equal(bare!.hasAttribute('title'), false)
+  await page.click(written!)
+  assert.deepEqual(page.sent.filter(message => message.method === 'ui/open-link').map(({ params }) => params), [{ url: 'https://evil.example/x' }])
+})
+
+test('a badge, an image within a link to an http or https address, is one link in the image\'s words, or its address when they are none, and the image is not asked for', async t => {
+  const description = [
+    '[![a](https://img.example/a.svg)](https://link.example/)',
+    '[![](https://img.example/b.svg)](https://link.example/b)',
+    '[![a](b)](javascript:alert(1))',
+    '![a](b)',
+    '[![a](b)](https://link.example/a_((b)))',
+  ].join('\n\n')
+  const page = await openDetailOf({ description })
+  t.after(page.close)
+  const prose = proseOf(page.document, '描述')
+
+  assert.deepEqual([...prose.children].map(shapeOf), [
+    ['p', ['button', 'a']],
+    ['p', ['button', 'https://link.example/b']],
+    ['p', '[![a](b)](javascript:alert(1))'],
+    ['p', '![a](b)'],
+    // A badge whose link is not one, as a link written out that is not: the
+    // address in it is read as a bare one.
+    ['p', '[![a](b)](', ['button', 'https://link.example/a_'], '((b)))'],
+  ])
+  const buttons = [...prose.querySelectorAll('button')] as HTMLButtonElement[]
+  assert.deepEqual(buttons.map(each => each.title), ['https://link.example/', 'https://link.example/b', ''])
+  for (const button of buttons.slice(0, 2)) await page.click(button)
+  assert.deepEqual(page.sent.filter(message => message.method === 'ui/open-link').map(({ params }) => params.url), ['https://link.example/', 'https://link.example/b'])
+  assert.equal(page.document.querySelector('img'), null)
+  assert.deepEqual(page.fetched, [])
+})
+
+test('a link in an acceptance criterion holds a pair of round brackets and names its address as its title, as one in the description does', async t => {
+  const page = await openDetailOf({
+    acceptance: [
+      { text: '见 [x](https://en.wikipedia.org/wiki/Foo_(bar)) 和 https://example.com/Foo_(bar)。', isChecked: false },
+      { text: '[![徽章](https://img.example/a.svg)](https://link.example/)', isChecked: false },
+    ],
+  })
+  t.after(page.close)
+  const criteria = proseOf(page.document, '验收条件')
+
+  assert.deepEqual([...criteria.querySelectorAll('li')].map(shapeOf), [
+    ['li', ['span', '未勾 '], '见 ', ['button', 'x'], ' 和 ', ['button', 'https://example.com/Foo_(bar)'], '。'],
+    ['li', ['span', '未勾 '], ['button', '徽章']],
+  ])
+  const buttons = [...criteria.querySelectorAll('button')] as HTMLButtonElement[]
+  assert.deepEqual(buttons.map(each => each.getAttribute('title')), ['https://en.wikipedia.org/wiki/Foo_(bar)', null, 'https://link.example/'])
+  for (const button of buttons) await page.click(button)
+  assert.deepEqual(
+    page.sent.filter(message => message.method === 'ui/open-link').map(({ params }) => params.url),
+    ['https://en.wikipedia.org/wiki/Foo_(bar)', 'https://example.com/Foo_(bar)', 'https://link.example/'],
+  )
 })
 
 // The Deck service of a Configured Project whose Skill Source cannot be
