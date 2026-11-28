@@ -8227,6 +8227,31 @@ test('a detail read again the same is not drawn from its Markdown again', async 
   assert.deepEqual(made, [])
 })
 
+test('a bare address ends before the ellipses closing a sentence, keeping one with more of the address after it; a link written out opens its target as written', async t => {
+  const page = await openDetailOf({
+    description: '见 https://tasks.example/a…。也见 https://tasks.example/a…b 和 [原文](https://tasks.example/a…)。',
+    acceptance: [{ text: '见 https://tasks.example/c……', isChecked: false }],
+  })
+  t.after(page.close)
+  const description = proseOf(page.document, '描述')
+  const criteria = proseOf(page.document, '验收条件')
+
+  assert.deepEqual([...description.children].map(shapeOf), [
+    ['p', '见 ', ['button', 'https://tasks.example/a'], '…。也见 ', ['button', 'https://tasks.example/a…b'], ' 和 ', ['button', '原文'], '。'],
+  ])
+  assert.equal(description.textContent, '见 https://tasks.example/a…。也见 https://tasks.example/a…b 和 原文。')
+  assert.deepEqual([...criteria.querySelectorAll('li')].map(shapeOf), [
+    ['li', ['span', '未勾 '], '见 ', ['button', 'https://tasks.example/c'], '……'],
+  ])
+  for (const button of [...description.querySelectorAll('button'), ...criteria.querySelectorAll('button')]) await page.click(button)
+  assert.deepEqual(page.sent.filter(message => message.method === 'ui/open-link').map(({ params }) => params), [
+    { url: 'https://tasks.example/a' },
+    { url: 'https://tasks.example/a…b' },
+    { url: 'https://tasks.example/a…' },
+    { url: 'https://tasks.example/c' },
+  ])
+})
+
 test('the words of a link are text, a bare address and HTML in them too: no link within a link', async t => {
   const page = await openDetailOf({ description: '[看 https://tasks.example/in <b>粗</b>](https://tasks.example/out)' })
   t.after(page.close)
