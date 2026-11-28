@@ -250,54 +250,60 @@ const codexName = (text: string, folder: string) => {
   }
   const frontmatter = lines.slice(1, end)
   // Codex breaks a line at a carriage return, U+0085 and the Unicode line
-  // and paragraph separators too, so its name is read off the pieces; inside
-  // a quoted value opening a piece, up to its closing quote, the line is not
-  // broken. Where a quote or a flow bracket stands elsewhere, or an earlier
-  // line left a quoted value open, Deck cannot tell, and reads the line whole.
-  const pieces: string[] = []
-  const opening = /[\w-]+:[ \t]*(["'])/y
-  const stop = /[\r\u0085\u2028\u2029"'[{]/g
-  let leftOpen = false
-  for (const line of frontmatter) {
-    const own: string[] = []
-    let start = 0
-    let unsure = leftOpen
-    while (!unsure) {
-      opening.lastIndex = start
-      const quote = opening.exec(line)?.[1]
-      let at = quote === undefined ? start : opening.lastIndex
-      while (quote !== undefined && at < line.length && line[at] !== quote) {
-        at += line[at] === '\\' && quote === '"' ? 2 : 1
-      }
-      while (quote === "'" && line[at] === "'" && line[at + 1] === "'") {
-        at += 2
-        while (at < line.length && line[at] !== "'") {
-          at++
-        }
-      }
-      if (quote !== undefined && at >= line.length) {
-        leftOpen = true
-        unsure = true
-        break
-      }
-      stop.lastIndex = quote === undefined ? at : at + 1
-      const found = stop.exec(line)
-      if (found === null) {
-        own.push(line.slice(start))
-        break
-      }
-      if (!/[\r\u0085\u2028\u2029]/.test(found[0])) {
-        unsure = true
-        break
-      }
-      own.push(line.slice(start, found.index))
-      start = found.index + 1
+  // and paragraph separators too.
+  const pieces = frontmatter.flatMap(line => line.split(/[\r\u0085\u2028\u2029]/))
+  // Codex parses the pieces only where they make a frontmatter it can parse;
+  // where not, it goes on to read it line by line, as Deck did before. So
+  // Deck reads its name off the pieces only where they are plain lines it can
+  // read throughout (blank lines, comments, unindented `key: value` fields
+  // with no key twice, no flow, escapes or unclosed quotes and no unquoted
+  // value holding a colon and a space or ending in one, and indented lines
+  // under a field that can own them, none under an empty name), and
+  // otherwise off the lines as before.
+  let readable = pieces.length > frontmatter.length
+  const keys = new Set<string>()
+  let owner: 'none' | 'plain' | 'empty' | 'block' | 'closed' = 'none'
+  let emptyName = false
+  for (const piece of readable ? pieces : []) {
+    if (!/[^ \t]/.test(piece)) {
+      continue
     }
-    for (const piece of unsure ? [line] : own) {
-      pieces.push(piece)
+    if (piece[0] === ' ' || piece[0] === '\t') {
+      if (owner !== 'block' && /^[ \t]*#/.test(piece)) {
+        continue
+      }
+      if (owner === 'none' || owner === 'closed' || emptyName || (owner === 'plain' && /:([ \t]|$)/.test(piece))) {
+        readable = false
+        break
+      }
+      continue
     }
+    if (piece[0] === '#') {
+      owner = owner === 'none' ? 'none' : 'closed'
+      emptyName = false
+      continue
+    }
+    const colon = piece.indexOf(':')
+    const key = colon > 0 ? piece.slice(0, colon) : ''
+    const after = piece.slice(colon + 1)
+    const raw = trimAsciiSpace(after)
+    const parsed = simpleField(raw)
+    if (
+      !/^[\w-]+$/.test(key) ||
+      (after !== '' && after[0] !== ' ' && after[0] !== '\t') ||
+      keys.has(key) ||
+      parsed === undefined ||
+      parsed.flow ||
+      (!parsed.inBlock && raw[0] !== '"' && raw[0] !== "'" && /:([ \t]|$)/.test(raw))
+    ) {
+      readable = false
+      break
+    }
+    keys.add(key)
+    emptyName = key === 'name' && parsed.value === '' && !parsed.inBlock
+    owner = parsed.inBlock ? 'block' : parsed.value === '' ? 'empty' : parsed.allowIndent ? 'plain' : 'closed'
   }
-  const name = fieldsOf(pieces).name || folder
+  const name = fieldsOf(readable ? pieces : frontmatter).name || folder
   if (hasConfirmedBlankDescription(frontmatter) || [...name].length > 64) {
     return undefined
   }

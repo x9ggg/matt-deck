@@ -3961,8 +3961,8 @@ test('started for Codex, deck_skills reads the name Codex knows a skill file by 
     await rawSkill(source, 'quoted', `---\ndescription: "a${separator}name: x"\n---\n`)
     await rawSkill(source, 'after-quote', `---\nx: 'it''s'${separator}name: actual-three\ndescription: Works\n---\n`)
     await rawSkill(source, 'after-escape', `---\nx: "a\\"b"${separator}name: actual-four\ndescription: Works\n---\n`)
-    // Where Deck cannot tell whether the break falls inside a quoted value,
-    // it reads the line whole, as before.
+    // A quoted value broken inside, or holding an escape, is not a plain
+    // line Deck can read: it reads the lines as before.
     const unsure = {
       'escaped-single': `x: 'it''s${separator}name: q'\ndescription: Works`,
       'escaped-double': `x: "a\\"${separator}name: q"\ndescription: Works`,
@@ -3982,7 +3982,7 @@ test('started for Codex, deck_skills reads the name Codex knows a skill file by 
     const listed = separator === '\u0085' ? `actual${separator}description: Works` : 'name-fallback'
     const copyOf = async () => Object.fromEntries(copies(await deck.callTool('deck_skills')))
 
-    assert.deepEqual(await copyOf(), { [listed]: 'missing', 'after-quote': 'missing', 'after-escape': 'missing', 'other-field': 'missing', quoted: 'same', ...unsureSame }, JSON.stringify(separator))
+    assert.deepEqual(await copyOf(), { [listed]: 'missing', 'after-quote': 'same', 'after-escape': 'same', 'other-field': 'missing', quoted: 'same', ...unsureSame }, JSON.stringify(separator))
 
     await rawSkill(source, 'actual', '---\nname: actual\ndescription: Works\n---\n')
     await rawSkill(source, 'actual-too', '---\nname: actual-too\ndescription: Works\n---\n')
@@ -3992,10 +3992,66 @@ test('started for Codex, deck_skills reads the name Codex knows a skill file by 
 
     assert.deepEqual(
       await copyOf(),
-      { actual: 'several', 'actual-too': 'several', 'actual-three': 'several', 'actual-four': 'several', 'after-quote': 'missing', 'after-escape': 'missing', [listed]: 'missing', 'other-field': 'missing', quoted: 'same', x: 'same', ...unsureSame },
+      { actual: 'several', 'actual-too': 'several', 'actual-three': 'same', 'actual-four': 'same', 'after-quote': 'same', 'after-escape': 'same', [listed]: 'missing', 'other-field': 'missing', quoted: 'same', x: 'same', ...unsureSame },
       JSON.stringify(separator),
     )
   }
+})
+
+test('started for Codex, deck_skills reads a name as before where, broken at a carriage return, U+0085 or a Unicode line or paragraph separator, the frontmatter would not be plain lines it can read, as Codex then reads it line by line', async t => {
+  for (const separator of ['\r', '\u0085', '\u2028', '\u2029']) {
+    const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+    const source = join(user, '.agents', 'skills')
+    const s = separator
+    const writings = {
+      'name-twice': `name: n1\nx: 1${s}name: A\ndescription: Works`,
+      'name-twice-broken': `x: 1${s}name: A\ny: 2${s}name: B\ndescription: Works`,
+      'name-twice-after': `x: 1${s}name: A\nname: n2\ndescription: Works`,
+      'description-twice': `x: 1${s}name: A${s}description: a\ndescription: Works`,
+      'colon-elsewhere': `x: 1${s}name: A\ndescription: Build for AWS: ECS`,
+      'colon-before': `x: a: b${s}name: A\ndescription: Works`,
+      'colon-after': `x: 1${s}name: a: b\ndescription: Works`,
+      'flow-elsewhere': `x: 1${s}name: A\nhint: [a\ndescription: Works`,
+      'at-elsewhere': `x: 1${s}name: A\nhint: @a\ndescription: Works`,
+      'indented-first': ` y: 1\nx: 1${s}name: A\ndescription: Works`,
+      'name-below': `name:${s} actual\ndescription: Works`,
+    }
+    for (const [folder, frontmatter] of Object.entries(writings)) {
+      await rawSkill(source, folder, `---\n${frontmatter}\n---\n`)
+    }
+    const deck = startDeck(dir, { HOME: user }, 'codex')
+    t.after(deck.stop)
+
+    // Each is listed by the name the Skill Source's reading gives it, which
+    // is the one Codex knows it by; but past U+0085 the name it reads below
+    // an empty one holds that character, which $ cannot call.
+    const result = await deck.callTool('deck_skills')
+
+    assert.deepEqual(
+      copies(result).map(([name, copy]: [string, string]) => copy === (name === `${separator} actual` ? 'missing' : 'same')),
+      Object.keys(writings).map(() => true),
+      JSON.stringify([separator, copies(result)]),
+    )
+  }
+})
+
+test('started for Codex, deck_skills judges a name read past a carriage return, where Codex reads it so, by Codex\'s 64 characters at most', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const source = join(user, '.agents', 'skills')
+  const codexSkills = join(user, '.codex', 'skills')
+  // Read past the break, the name is too long, as the folder's is not; and
+  // the other way round.
+  await rawSkill(source, 'b65', `---\nname: ${'b'.repeat(65)}\ndescription: Works\n---\n`)
+  await rawSkill(codexSkills, 'other', `---\nx: 1\rname: ${'b'.repeat(65)}\ndescription: Works\n---\n`)
+  await rawSkill(source, 'short', '---\nname: short\ndescription: Works\n---\n')
+  await rawSkill(codexSkills, 'c'.repeat(65), '---\nx: 1\rname: short\ndescription: Works\n---\n')
+  const deck = startDeck(dir, { HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  assert.deepEqual(copies(await deck.callTool('deck_skills')), [
+    ['b'.repeat(65), 'missing'],
+    ['short', 'several'],
+  ])
 })
 
 test('started for Codex, deck_skills judges a name read past a carriage return by Codex\'s 64 characters at most', async t => {
