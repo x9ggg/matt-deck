@@ -2073,7 +2073,7 @@ button.dk-row{color:inherit}
       const unusable = unexecutable()
       showResult(movedTitle,
         tasksRead && !$('unconfigured').hidden ? '此项目未配置。配置之后，点“释放”再点“执行”。'
-        : tasksRead && unusable !== undefined ? `${unusable[0]}重跑配置之后，点“释放”再点“执行”。`
+        : tasksRead && unusable !== undefined ? `${unusable[0]}${implement?.copy === 'several' ? 'Codex 的技能目录里只留一份' : '重跑配置'}之后，点“释放”再点“执行”。`
         : '接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。')
       return false
     })
@@ -2115,13 +2115,19 @@ button.dk-row{color:inherit}
 
   // Why "执行" is off, said once at the top of the 任务 and 地图 tabs, and
   // every "执行" as it stands.
-  const UNEXECUTABLE = { different: 'Codex 里的 implement 不是同一份，不能预填执行。', missing: 'Codex 里找不到 implement，不能预填执行。' }
+  const UNEXECUTABLE = {
+    different: 'Codex 里的 implement 不是同一份，不能预填执行。',
+    several: 'Codex 里有不止一份 implement，按名字调不到，不能预填执行。',
+    missing: 'Codex 里找不到 implement，不能预填执行。',
+  }
   const UNTIL_RERUN = '所有 Task 的“执行”先停用，重跑配置之后恢复。'
+  // Configuring again does not help where Codex finds more than one file.
+  const UNTIL_ONE = '所有 Task 的“执行”先停用，Codex 的技能目录里只留一份之后恢复。'
   const unexecutable = () =>
     implement === undefined || implement?.copy === 'same' ? undefined
     : implement === null ? ['Skill Source 里没有 implement，不能预填执行。', UNTIL_RERUN]
     : implement.failure !== undefined ? ['读取 Skill Source 失败，不能预填执行。', skillFailure(implement.failure)]
-    : [UNEXECUTABLE[implement.copy], UNTIL_RERUN]
+    : [UNEXECUTABLE[implement.copy], implement.copy === 'several' ? UNTIL_ONE : UNTIL_RERUN]
   // The notice says why, with a "重跑配置" as the 技能 tab's: the one it
   // has stays, the focus on it too.
   const sayUnexecutable = (notice, why) => {
@@ -2201,7 +2207,7 @@ button.dk-row{color:inherit}
 
   // Codex finds a skill by its name in its own skill directories; a call it
   // finds another file for, or none, runs no skill of the Skill Source.
-  const UNPREFILLABLE = { different: 'Codex 里的不是同一份，不能预填。', missing: 'Codex 里找不到，不能预填。' }
+  const UNPREFILLABLE = { different: 'Codex 里的不是同一份，不能预填。', several: 'Codex 里有不止一份同名的，按名字调不到，不能预填。', missing: 'Codex 里找不到，不能预填。' }
   // A skill's "预填", by what the last read of the skills says of it: a
   // skill no longer listed is found by Codex no more.
   const prefillButton = skill => {
@@ -2301,6 +2307,10 @@ button.dk-row{color:inherit}
     ]
     const unprefillable = skills.filter(skill => skill.copy !== 'same').length
     if (unprefillable > 0) {
+      // Configuring again brings back the rows Codex finds another file or
+      // none for, leaving one alone those it finds more than one for.
+      const several = skills.filter(skill => skill.copy === 'several').length
+      const until = several === 0 ? '重跑配置' : several === unprefillable ? 'Codex 的技能目录里只留一份' : '重跑配置、或在 Codex 的技能目录里只留一份'
       const rerun = rerunButton()
       const notice = el(
         'div',
@@ -2309,7 +2319,7 @@ button.dk-row{color:inherit}
           'div',
           'dk-notice__body',
           el('div', 'dk-notice__line', el('span', 'dk-notice__title heading', `${unprefillable} 个技能在 Codex 里不能预填。`), rerun),
-          el('span', 'dk-notice__text', '原因写在各自那一行，重跑配置之后恢复。'),
+          el('span', 'dk-notice__text', `原因写在各自那一行，${until}之后恢复。`),
         ),
       )
       notice.setAttribute('role', 'status')
@@ -2374,7 +2384,11 @@ button.dk-row{color:inherit}
   // first, null where the read failed or listed none, and then deck_ask
   // says why it cannot make the request.
   let askMatt
-  const UNASKABLE = { different: 'Codex 里的 ask-matt 不是同一份，不能预填。', missing: 'Codex 里找不到 ask-matt，不能预填。' }
+  const UNASKABLE = {
+    different: 'Codex 里的 ask-matt 不是同一份，不能预填。',
+    several: 'Codex 里有不止一份 ask-matt，按名字调不到，不能预填。',
+    missing: 'Codex 里找不到 ask-matt，不能预填。',
+  }
 
   // The Recommendation Request of this tab, the last one asked: none yet,
   // waiting for the agent's report, answered, or stopped after 10 minutes.

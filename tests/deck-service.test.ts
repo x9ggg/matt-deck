@@ -699,7 +699,7 @@ test('started for Codex, in one home a Skill Source holding two implements and t
 
   const listing = (first: string, again: string) => [['ask-matt', first], ['ask-matt', again], ['implement', first], ['implement', again]]
   assert.deepEqual(second, [true, true, listing('different', 'same')])
-  assert.deepEqual(both, [false, false, listing('different', 'different')])
+  assert.deepEqual(both, [false, false, listing('several', 'several')])
 })
 
 test('started for Codex, deck_setup_survey says whether Codex calls ask-matt and implement as deck_skills says of the same Skill Source, for one missing a skill, one beside another file of the name, one not offered and one not there', async t => {
@@ -3493,7 +3493,7 @@ test('started for Codex, deck_skills says of each skill whether Codex finds this
     forCodex.structuredContent.skills.map(({ name, copy }: any) => [name, copy]),
     [
       ['ask-matt', 'missing'],
-      ['grill', 'different'],
+      ['grill', 'several'],
       ['implement', 'same'],
       ['tdd', 'different'],
       ['triage', 'same'],
@@ -3512,6 +3512,32 @@ const skillNamed = async (dir: string, folder: string, name: string) => {
 }
 
 const copies = (result: any) => result.structuredContent.skills.map(({ name, copy }: any) => [name, copy])
+
+test('started for Codex, deck_skills says a skill is several where Codex finds more than one file of its name, this one among them or not, and different where it finds one other file alone', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/my-skills' })
+  const source = join(user, 'my-skills')
+  for (const name of ['ask-matt', 'implement', 'tdd']) {
+    await skillFile(source, name, `${name} 的说明。`)
+  }
+  const userSkills = join(user, '.agents', 'skills')
+  await mkdir(userSkills, { recursive: true })
+  // ask-matt: this file, linked, and another beside it.
+  await symlink(join(source, 'ask-matt'), join(userSkills, 'ask-matt'))
+  await skillFile(join(user, '.codex', 'skills'), 'ask-matt', 'Another ask-matt.')
+  // implement: two other files, neither this one.
+  await skillFile(userSkills, 'implement', 'One other implement.')
+  await skillFile(join(user, '.codex', 'skills'), 'implement', 'Another implement.')
+  // tdd: one other file alone.
+  await skillFile(userSkills, 'tdd', 'Another tdd.')
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  assert.deepEqual(copies(await codex.callTool('deck_skills')), [
+    ['ask-matt', 'several'],
+    ['implement', 'several'],
+    ['tdd', 'different'],
+  ])
+})
 
 test('started for Codex, deck_skills finds a skill by the name its file gives, as Codex does, whatever its folder is called', async t => {
   const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
@@ -3657,7 +3683,7 @@ test('started for Codex, deck_skills takes no file of the same name Codex does n
     results.push(copies(await codex.callTool('deck_skills')))
   }
 
-  assert.deepEqual(results, [[['ok', 'same']], [['ok', 'different']]])
+  assert.deepEqual(results, [[['ok', 'same']], [['ok', 'several']]])
 })
 
 test('started for Codex, deck_skills accepts complex YAML frontmatter and non-Rust whitespace, excludes U+0085-only descriptions and nested/empty metadata', async t => {
@@ -3793,7 +3819,7 @@ test('started for Codex, deck_skills skips files with invalid UTF-8 even in the 
 
   await skillFile(join(paired.user, '.codex', 'skills'), 'bad', 'Another valid file.')
   const diffResult = await withBadSibling.callTool('deck_skills')
-  assert.deepEqual(copies(diffResult), [['bad', 'different']])
+  assert.deepEqual(copies(diffResult), [['bad', 'several']])
 })
 
 test('started for Codex, deck_skills still matches a spaced-fence skill by its frontmatter name while the Skill Source keeps its folder name', async t => {
@@ -4011,7 +4037,7 @@ test('started for Codex, deck_skills also looks in the user\'s ~/.codex/skills, 
   const result = await codex.callTool('deck_skills')
 
   assert.deepEqual(copies(result), [
-    ['grill', 'different'],
+    ['grill', 'several'],
     ['tdd', 'same'],
   ])
 })
@@ -4042,7 +4068,7 @@ test('started for Codex, deck_skills finds the copies Codex finds below the top 
   assert.deepEqual(copies(result), [
     ['grill', 'same'],
     ['review', 'different'],
-    ['tdd', 'different'],
+    ['tdd', 'several'],
     ['triage', 'same'],
   ])
 })

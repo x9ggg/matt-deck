@@ -19,9 +19,10 @@ export type Skill = { name: string; call: string; description: string; path: str
 
 // What the host calls by a skill's name, among the skill files it finds in
 // its own skill directories, known by the names their frontmatter gives:
-// exactly one file, its links resolved, and it is the Skill Source's; another
-// file; or none, as for a name the host cannot call.
-export type HostCopy = 'same' | 'different' | 'missing'
+// exactly one file, its links resolved, and it is the Skill Source's; one
+// other file alone; more than one file, which the host calls none of; or
+// none, as for a name the host cannot call.
+export type HostCopy = 'same' | 'different' | 'several' | 'missing'
 
 // Why the Skill Source cannot be read: it is not there, or holds no skill of
 // that name.
@@ -400,7 +401,8 @@ const scanHost = async (directories: string[], workspace: string, home: string) 
 }
 
 // What the host finds under its name, as the Skill Source's file at `file`
-// is to it: the one file of that name is this one, another file is, or none.
+// is to it: the one file of that name is this one, another file is, more
+// than one file is, this one among them or not, or none.
 // A name holding a character Codex's `$` does not take calls nothing.
 const hostCopy = async (file: string, name: string, found: { name: string; file: string }[]): Promise<HostCopy> => {
   if (!/^[A-Za-z0-9_:-]+$/.test(name)) {
@@ -409,7 +411,7 @@ const hostCopy = async (file: string, name: string, found: { name: string; file:
   const own = await realpath(file)
   const files = new Set(found.filter(each => each.name === name).map(each => each.file))
 
-  return files.size === 0 ? 'missing' : files.size === 1 && files.has(own) ? 'same' : 'different'
+  return files.size === 0 ? 'missing' : files.size > 1 ? 'several' : files.has(own) ? 'same' : 'different'
 }
 
 // What the host calls by a name, from one walk of its own skill directories:

@@ -5426,6 +5426,72 @@ test('a takeover that moved the Occupancy, read again as implement can no longer
   }
 })
 
+// The skills, with Codex finding more than one file of each name `names`.
+const several = (...names: string[]) => SKILLS.map(skill => (names.includes(skill.name) ? { ...skill, copy: 'several' } : skill))
+
+test('when Codex finds more than one implement, every "执行" is off and the tops of 任务 and 地图 say it cannot call one by its name, until one alone is left in its skill directories', async t => {
+  const page = await openPage({ answer: deckWithSkills(several('implement')) })
+  t.after(page.close)
+  const { document } = page
+  const said = ['Codex 里有不止一份 implement，按名字调不到，不能预填执行。', '所有 Task 的“执行”先停用，Codex 的技能目录里只留一份之后恢复。']
+
+  assert.deepEqual(noExecute(page), said)
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', false])
+  await page.click(tabNamed(document, '地图'))
+  const notice = document.querySelector('#map .dk-notice.is-warn')!
+  assert.deepEqual([text(notice.querySelector('.dk-notice__title')), text(notice.querySelector('.dk-notice__text'))], said)
+  assert.deepEqual(executeShown(cardExecute(document, 70)), ['执行', false])
+})
+
+test('a takeover that moved the Occupancy, read again as Codex finds more than one implement, gives no Execute Prompt and says so, to leave one alone', async t => {
+  let moved = false
+  const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
+    moved = true
+    return deck.occupyAsIs(args)
+  })
+  const page = await openPage({ answer: (name, args) => (name === 'deck_skills' && moved ? deckWithSkills(several('implement'))(name, args) : deck.answer(name, args)) })
+  t.after(page.close)
+  await page.click(rowButton(page.document, 72, '接管'))
+
+  await page.click(askButton(page.document, '接管'))
+
+  assert.deepEqual(resultShown(page), movedNotFilled('Codex 里有不止一份 implement，按名字调不到，不能预填执行。Codex 的技能目录里只留一份之后，点“释放”再点“执行”。'))
+  assert.deepEqual(prefills(page), [])
+})
+
+test('when Codex finds more than one ask-matt, "我现在该做什么" is off and says it cannot call one by its name', async t => {
+  const page = await openNext(deckThatRecommends(several('ask-matt')))
+  t.after(page.close)
+
+  assert.deepEqual(nextTab(page), {
+    shown: true,
+    phases: [],
+    said: ['Codex 里有不止一份 ask-matt，按名字调不到，不能预填。'],
+    buttons: ['我现在该做什么（停用）', '重跑配置'],
+  })
+})
+
+test('in the 技能 tab, a skill Codex finds more than one file of has "预填" off and says why on its row; the notice above says how they come back as the rows want', async t => {
+  const notice = (page: { window: any; document: Document }) =>
+    [...page.document.querySelectorAll('.dk-notice.is-warn[role="status"]')].filter(each => shown(page, each)).map(each => parts(each, 'span, button'))
+  const groups = (page: { window: any; document: Document }) => [...page.document.querySelectorAll('.dk-group')].filter(group => shown(page, group))
+  // Only several: tdd, wayfinder both.
+  const alone = await openSkills(deckWithSkills(several('tdd', 'wayfinder')))
+  t.after(alone.close)
+  assert.deepEqual(notice(alone), [['2 个技能在 Codex 里不能预填。', '重跑配置', '原因写在各自那一行，Codex 的技能目录里只留一份之后恢复。']])
+  assert.deepEqual(rows(alone, groups(alone)[1]!), [
+    [IMPLEMENT, '开始做一个 Task。', '预填'],
+    ['$tdd', '先写测试，再写实现。', 'Codex 里有不止一份同名的，按名字调不到，不能预填。', '预填停用'],
+    ['$wayfinder', '为不清晰的大工作建立 Map。', 'Codex 里有不止一份同名的，按名字调不到，不能预填。', '预填停用'],
+  ])
+
+  // several beside different and missing.
+  const mixed = await openSkills(deckWithSkills([...SKILLS, { name: 'grill', call: '$grill', description: '追问计划。', path: '~/.claude/skills/grill/SKILL.md', copy: 'several' }]))
+  t.after(mixed.close)
+  assert.deepEqual(notice(mixed), [['3 个技能在 Codex 里不能预填。', '重跑配置', '原因写在各自那一行，重跑配置、或在 Codex 的技能目录里只留一份之后恢复。']])
+  assert.deepEqual(rows(mixed, groups(mixed)[1]!).find(row => row[0] === '$grill'), ['$grill', '追问计划。', 'Codex 里有不止一份同名的，按名字调不到，不能预填。', '预填停用'])
+})
+
 test('a takeover that moved the Occupancy, read again late and taken over by "刷新", fills in nothing and says the Tasks were not read at 10 seconds, still once the late read answers', async t => {
   let moved = false
   const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
