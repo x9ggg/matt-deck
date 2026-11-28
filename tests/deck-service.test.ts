@@ -4036,6 +4036,14 @@ test('started for Codex, deck_skills reads a name as before where, broken at a c
       'indent-list': `x:${s}  - a${s}  b: 1${s}name: actual\ndescription: Works`,
       'indent-colon': `x:${s}  y: a: b${s}name: actual\ndescription: Works`,
       'flow-value': `x: [1, 2]${s}name: actual\ndescription: Works`,
+      'tab-blank': `x: 1${s}\t${s}name: actual\ndescription: Works`,
+      'tab-blank-after': `x: 1${s}name: actual${s}\t \ndescription: Works`,
+      'block-shallow': `y: 1${s}x: |${s}    deep${s}  shallow${s}name: actual\ndescription: Works`,
+      'block-tab': `x: >-${s}\ta${s}name: actual\ndescription: Works`,
+      'name-block': `x: 1${s}name: |${s}# c\ndescription: Works`,
+      'long-key': `x: 1${s}${'k'.repeat(1025)}: 2${s}name: actual\ndescription: Works`,
+      'no-space': `x:1${s}name: actual\ndescription: Works`,
+      'odd-key': `@x: 1${s}name: actual\ndescription: Works`,
     }
     for (const [folder, frontmatter] of Object.entries(writings)) {
       await rawSkill(source, folder, `---\n${frontmatter}\n---\n`)
@@ -4053,6 +4061,22 @@ test('started for Codex, deck_skills reads a name as before where, broken at a c
       Object.keys(writings).map(() => true),
       JSON.stringify([separator, copies(result)]),
     )
+  }
+})
+
+test('started for Codex, deck_skills reads a name past a line break over an indented comment, as Codex parses it so', async t => {
+  for (const separator of ['\r', '\u0085', '\u2028', '\u2029']) {
+    const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+    const source = join(user, '.agents', 'skills')
+    await rawSkill(source, 'indented-comment', `---\nx: 1${separator}  # c${separator}name: commented\ndescription: Works\n---\n`)
+    await rawSkill(source, 'commented', '---\nname: commented\ndescription: Works\n---\n')
+    const deck = startDeck(dir, { HOME: user }, 'codex')
+    t.after(deck.stop)
+
+    assert.deepEqual(copies(await deck.callTool('deck_skills')), [
+      ['commented', 'several'],
+      ['indented-comment', 'missing'],
+    ], JSON.stringify(separator))
   }
 })
 

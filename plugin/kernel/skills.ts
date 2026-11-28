@@ -254,30 +254,18 @@ const codexName = (text: string, folder: string) => {
   const pieces = frontmatter.flatMap(line => line.split(/[\r\u0085\u2028\u2029]/))
   // Codex parses the pieces only where they make a frontmatter it can parse;
   // where not, it goes on to read it line by line, as Deck did before. So
-  // Deck reads its name off the pieces only where they are plain lines it can
-  // read throughout (blank lines, comments, unindented `key: value` fields
-  // with no key twice; no flow, escapes or unclosed quotes; no unquoted value
-  // holding a colon and a space or ending in one, or opening with a dash and
-  // a space, a lone dash, `]` or `}`; no metadata with a value; no name of `~`
-  // or null, a comment, quoted blanks or one followed by a comment; and
-  // indented lines only under a block), and otherwise off the lines as
-  // before.
+  // Deck reads its name off the pieces only where each is a line of spaces
+  // alone, a comment, or an unindented `key: value` field whose key is of 1024
+  // characters at most and not written twice, and whose value is plain text
+  // or a closed quote: no block, flow, escape, unquoted value holding a colon
+  // and a space or ending in one or opening with a dash and a space, a lone
+  // dash, `]` or `}`; no metadata with a value; no name of `~` or null, a
+  // comment, quoted blanks or one followed by a comment. Otherwise it reads
+  // the lines as before.
   let readable = pieces.length > frontmatter.length
   const keys = new Set<string>()
-  let inBlock = false
   for (const piece of readable ? pieces : []) {
-    if (!/[^ \t]/.test(piece)) {
-      continue
-    }
-    if (piece[0] === ' ' || piece[0] === '\t') {
-      if (inBlock || /^[ \t]*#/.test(piece)) {
-        continue
-      }
-      readable = false
-      break
-    }
-    if (piece[0] === '#') {
-      inBlock = false
+    if (/^ *$/.test(piece) || /^[ \t]*#/.test(piece)) {
       continue
     }
     const colon = piece.indexOf(':')
@@ -288,11 +276,13 @@ const codexName = (text: string, folder: string) => {
     const quoted = raw[0] === '"' || raw[0] === "'"
     if (
       !/^[\w-]+$/.test(key) ||
+      key.length > 1024 ||
       (after !== '' && after[0] !== ' ' && after[0] !== '\t') ||
       keys.has(key) ||
       parsed === undefined ||
       parsed.flow ||
-      (!parsed.inBlock && !quoted && (/:([ \t]|$)/.test(raw) || /^(-([ \t]|$)|[\]}])/.test(raw))) ||
+      parsed.inBlock ||
+      (!quoted && (/:([ \t]|$)/.test(raw) || /^(-([ \t]|$)|[\]}])/.test(raw))) ||
       (key === 'metadata' && raw !== '') ||
       // Codex takes these names for none or a comment, unlike fieldsOf.
       (key === 'name' &&
@@ -308,7 +298,6 @@ const codexName = (text: string, folder: string) => {
       break
     }
     keys.add(key)
-    inBlock = parsed.inBlock
   }
   const name = fieldsOf(readable ? pieces : frontmatter).name || folder
   if (hasConfirmedBlankDescription(frontmatter) || [...name].length > 64) {
