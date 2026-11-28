@@ -591,6 +591,88 @@ test('started for Codex, deck_setup_survey offers once a copy whose ask-matt and
   assert.deepEqual(forClaudeCode.structuredContent.skillSources, [{ type: 'directory', path: '~/.claude/skills' }])
 })
 
+test('started for Codex, deck_setup_survey keeps apart copies sharing ask-matt and their first implement where only one holds a second implement, the one Codex calls; and offers once copies whose every ask-matt and implement link the same files', async t => {
+  // A plugin holds ask-matt and an implement; ~/.claude/skills links both and
+  // a second implement, which ~/.agents/skills, where Codex looks, links too.
+  const apart = await home()
+  const matt = join(apart, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
+  await skill(join(matt, 'skills'), 'ask-matt')
+  await skill(join(matt, 'skills'), 'implement')
+  await rawSkill(join(apart, 'other'), 'implement-again', '---\nname: implement\ndescription: Start a Task again.\n---\n')
+  await installedPlugins(apart, { 'mattpocock-skills@official': [{ scope: 'user', installPath: matt }] })
+  await mkdir(join(apart, '.claude', 'skills'), { recursive: true })
+  await symlink(join(matt, 'skills', 'ask-matt'), join(apart, '.claude', 'skills', 'ask-matt'))
+  await symlink(join(matt, 'skills', 'implement'), join(apart, '.claude', 'skills', 'implement'))
+  await symlink(join(apart, 'other', 'implement-again'), join(apart, '.claude', 'skills', 'implement-again'))
+  await mkdir(join(apart, '.agents', 'skills'), { recursive: true })
+  await symlink(join(matt, 'skills', 'ask-matt'), join(apart, '.agents', 'skills', 'ask-matt'))
+  await symlink(join(apart, 'other', 'implement-again'), join(apart, '.agents', 'skills', 'implement'))
+  // The same, but the plugin holds the second implement too, which
+  // ~/.claude/skills links as well.
+  const linked = await home()
+  const its = join(linked, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
+  await skill(join(its, 'skills'), 'ask-matt')
+  await skill(join(its, 'skills'), 'implement')
+  await rawSkill(join(its, 'skills'), 'implement-again', '---\nname: implement\ndescription: Start a Task again.\n---\n')
+  await installedPlugins(linked, { 'mattpocock-skills@official': [{ scope: 'user', installPath: its }] })
+  await mkdir(join(linked, '.claude', 'skills'), { recursive: true })
+  for (const folder of ['ask-matt', 'implement', 'implement-again']) {
+    await symlink(join(its, 'skills', folder), join(linked, '.claude', 'skills', folder))
+  }
+  await mkdir(join(linked, '.agents', 'skills'), { recursive: true })
+  await symlink(join(its, 'skills', 'ask-matt'), join(linked, '.agents', 'skills', 'ask-matt'))
+  await symlink(join(its, 'skills', 'implement-again'), join(linked, '.agents', 'skills', 'implement'))
+  const decks = await Promise.all([apart, linked].map(async user => startDeck(await workspace(), { HOME: user }, 'codex')))
+  for (const deck of decks) {
+    t.after(deck.stop)
+  }
+
+  const results = await Promise.all(decks.map(deck => deck.callTool('deck_setup_survey')))
+
+  assert.deepEqual(results.map(result => result.structuredContent.skillSources), [
+    [
+      { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: true, hostCallsImplement: true },
+      { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true, hostCallsImplement: true },
+      { type: 'plugin', name: 'mattpocock-skills', hostCallsAskMatt: true, hostCallsImplement: false },
+    ],
+    [
+      { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: true, hostCallsImplement: true },
+      { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true, hostCallsImplement: true },
+    ],
+  ])
+})
+
+test('started for Codex, in one home a Skill Source holding two implements and two ask-matts is called by Codex, by deck_setup_survey and by deck_skills alike, where Codex links only the second of each, and not where it links both', async t => {
+  const user = await home()
+  const dir = await workspace(JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path: '~/my-skills' } }))
+  const source = join(user, 'my-skills')
+  for (const name of ['ask-matt', 'implement']) {
+    await skill(source, name)
+    await rawSkill(source, `${name}-again`, `---\nname: ${name}\ndescription: ${name} again.\n---\n`)
+  }
+  const deck = startDeck(dir, { HOME: user }, 'codex')
+  t.after(deck.stop)
+  const host = join(user, '.agents', 'skills')
+  await mkdir(host, { recursive: true })
+  const read = async () => {
+    const [surveyed, listed] = [await deck.callTool('deck_setup_survey'), await deck.callTool('deck_skills')]
+    return [surveyed.structuredContent.existing.hostCallsAskMatt, surveyed.structuredContent.existing.hostCallsImplement, copies(listed)]
+  }
+
+  for (const name of ['ask-matt', 'implement']) {
+    await symlink(join(source, `${name}-again`), join(host, `${name}-again`))
+  }
+  const second = await read()
+  for (const name of ['ask-matt', 'implement']) {
+    await symlink(join(source, name), join(host, name))
+  }
+  const both = await read()
+
+  const listing = (first: string, again: string) => [['ask-matt', first], ['ask-matt', again], ['implement', first], ['implement', again]]
+  assert.deepEqual(second, [true, true, listing('different', 'same')])
+  assert.deepEqual(both, [false, false, listing('different', 'different')])
+})
+
 test('started for Codex, deck_setup_survey says whether Codex calls ask-matt and implement as deck_skills says of the same Skill Source, for one missing a skill, one beside another file of the name, one not offered and one not there', async t => {
   const configured = async (path: string) => {
     const user = await home()

@@ -74,13 +74,14 @@ type HostCalls = { hostCallsAskMatt: boolean; hostCallsImplement: boolean }
 // Whether the host, calling ask-matt and implement by their names from its
 // own skill directories, calls this Skill Source's, judged as deck_skills
 // judges it; a Skill Source deck_skills cannot list calls neither. Also the
-// file of its implement, links resolved, known by the name its file gives.
+// files of its ask-matts and of its implements, known by the names their
+// files give, each set with links resolved, once each and sorted.
 const hostCallsOf = async (
   source: SkillSource,
   workspace: string,
   home: string,
   copyOf: Awaited<ReturnType<typeof hostCopies>>,
-): Promise<HostCalls & { implement: string | undefined }> => {
+): Promise<HostCalls & { files: string }> => {
   let skills: { name: string; file: string }[] = []
   try {
     // Only the files are read here, not how the skills are called.
@@ -94,12 +95,13 @@ const hostCallsOf = async (
     }
     return false
   }
-  const implement = skills.find(skill => skill.name === IMPLEMENT)
+  const filesOf = async (name: string) =>
+    [...new Set(await Promise.all(skills.filter(skill => skill.name === name).map(skill => realpath(skill.file))))].sort()
 
   return {
     hostCallsAskMatt: await calls(MARKER),
     hostCallsImplement: await calls(IMPLEMENT),
-    implement: implement === undefined ? undefined : await realpath(implement.file),
+    files: JSON.stringify([await filesOf(MARKER), await filesOf(IMPLEMENT)]),
   }
 }
 
@@ -108,8 +110,9 @@ const hostCallsOf = async (
 // found first. `hostDirectories` are where the host finds skills itself,
 // offered after the user-level ones, written as a Skill Source's path is:
 // `~/...` under the home, or relative to the Workspace. With
-// `markHostCalls`, a copy is the same only when its implement file, known by
-// the name its file gives, is too, or neither has one; each copy also says whether the host, calling ask-matt and
+// `markHostCalls`, a copy is the same only when its ask-matt files and its
+// implement files, known by the names their files give, are too, as sets
+// with links resolved; each copy also says whether the host, calling ask-matt and
 // implement by their names from those directories, calls this copy's. The
 // copies whose both it calls come first, then those whose ask-matt it calls,
 // each in the order found.
@@ -151,11 +154,11 @@ const findSkillSources = async (
     return found.filter(({ marker }, index) => found.findIndex(other => other.marker === marker) === index).map(({ source }) => source)
   }
   const copyOf = await hostCopies(hostDirectories, workspace, home)
-  const marked: { source: SkillSource & HostCalls; marker: string; implement: string | undefined }[] = []
+  const marked: { source: SkillSource & HostCalls; marker: string; files: string }[] = []
   for (const { source, marker } of found) {
-    const { implement, ...calls } = await hostCallsOf(source, workspace, home, copyOf)
-    if (!marked.some(other => other.marker === marker && other.implement === implement)) {
-      marked.push({ source: { ...source, ...calls }, marker, implement })
+    const { files, ...calls } = await hostCallsOf(source, workspace, home, copyOf)
+    if (!marked.some(other => other.marker === marker && other.files === files)) {
+      marked.push({ source: { ...source, ...calls }, marker, files })
     }
   }
   const rank = (each: HostCalls) => (each.hostCallsAskMatt && each.hostCallsImplement ? 0 : each.hostCallsAskMatt ? 1 : 2)
@@ -169,7 +172,7 @@ const findSkillSources = async (
 export const surveySetup = async (workspace: string, home: string, hostDirectories: string[], markHostCalls: boolean) => {
   let existing: ExistingConfig & Partial<HostCalls> = await readExistingConfig(workspace)
   if (markHostCalls && 'config' in existing) {
-    const { implement, ...calls } = await hostCallsOf(existing.config.skillSource, workspace, home, await hostCopies(hostDirectories, workspace, home))
+    const { files, ...calls } = await hostCallsOf(existing.config.skillSource, workspace, home, await hostCopies(hostDirectories, workspace, home))
     existing = { ...existing, ...calls }
   }
 

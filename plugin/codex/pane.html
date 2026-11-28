@@ -2345,8 +2345,13 @@ button.dk-row{color:inherit}
     if (read.status === 'fulfilled') {
       const answer = read.value
       keepFocus($('skill-list'), () => showSkills(answer))
-      askMatt = answer.ok ? (answer.skills.find(skill => skill.name === 'ask-matt') ?? null) : null
-      implement = answer.ok ? (answer.skills.find(skill => skill.name === 'implement') ?? null) : { failure: answer.failure }
+      // Of skills sharing a name, the one Codex runs, else the first.
+      const named = name => {
+        const all = answer.skills.filter(skill => skill.name === name)
+        return all.find(skill => skill.copy === 'same') ?? all[0] ?? null
+      }
+      askMatt = answer.ok ? named('ask-matt') : null
+      implement = answer.ok ? named('implement') : { failure: answer.failure }
     } else {
       skillsListed = []
       keepFocus($('skill-list'), () => $('skill-list').replaceChildren(failedNotice('读取 Skill Source 失败', skillFailure({ message: read.reason.message }))))

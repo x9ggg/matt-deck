@@ -3404,6 +3404,57 @@ test('when Codex does not run this implement, every "执行" is off and the top 
   }
 })
 
+// A Skill Source holding two skills of `name`, as the Deck service lists
+// them: the first with `first` as its copy, the second with `second`.
+const twice = (name: string, first: string, second: string) =>
+  SKILLS.flatMap(skill =>
+    skill.name === name ? [{ ...skill, copy: first }, { ...skill, path: `~/.claude/skills/${name}-again/SKILL.md`, copy: second }] : [skill],
+  )
+
+test('of two implements in the Skill Source, "执行" goes by the one Codex runs: on where the second is the same, and a click fills in one Execute Prompt; a takeover read again so fills it in too', async t => {
+  const skills = twice('implement', 'different', 'same')
+  const page = await openPage({ answer: deckWithSkills(skills) })
+  t.after(page.close)
+  const { document } = page
+
+  assert.equal(noExecute(page), undefined)
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', true])
+  await page.click(rowExecute(document, 70))
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(70))])
+
+  const deck = deckThatOccupies()
+  const taking = await openPage({ answer: (name, args) => (name === 'deck_skills' ? deckWithSkills(skills)(name, args) : deck.answer(name, args)) })
+  t.after(taking.close)
+  await taking.click(rowButton(taking.document, 72, '接管'))
+  await taking.click(askButton(taking.document, '接管'))
+  assert.deepEqual(prefills(taking), [prefilled(executePromptOf(72))])
+})
+
+test('of two ask-matts in the Skill Source, "我现在该做什么" goes by the one Codex runs: on where the second is the same', async t => {
+  const page = await openNext(deckThatRecommends(twice('ask-matt', 'different', 'same')))
+  t.after(page.close)
+
+  assert.equal(nextTab(page).buttons.includes('我现在该做什么'), true)
+  await page.click(button(page, '我现在该做什么'))
+  assert.deepEqual(prefills(page), [prefilled(promptOf(1))])
+})
+
+test('of two implements or ask-matts none of which Codex runs, "执行" and "我现在该做什么" are off for why the first one is not run', async t => {
+  for (const [first, second, execute, ask] of [
+    ['different', 'different', 'Codex 里的 implement 不是同一份，不能预填执行。', 'Codex 里的 ask-matt 不是同一份，不能预填。'],
+    ['missing', 'different', 'Codex 里找不到 implement，不能预填执行。', 'Codex 里找不到 ask-matt，不能预填。'],
+  ] as const) {
+    const executing = await openPage({ answer: deckWithSkills(twice('implement', first, second)) })
+    t.after(executing.close)
+    assert.deepEqual(noExecute(executing), [execute, '所有 Task 的“执行”先停用，重跑配置之后恢复。'], first)
+    assert.deepEqual(executeShown(rowExecute(executing.document, 70)), ['执行', false], first)
+
+    const asking = await openNext(deckThatRecommends(twice('ask-matt', first, second)))
+    t.after(asking.close)
+    assert.deepEqual(nextTab(asking), { shown: true, phases: [], said: [ask], buttons: ['我现在该做什么（停用）', '重跑配置'] }, first)
+  }
+})
+
 test('"执行" is off, and the 任务 tab says why in its own words, when the Skill Source holds no implement or cannot be read; "刷新" turns it on again once implement is read the same', async t => {
   let skillsAnswer: () => object = () => answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: SKILLS.filter(skill => skill.name !== 'implement') })
   const answer = deckAt('/work/matt-deck')
