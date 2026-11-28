@@ -2024,14 +2024,131 @@ test('deck_map takes a goal from the first paragraph of text, past lists, quotes
       [10, 'The goal after a quote and a rule.'],
       [11, 'x '.repeat(400).trim()],
       [12, null],
-      [13, '<https://example.com> says it.'],
-      [14, '<kbd>K</kbd> opens it.'],
+      [13, 'https://example.com says it.'],
+      [14, 'K opens it.'],
       [15, 'The goal after a tag alone.'],
       [16, 'The goal after headings.'],
       [17, 'The goal after a list with code.'],
       [18, 'Goal after one badge.'],
       [19, 'Goal after badges.'],
       [20, null],
+    ],
+  )
+})
+
+test('deck_map takes no goal from a table without leading pipes, an item\'s paragraph after a blank line, indented code, details, a definition of a link or footnote, or a paragraph of zero-width characters', async t => {
+  const map = (number: number, body: string) => issue({ number, labels: ['wayfinder:map'], body })
+  const gh = await fakeGh()
+  await gh.issues([
+    map(1, 'a | b\n--- | ---\n1 | 2\n\nReal goal.\n'),
+    map(2, '- item\n\n  continued in the item.\n\nReal goal.\n'),
+    map(3, '1. item\n\n   continued.\n\nReal goal.\n'),
+    map(4, '    code here\n\nReal goal.\n'),
+    map(5, '\tcode here\n\nReal goal.\n'),
+    map(6, '<details>\n<summary>s</summary>\n\nhidden text.\n\n</details>\n\nReal goal.\n'),
+    map(7, '<details>\n\nhidden text.\n\nMore hidden.\n'),
+    map(8, '[doc]: https://x.y\n\nReal goal.\n'),
+    map(9, '[^1]: note\n\nReal goal.\n'),
+    map(10, '\u200B\n\nReal goal.\n'),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { maps } = (await deck.callTool('deck_map', { session: 'this-session' })).structuredContent
+
+  assert.deepEqual(
+    maps.map(({ number, goal }: any) => [number, goal]),
+    [
+      [1, 'Real goal.'],
+      [2, 'Real goal.'],
+      [3, 'Real goal.'],
+      [4, 'Real goal.'],
+      [5, 'Real goal.'],
+      [6, 'Real goal.'],
+      [7, null],
+      [8, 'Real goal.'],
+      [9, 'Real goal.'],
+      [10, 'Real goal.'],
+    ],
+  )
+})
+
+test('deck_map gives a goal as text: inline HTML, autolinks, strikethrough, reference links and images, footnotes, entities and links with parentheses as what they show', async t => {
+  const map = (number: number, body: string) => issue({ number, labels: ['wayfinder:map'], body })
+  const gh = await fakeGh()
+  await gh.issues([
+    map(1, 'First<br>second line. Next.\n'),
+    map(2, 'See <a href="https://x.y">the doc</a> now. Next.\n'),
+    map(3, 'Press <kbd>Ctrl</kbd> now. Next.\n'),
+    map(4, 'Keep <!-- x --> going. Next.\n'),
+    map(5, 'See <https://x.y/z> now. Next.\n'),
+    map(6, '~~old~~ new goal. Next.\n'),
+    map(7, 'See [the doc][doc] now. Next.\n'),
+    map(8, 'See [the doc][] now. Next.\n'),
+    map(9, '![alt][img] goal here. Next.\n'),
+    map(10, 'Goal here[^1]. Next.\n'),
+    map(11, 'A &amp; B &nbsp; C. Next.\n'),
+    map(12, 'A &#38; B &#x26; C. Next.\n'),
+    map(13, 'Write &lt;br&gt; here. Next.\n'),
+    map(14, 'See [wiki](https://en.wikipedia.org/wiki/A_(b)) now. Next.\n'),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { maps } = (await deck.callTool('deck_map', { session: 'this-session' })).structuredContent
+
+  assert.deepEqual(
+    maps.map(({ number, goal }: any) => [number, goal]),
+    [
+      [1, 'First second line.'],
+      [2, 'See the doc now.'],
+      [3, 'Press Ctrl now.'],
+      [4, 'Keep going.'],
+      [5, 'See https://x.y/z now.'],
+      [6, 'old new goal.'],
+      [7, 'See the doc now.'],
+      [8, 'See the doc now.'],
+      [9, 'goal here.'],
+      [10, 'Goal here.'],
+      [11, 'A & B C.'],
+      [12, 'A & B & C.'],
+      [13, 'Write <br> here.'],
+      [14, 'See wiki now.'],
+    ],
+  )
+})
+
+test('deck_map still takes a goal from an indented line within a paragraph, a pipe with no delimiter row under it, a lone < or ~~, details closed on its line, text in another HTML block, past a block a line of white space ends, and from a line like a definition with no address', async t => {
+  const map = (number: number, body: string) => issue({ number, labels: ['wayfinder:map'], body })
+  const gh = await fakeGh()
+  await gh.issues([
+    map(1, 'Text line\n    indented continuation. Next.\n'),
+    map(2, 'Use a | b here. Next.\n'),
+    map(3, 'When a < b and c > d holds. Next.\n'),
+    map(4, 'About ~5 items and ~~ nothing. Next.\n'),
+    map(5, '<details><summary>s</summary>x</details>\n\nReal goal.\n'),
+    map(6, '<div align="center">\n\nShown text.\n\n</div>\n'),
+    map(7, '> quoted.\n    \nReal goal.\n'),
+    map(8, '<div>\n\t\nShown text.\n'),
+    map(9, '[Note]: this matters? Next.\n'),
+  ])
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { maps } = (await deck.callTool('deck_map', { session: 'this-session' })).structuredContent
+
+  assert.deepEqual(
+    maps.map(({ number, goal }: any) => [number, goal]),
+    [
+      [1, 'Text line indented continuation.'],
+      [2, 'Use a | b here.'],
+      [3, 'When a < b and c > d holds.'],
+      [4, 'About ~5 items and ~~ nothing.'],
+      [5, 'Real goal.'],
+      [6, 'Shown text.'],
+      [7, 'Real goal.'],
+      [8, 'Shown text.'],
+      [9, '[Note]: this matters?'],
     ],
   )
 })
@@ -2087,6 +2204,34 @@ test('deck_map reads a goal from a long line of unclosed code, emphasis, links a
 
   assert.equal(withLine.goal, line)
   assert.ok(withLine.ms - plainMs < 1000, `${withLine.ms} ms with the line, ${plainMs} ms without`)
+})
+
+test('deck_map reads a goal from a long line of unclosed tags, comments, strikethrough, entities, reference links, footnotes and links with parentheses about as fast as from plain words', async t => {
+  const gh = await fakeGh()
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+  const timed = async (text: string) => {
+    await gh.issues([issue({ number: 10, labels: ['wayfinder:map'], body: `${text}\n` })])
+    await deck.callTool('deck_tasks', { refresh: true })
+    const start = await deck.cpuMs()
+    const { structuredContent } = await deck.callTool('deck_map', { session: 'this-session' })
+    return { ms: (await deck.cpuMs()) - start, goal: structuredContent.maps[0].goal }
+  }
+  const unit = '<a <!-- ~~a &a &#1 [x][ [^ [x](a( '
+  const line = unit.repeat(Math.floor(LONG / unit.length)).trim()
+  const plain = 'ab '.repeat(Math.ceil(line.length / 3)).slice(0, line.length).trim()
+  // The first read warms the Deck service up.
+  await timed(plain)
+  const plainMs = (await timed(plain)).ms
+  const withLine = await timed(line)
+  // A line under a paragraph that a run of spaces as long as GitHub lets a
+  // body be leaves no delimiter row.
+  const spaces = await timed(`a\n${' '.repeat(65536)}|x`)
+
+  assert.equal(withLine.goal, line)
+  assert.ok(withLine.ms - plainMs < 1000, `${withLine.ms} ms with the line, ${plainMs} ms without`)
+  assert.equal(spaces.goal, 'a')
+  assert.ok(spaces.ms - plainMs < 1000, `${spaces.ms} ms with the spaces, ${plainMs} ms without`)
 })
 
 test('deck_map ends a goal\'s sentence at a full stop only before the end or a space and no lower-case letter', async t => {

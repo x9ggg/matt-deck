@@ -238,6 +238,18 @@ export const readTask = async (source: TaskSource, number: number): Promise<{ id
 
 // A body split into its description and its acceptance criteria.
 export const describe = (body: string): Pick<TaskDetail, 'description' | 'acceptance'> => {
+  const { lines, acceptance } = describedLines(body)
+  const description = lines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  return { description, acceptance }
+}
+
+// The lines of a body its description is made of, as they stand, each with
+// the white space it starts with; and its acceptance criteria.
+export const describedLines = (body: string) => {
   const acceptance: TaskDetail['acceptance'] = []
   const kept: string[] = []
   let isDropping = false
@@ -278,12 +290,8 @@ export const describe = (body: string): Pick<TaskDetail, 'description' | 'accept
     kept.push(line)
     isAtTop &&= line.trim() === ''
   }
-  const description = kept
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
 
-  return { description, acceptance }
+  return { lines: kept, acceptance }
 }
 
 // The issues of the workspace's GitHub repository, read with the `gh` command
