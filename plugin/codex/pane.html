@@ -2293,10 +2293,11 @@ button.dk-row{color:inherit}
 
   // Why the Task `number`, as the list holds it, if it does, cannot be
   // executed: in the primary button's place; a Spec or Map with "地图" to its
-  // Map View.
+  // Map View. With no list read yet, it says so.
   const notExecutable = (number, listed) => {
     const said =
-      listed === undefined ? `任务列表里没有 #${number}。`
+      list === undefined ? '任务列表还没读到。'
+      : listed === undefined ? `任务列表里没有 #${number}。`
       : listed.kind !== undefined ? `#${number} 是 ${listed.kind === 'spec' ? 'Spec' : 'Map'}，不能直接执行。`
       : !listed.isOpen ? `#${number} 已关闭。`
       : listed.blockers.length > 0 ? `#${number} 被 ${refs(listed.blockers)} 阻塞，现在不能执行。`
@@ -2318,7 +2319,7 @@ button.dk-row{color:inherit}
     const state = found === undefined ? undefined : stateOf(...found)
     const glyph = found === undefined ? [] : [plate(state)]
     glyph.forEach(each => each.classList.add('dk-plate--lg'))
-    const title = found !== undefined ? found[0].title : task === null ? '无' : '任务列表里没有这个 Task'
+    const title = found !== undefined ? found[0].title : task === null ? '无' : list === undefined ? '任务列表还没读到' : '任务列表里没有这个 Task'
     const field = (name, value) => [el('dt', 'caption', name), el('dd', '', value === '' ? '无' : value)]
     return el(
       'article',
@@ -2341,7 +2342,8 @@ button.dk-row{color:inherit}
       // Executed where the list says the Task is Executable; held by another
       // Session or Orphaned, this Session's own Orphaned Task included, after
       // the person confirms taking it over, asked in the button's place.
-      // Not Executable, or not in the list, why in the button's place.
+      // Not Executable, not in the list, or no list read yet, why in the
+      // button's place.
       ...(task === null ? []
         : found === undefined || !found[0].isExecutable ? [notExecutable(task, found?.[0])]
         : isAsked(found[0], state, 'next') ? [takeOverAsk(found[0], state)]

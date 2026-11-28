@@ -8202,3 +8202,49 @@ test('a red notice of a doing that did not happen holds its ✕ from a screen re
   assert.deepEqual(crossOf(ask, '没有填入推荐请求'), HIDDEN_CROSS)
   noneSaysReadFailed(ask)
 })
+
+test('a Recommendation that comes before the Tasks are first read says the list is not read yet, in its title and in the primary button\'s place, and turns into the Task once they are', async t => {
+  const deck = deckThatRecommends()
+  let holding = true
+  const page = await openNext({ answer: (name: string, args: any) => (name === 'deck_map' && holding ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+
+  const card = () => document.querySelector('.dk-rec')!
+  assert.equal(text(card().querySelector('.dk-rec__title')), '任务列表还没读到')
+  assert.equal(text(card().querySelector('.dk-rec__why')), '任务列表还没读到。')
+  assert.equal(card().querySelector('[data-execute]'), null)
+
+  holding = false
+  await page.respond(page.sent.filter(message => message.params?.name === 'deck_map').at(-1), { result: deck.answer('deck_map', {}) })
+  assert.equal(text(card().querySelector('.dk-rec__title')), 'Task 详情')
+  assert.equal(card().querySelector('.dk-rec__why'), null)
+  assert.deepEqual(executeShown(card().querySelector('[data-execute]')), ['执行这个 Task', true])
+})
+
+test('a Recommendation while the Tasks have failed at their first read says the list is not read yet, and turns into the Task once they are read', async t => {
+  const deck = deckThatRecommends()
+  let failing = true
+  const page = await openNext({ answer: (name: string, args: any) => (name === 'deck_map' && failing ? OFFLINE : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+
+  const card = () => document.querySelector('.dk-rec')!
+  assert.equal(text(document.querySelector('.dk-head__fresh')), '读取失败')
+  // Why the read failed is said in the head and in "任务", not again here.
+  assert.doesNotMatch(card().textContent!, /连不上 GitHub|dial tcp/)
+  assert.equal(text(card().querySelector('.dk-rec__title')), '任务列表还没读到')
+  assert.equal(text(card().querySelector('.dk-rec__why')), '任务列表还没读到。')
+  assert.equal(card().querySelector('[data-execute]'), null)
+
+  failing = false
+  await page.click(document.querySelector('.dk-head > button'))
+  assert.equal(text(card().querySelector('.dk-rec__title')), 'Task 详情')
+  assert.deepEqual(executeShown(card().querySelector('[data-execute]')), ['执行这个 Task', true])
+})

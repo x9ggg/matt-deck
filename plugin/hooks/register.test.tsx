@@ -4386,6 +4386,52 @@ for (const [number, said] of [
   })
 }
 
+for (const how of ['being read', 'failing at their first read'] as const) {
+  test(`a Recommendation while the Tasks are ${how} says the list is not read yet in place of "执行这个 Task", in both placements, and has it once they are read`, async ($, on) => {
+    const { waiting, release } = gate()
+    let failing = how === 'failing at their first read'
+    const seen = engine(on, {
+      config: { structuredContent: DIRECTORY, isError: false },
+      tasks: () => (failing ? failed('offline', 'dial tcp 9z') : UNEXECUTABLE),
+      waitFor: tool => (tool === 'deck_tasks' && how === 'being read' ? waiting : undefined),
+      recommendation: recommending(3),
+    })
+    await start($)
+    await seen.clock.settle()
+    for (const target of [PANE_TARGET, INLINE]) {
+      const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+      await ui.press({ key: 'tab:next' })
+      if (target === PANE_TARGET) {
+        await ui.press({ key: 'ask' })
+        await turnStart($, 't1', 'Matt Deck Recommendation Request request-1. 快照 1')
+        await turnEnd($, 't1')
+        await seen.clock.settle()
+      }
+
+      expect(await ui.find({ key: 'execute' })).toBeUndefined()
+      expect(await texts(ui)).toEqual(expect.arrayContaining([expect.stringContaining('任务列表还没读到。')]))
+      expect(await texts(ui)).not.toEqual(expect.arrayContaining([expect.stringContaining('任务列表里没有')]))
+      await ui.unmount()
+    }
+
+    failing = false
+    release()
+    if (how === 'failing at their first read') {
+      const ui = await $.ui.mount({ ...PANE_TARGET, surface: 'terminal' })
+      await ui.press({ key: 'refresh' })
+      await ui.unmount()
+    }
+    await seen.clock.settle()
+    for (const target of [PANE_TARGET, INLINE]) {
+      const ui = await $.ui.mount({ ...target, surface: 'terminal' })
+      await ui.press({ key: 'tab:next' })
+      expect((await ui.find({ key: 'execute' }))?.text).toBe('执行这个 Task')
+      expect(await texts(ui)).not.toEqual(expect.arrayContaining([expect.stringContaining('任务列表还没读到')]))
+      await ui.unmount()
+    }
+  })
+}
+
 test('the Recommendation\'s "执行这个 Task" goes by what the list says of the Task alone: one the list says is Executable has it, wherever it stands', async ($, on) => {
   const listed = tasks({ blocked: [task(5, '任务列表', { blockers: [3], isExecutable: true })] })
   const seen = engine(on, { config: { structuredContent: DIRECTORY, isError: false }, tasks: () => listed, recommendation: recommending(5) })

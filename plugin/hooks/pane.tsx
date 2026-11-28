@@ -1810,21 +1810,24 @@ export const drawPane = (
   const unreported = ['没有收到 deck_recommend 的回报。', '下面是这一回合的回答原文。']
   // Why the recommended Task cannot be executed, as the list says of it, in
   // the primary button's place; with the Map View to go to, for a Spec or
-  // Map. Undefined where it can be, or nothing is recommended.
+  // Map. Undefined where it can be, or nothing is recommended. With no list
+  // read yet, it says so.
   const recommendedNumber = recommendation?.task
   const recommendedEntry = recommendedNumber == null ? undefined : listed.find(task => task.number === recommendedNumber)
   const unexecutable: { said: string; map?: number } | undefined =
     recommendedNumber == null || recommendedEntry?.isExecutable === true
       ? undefined
-      : recommendedEntry === undefined
-        ? { said: `任务列表里没有 #${recommendedNumber}。` }
-        : 'kind' in recommendedEntry
-          ? { said: `#${recommendedNumber} 是 ${recommendedEntry.kind === 'spec' ? 'Spec' : 'Map'}，不能直接执行。`, map: recommendedNumber }
-          : !recommendedEntry.isOpen
-            ? { said: `#${recommendedNumber} 已关闭。` }
-            : recommendedEntry.blockers.length > 0
-              ? { said: `#${recommendedNumber} 被 ${refs(recommendedEntry.blockers)} 阻塞，现在不能执行。` }
-              : { said: `#${recommendedNumber} 在等 ${recommendedEntry.labels.find(label => label === 'needs-triage' || label === 'needs-info') ?? '分诊'}，现在不能执行。` }
+      : list === undefined
+        ? { said: '任务列表还没读到。' }
+        : recommendedEntry === undefined
+          ? { said: `任务列表里没有 #${recommendedNumber}。` }
+          : 'kind' in recommendedEntry
+            ? { said: `#${recommendedNumber} 是 ${recommendedEntry.kind === 'spec' ? 'Spec' : 'Map'}，不能直接执行。`, map: recommendedNumber }
+            : !recommendedEntry.isOpen
+              ? { said: `#${recommendedNumber} 已关闭。` }
+              : recommendedEntry.blockers.length > 0
+                ? { said: `#${recommendedNumber} 被 ${refs(recommendedEntry.blockers)} 阻塞，现在不能执行。` }
+                : { said: `#${recommendedNumber} 在等 ${recommendedEntry.labels.find(label => label === 'needs-triage' || label === 'needs-info') ?? '分诊'}，现在不能执行。` }
   // The screen's primary button once an Executable Task is recommended:
   // execute it, after taking it over when another Session holds it.
   const isRecommendedOthers =
