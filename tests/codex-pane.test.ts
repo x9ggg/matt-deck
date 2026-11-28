@@ -8811,3 +8811,282 @@ test('a Recommendation while the Tasks have failed at their first read says the 
   assert.equal(text(card().querySelector('.dk-rec__title')), 'Task 详情')
   assert.deepEqual(executeShown(card().querySelector('[data-execute]')), ['执行这个 Task', true])
 })
+
+// Focuses the button `found` finds, clicks it as a key would, and lets the
+// browser move the focus off it as it goes off, a frame on.
+const pressed = async (page: Awaited<ReturnType<typeof openPage>>, found: () => Element | null | undefined) => {
+  const button = found() as HTMLElement
+  button.focus()
+  button.click()
+  await pastAFrame()
+  await page.settled()
+}
+const hasFocus = (page: { document: Document }, element: Element | null | undefined) =>
+  [page.document.activeElement === element, (element as HTMLButtonElement | null)?.disabled]
+
+// Each place a prefill button is drawn in: how to open the page there, and
+// how to find the button.
+type Opened = Awaited<ReturnType<typeof openPage>>
+const PRESSED: [string, (answerMessage?: (params: object) => any) => Promise<Opened>, (page: Opened) => Element | null | undefined][] = [
+  ['a row\'s "执行"', answerMessage => openPage({ answer: deckAt('/work/matt-deck'), answerMessage }), page => rowExecute(page.document, 70)],
+  ['a card\'s "执行"', async answerMessage => {
+    const page = await openPage({ answer: deckAt('/work/matt-deck'), answerMessage })
+    await page.click(tabNamed(page.document, '地图'))
+    return page
+  }, page => wallCard(page.document, 70)!.querySelector('[data-execute]')],
+  ['a detail\'s "执行"', async answerMessage => {
+    const page = await openPage({ answer: deckAt('/work/matt-deck'), answerMessage })
+    await page.click(rowOf(page.document, 70))
+    return page
+  }, page => barExecute(page.document)],
+  ['"执行这个 Task"', async answerMessage => {
+    const deck = deckThatRecommends()
+    const page = await openPage({ answer: deck.answer, answerMessage: params => (prefillsSent(page as any).length <= 1 || answerMessage === undefined ? { result: {} } : answerMessage(params)) })
+    await page.click(tabNamed(page.document, '下一步'))
+    await page.click(button(page, '我现在该做什么'))
+    deck.reported.set('request-1', RECOMMENDATION)
+    await page.advance(2_000)
+    return page
+  }, page => page.document.querySelector('.dk-rec [data-execute]')],
+  ['a skill\'s "预填"', async answerMessage => {
+    const page = await openPage({ answer: deckWithSkills(), answerMessage })
+    await page.click(tabNamed(page.document, '技能'))
+    return page
+  }, page => skillRowOf(page.document, IMPLEMENT).querySelector('button')],
+  ['a skill\'s text\'s "预填"', async answerMessage => {
+    const page = await openPage({ answer: deckWithSkills(), answerMessage })
+    await page.click(tabNamed(page.document, '技能'))
+    await page.click(skillRowOf(page.document, IMPLEMENT))
+    return page
+  }, page => barButton(page.document, '预填') ?? [...page.document.querySelectorAll('.dk-bar button')].find(each => text(each) === '已填入')],
+  ['"收尾核对"', answerMessage => openPage({ answer: deckOfCloseout(() => closeoutProject(true)), answerMessage }), page => rowOf(page.document, 64).querySelector('button')],
+  ['"重跑配置"', answerMessage => openPage({ answer: deckWithSkills(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy: 'different' } : skill))), answerMessage }),
+    page => page.document.querySelector('#tasks .dk-notice.is-warn button')],
+  ['"配置这个项目"', answerMessage => openPage({ answer: deckAt('/work/elsewhere', false), answerMessage }), page => page.document.querySelector('.dk-empty button')],
+]
+
+test('a prefill button pressed with the focus on it has the focus back once it is on again, 5 seconds after the Host took it, wherever it is drawn', async t => {
+  for (const [where, open, found] of PRESSED) {
+    const page = await open()
+    t.after(page.close)
+
+    await pressed(page, () => found(page))
+    assert.notEqual(page.document.activeElement, found(page), where)
+    await page.advance(4_999)
+    assert.notEqual(page.document.activeElement, found(page), where)
+    await page.advance(1)
+    assert.deepEqual(hasFocus(page, found(page)), [true, false], where)
+  }
+})
+
+test('a prefill button pressed with the focus on it has the focus back at once as the Host refuses, and once on again as the Host leaves it 10 seconds unanswered', async t => {
+  for (const [where, open, found] of PRESSED) {
+    // Refused a frame and more after the click, once the browser moved the
+    // focus off the button gone off.
+    const refused = await open(() => undefined)
+    t.after(refused.close)
+    await pressed(refused, () => found(refused))
+    assert.notEqual(refused.document.activeElement, found(refused), where)
+    await refused.respond(prefillsSent(refused).at(-1), { error: { code: -32000, message: REFUSAL } })
+    assert.deepEqual(hasFocus(refused, found(refused)), [true, false], where)
+    assert.equal(resultShown(refused)?.title, '没有填入输入框', where)
+
+    const unanswered = await open(() => undefined)
+    t.after(unanswered.close)
+    await pressed(unanswered, () => found(unanswered))
+    await unanswered.advance(9_999)
+    assert.notEqual(unanswered.document.activeElement, found(unanswered), where)
+    await unanswered.advance(1)
+    assert.deepEqual(hasFocus(unanswered, found(unanswered)), [true, false], where)
+  }
+})
+
+test('a prefill button pressed with the focus on it, its list drawn anew while it is off, has the focus on the button drawn since once that is on again', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+
+  await pressed(page, () => rowExecute(document, 70))
+  const before = rowExecute(document, 70)
+  await page.click(document.querySelector('.dk-head > button'))
+  assert.notEqual(rowExecute(document, 70), before)
+  await page.advance(5_000)
+  assert.deepEqual(hasFocus(page, rowExecute(document, 70)), [true, false])
+})
+
+test('a prefill button pressed with the focus on it leaves the focus where the person moved it meanwhile, to another control or to the Host', async t => {
+  for (const where of ['a tab', 'the Host']) {
+    const page = await openPage({ answer: deckAt('/work/matt-deck') })
+    t.after(page.close)
+    const { document } = page
+
+    await pressed(page, () => rowExecute(document, 70))
+    let there: Element = document.body
+    if (where === 'a tab') {
+      there = tabNamed(document, '任务')!
+      ;(there as HTMLElement).focus()
+    } else page.window.dispatchEvent(new page.window.FocusEvent('blur'))
+    await page.advance(5_000)
+    assert.equal(document.activeElement, there, where)
+  }
+})
+
+test('the focus on a "执行" a read puts off, as implement is no longer the same, goes on its row or card; in a detail\'s bar, on a control of the detail', async t => {
+  for (const where of ['row', 'card', 'detail']) {
+    let copy = 'same'
+    const page = await openPage({ answer: (name, args: any) => deckWithSkills(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)))(name, args) })
+    t.after(page.close)
+    const { document } = page
+    if (where === 'card') await page.click(tabNamed(document, '地图'))
+    if (where === 'detail') await page.click(rowOf(document, 70))
+    const execute = () => (where === 'row' ? rowExecute(document, 70) : where === 'card' ? wallCard(document, 70)!.querySelector('[data-execute]') : barExecute(document)) as HTMLElement
+    execute().focus()
+
+    copy = 'different'
+    await page.click(document.querySelector('.dk-head > button'))
+    await pastAFrame()
+
+    assert.equal(execute().matches(':disabled'), true, where)
+    if (where === 'row') assert.equal(document.activeElement, rowOf(document, 70), where)
+    else if (where === 'card') assert.equal(document.activeElement, wallCard(document, 70), where)
+    else {
+      assert.notEqual(document.activeElement, document.body, where)
+      assert.ok(document.getElementById('into')!.contains(document.activeElement), where)
+    }
+  }
+})
+
+test('a detail drawn anew keeps the focus on what in it the focus was on: a blocker\'s row by its Task, a link by which it is; gone, on "返回"', async t => {
+  let title = '推荐：我现在该做什么'
+  let blockers = [72, 70]
+  let description = '先看 https://example.com/one 再看 https://example.com/two 。'
+  const page = await openPage({
+    answer: (name, args: any) => {
+      if (name === 'deck_task' && args.number === 73) return answered(detail(73, title, { description }))
+      if (name === 'deck_map') {
+        const blocked = [task(73, '推荐：我现在该做什么', { blockers, blockedBy: blockers }), task(19, '等分诊', { labels: ['needs-triage'] })]
+        return mapRead({ ...TASKS, groups: { ...TASKS.groups, blocked } })
+      }
+      return deckWithSkills()(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+  const refresh = () => page.click(document.querySelector('.dk-head > button'))
+  const edge = (number: number) => [...document.querySelectorAll('#into .dk-edge')].find(each => text(each.querySelector('.dk-id')) === `#${number}`)
+  const links = () => [...document.querySelectorAll('#into .dk-prose__link')]
+  await page.click(rowOf(document, 73))
+
+  ;(edge(70) as HTMLElement).focus()
+  title = '推荐：改过的标题 3n8q'
+  await refresh()
+  assert.equal(detailShown(page)?.title, `#73 ${title}`)
+  assert.equal(document.activeElement, edge(70))
+
+  ;(links()[1] as HTMLElement).focus()
+  description = '换了说法：先看 https://example.com/one 再看 https://example.com/two 。'
+  await refresh()
+  assert.equal(document.activeElement, links()[1])
+
+  ;(edge(70) as HTMLElement).focus()
+  blockers = [72]
+  await refresh()
+  assert.equal(edge(70), undefined)
+  assert.equal(text(document.activeElement), '返回')
+})
+
+test('the 技能 list drawn anew keeps the focus on the same skill\'s same control: its row, its "预填" or its "原文"; the skill gone, on the first control of the list', async t => {
+  const GRILL = { name: 'grill', call: '$grill-6t1x', description: '追问计划。', path: '~/.claude/skills/grill/SKILL.md', copy: 'same' }
+  let skills: object[] = SKILLS
+  const page = await openPage({ answer: (name, args: any) => deckWithSkills(skills)(name, args) })
+  t.after(page.close)
+  const { document } = page
+  const refresh = () => page.click(document.querySelector('.dk-head > button'))
+  await page.click(tabNamed(document, '技能'))
+  const controls = () => {
+    const row = skillRowOf(document, IMPLEMENT)
+    return [row, ...row.querySelectorAll('button')]
+  }
+
+  for (const [which, more] of [[0, [...SKILLS, GRILL]], [1, SKILLS], [2, [...SKILLS, GRILL]]] as [number, object[]][]) {
+    ;(controls()[which] as HTMLElement).focus()
+    skills = more
+    const before = controls()[which]
+    await refresh()
+    assert.notEqual(controls()[which], before, String(which))
+    assert.equal(document.activeElement, controls()[which], String(which))
+  }
+
+  // Its "预填" off, as Codex no longer finds the same file: on its row.
+  ;(controls()[1] as HTMLElement).focus()
+  skills = SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy: 'different' } : skill))
+  await refresh()
+  assert.equal(document.activeElement, skillRowOf(document, IMPLEMENT))
+
+  ;(controls()[2] as HTMLElement).focus()
+  skills = SKILLS.filter(skill => skill.name !== 'implement')
+  await refresh()
+  const first = [...document.querySelectorAll('#skill-list button, #skill-list [data-focus]')].find(each => !(each as HTMLButtonElement).disabled)
+  assert.equal(document.activeElement, first)
+})
+
+test('a skill\'s "预填" pressed with the focus on it, off for another reason once its 5 seconds end, has the focus on its row', async t => {
+  let copy = 'same'
+  const page = await openPage({ answer: (name, args: any) => deckWithSkills(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)))(name, args) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '技能'))
+
+  await pressed(page, () => skillRowOf(document, IMPLEMENT).querySelector('button'))
+  copy = 'different'
+  await page.click(document.querySelector('.dk-head > button'))
+  await page.advance(5_000)
+  assert.equal(document.activeElement, skillRowOf(document, IMPLEMENT))
+})
+
+test('a detail\'s "执行" pressed with the focus on it, off for another reason once its 5 seconds end, has the focus on the first control of the detail', async t => {
+  let copy = 'same'
+  const page = await openPage({ answer: (name, args: any) => deckWithSkills(SKILLS.map(skill => (skill.name === 'implement' ? { ...skill, copy } : skill)))(name, args) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 70))
+
+  await pressed(page, () => barExecute(document))
+  copy = 'different'
+  await page.click(document.querySelector('.dk-head > button'))
+  await page.advance(5_000)
+  assert.equal(text(document.activeElement), '返回')
+})
+
+test('a prefill button pressed, then "刷新" pressed while it is off, leaves the focus to "刷新" though the read is still out as the button is on again', async t => {
+  let holding = false
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_map' && holding ? undefined : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const refresh = document.querySelector<HTMLElement>('.dk-head > button')!
+
+  await pressed(page, () => rowExecute(document, 70))
+  holding = true
+  await pressed(page, () => refresh)
+  await page.advance(5_000)
+  assert.notEqual(document.activeElement, rowExecute(document, 70))
+  holding = false
+  await page.respond(lastTasksRead(page), { result: mapRead(TASKS) })
+  assert.equal(document.activeElement, refresh)
+})
+
+test('a detail drawn anew while the window has given the focus to the Host leaves the focus where it is', async t => {
+  let title = '推荐：我现在该做什么'
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_task' && args.number === 73 ? answered(detail(73, title)) : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 73))
+  const edge = () => [...document.querySelectorAll('#into .dk-edge')].find(each => text(each.querySelector('.dk-id')) === '#70') as HTMLElement
+  edge().focus()
+  page.window.dispatchEvent(new page.window.FocusEvent('blur'))
+
+  title = '推荐：改过的标题 3n8q'
+  await page.click(document.querySelector('.dk-head > button'))
+  assert.equal(detailShown(page)?.title, `#73 ${title}`)
+  assert.notEqual(document.activeElement, edge())
+})

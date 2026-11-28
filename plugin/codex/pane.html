@@ -625,8 +625,8 @@ button.dk-row{color:inherit}
     return holder ? `${holder.dataset.focus}/${label}` : `${element.tagName}/${label}`
   }
   // Drawing `scope` anew, the focus in it goes back on the same control; on
-  // its Task's row or card where that control is gone or off; else on the
-  // first control of the tab. Focus outside it, or the asking to take a
+  // its Task's row or card, or its skill's row, where that control is gone
+  // or off; else on the first control of `scope`. Focus outside it, or the asking to take a
   // Task over and its closing, which place the focus themselves, it leaves;
   // so too while the window has given the focus to the Host.
   const keepFocus = (scope, draw) => {
@@ -639,7 +639,7 @@ button.dk-row{color:inherit}
     if (key === undefined || scope.contains(document.activeElement)) return
     const controls = [...scope.querySelectorAll('button, [data-focus]')].filter(each => each.closest('[hidden]') === null)
     const same = controls.find(each => focusKey(each) === key && !each.disabled)
-    const holder = controls.find(each => each.dataset.focus === key.split('/')[0] && /^(row|card):/.test(each.dataset.focus))
+    const holder = controls.find(each => each.dataset.focus === key.split('/')[0] && /^(row|card|skill):/.test(each.dataset.focus))
     ;(same ?? holder ?? controls.find(each => !each.disabled))?.focus({ preventScroll: true })
   }
 
@@ -845,7 +845,7 @@ button.dk-row{color:inherit}
   const enter = (step, via = []) => {
     closeTakeOver()
     closeResult()
-    refocus = undefined
+    refocus = pressed = undefined
     into ??= { tab: chosenTab(), via, steps: [] }
     into.steps.push({ ...step, left: window.scrollY })
     showPanel()
@@ -854,6 +854,7 @@ button.dk-row{color:inherit}
   }
   const back = () => {
     closeResult()
+    pressed = undefined
     const { left } = into.steps.pop()
     if (into.steps.length === 0) into = undefined
     showPanel()
@@ -907,11 +908,21 @@ button.dk-row{color:inherit}
     if (drawn.key === step.drawn.key) return
     step.drawn = drawn
     if (into?.steps.at(-1) !== step) return
-    // The focus on an action of the bar goes back on that action.
+    // The focus on an action of the bar goes back on that action. The focus
+    // in the content goes back on the same: a blocker's row by its Task,
+    // "属于" as itself, a link by which of the links it is; gone, on "返回".
+    // The asking places the focus by its own rules.
     const focused = $('into-end').contains(document.activeElement) ? document.activeElement : undefined
     const action = focused && (focused.dataset.label ?? focused.textContent)
+    const links = () => [...$('into-body').querySelectorAll('.dk-prose__link')]
+    const inBody = !away && $('into-body').contains(document.activeElement) && document.activeElement.dataset.takeover === undefined ? document.activeElement : undefined
+    const kept = inBody && (inBody.dataset.focus ?? `link:${links().indexOf(inBody)}`)
     showStep(step)
-    if (action !== undefined) [...$('into-end').querySelectorAll('button')].find(each => (each.dataset.label ?? each.textContent) === action)?.focus()
+    if (action !== undefined) [...$('into-end').querySelectorAll('button')].find(each => (each.dataset.label ?? each.textContent) === action)?.focus({ preventScroll: true })
+    if (kept !== undefined && !$('into-body').contains(document.activeElement)) {
+      const same = kept.startsWith('link:') ? links()[Number(kept.slice('link:'.length))] : $('into-body').querySelector(`[data-focus="${kept}"]`)
+      ;(same ?? $('back')).focus({ preventScroll: true })
+    }
   }
 
   // The detail of the Task `number`, entered from its row or from the detail
@@ -1109,6 +1120,7 @@ button.dk-row{color:inherit}
       glyph.setAttribute('aria-label', PLATE[itsState][0])
       const edge = el('button', `dk-edge is-${itsState}`, glyph, el('span', `dk-id is-${itsState}`, `#${blocker.number}`), el('span', '', blocker.title))
       edge.type = 'button'
+      edge.dataset.focus = `edge:${blocker.number}`
       edge.addEventListener('click', () => openTask(blocker.number))
       return edge
     })
@@ -1122,6 +1134,7 @@ button.dk-row{color:inherit}
     const closeout = entry?.isPendingCloseout ? [closeoutButton(number, closeoutOf(number), 'dk-btn dk-btn--sm dk-btn--unlock')] : []
     const up = el('button', 'dk-parent__link', parent === undefined ? '' : `${parent.kind === 'spec' ? 'Spec' : 'Map'} #${parent.number} ${parent.title}`)
     up.type = 'button'
+    up.dataset.focus = 'parent'
     up.addEventListener('click', () => openMap(parent.number))
     const belongs = parent === undefined ? [] : [el('div', 'dk-parent caption', el('span', '', '属于'), up)]
 
@@ -1580,6 +1593,38 @@ button.dk-row{color:inherit}
   const prefilling = new Map()
   // The last prefill of each.
   const prefilled = new Map()
+  // The prefill button pressed with the focus on it, which the browser takes
+  // off it as it goes off: its place, as the focus knows it, and whether
+  // what it fills in is still being filled in. Once the button in that place
+  // is on again, drawn since or not, the focus goes back on it, while it is
+  // still nowhere in the page and the window has not given it to the Host;
+  // the button gone, or off for another reason, on its row or card, or its
+  // skill's row, else on the first control of what holds it. Moved
+  // elsewhere by the person meanwhile, or another tab, or into or back from
+  // a detail, it goes nowhere.
+  let pressed
+  const press = (button, busy) => {
+    if (document.activeElement === button) pressed = { key: focusKey(button), layer: button.closest('#into, [data-panel]'), busy }
+  }
+  document.addEventListener('focusin', () => {
+    pressed = undefined
+  })
+  const placePressed = () => {
+    if (pressed === undefined) return
+    if (away) {
+      pressed = undefined
+      return
+    }
+    const { key, layer, busy } = pressed
+    const controls = [...document.querySelectorAll('button, [data-focus]')].filter(each => each.closest('[hidden]') === null)
+    const button = controls.find(each => each.tagName === 'BUTTON' && focusKey(each) === key)
+    if (button?.disabled && busy()) return
+    pressed = undefined
+    const nowhere = document.activeElement === null || document.activeElement === document.body
+    const holder = controls.find(each => each.dataset.focus === key.split('/')[0] && /^(row|card|skill):/.test(each.dataset.focus))
+    const first = layer === null ? undefined : controls.find(each => layer.contains(each) && !each.disabled)
+    if (nowhere) (button?.disabled === false ? button : holder ?? first)?.focus({ preventScroll: true })
+  }
   // The button, filling in what `text()` gives as the thing `key`, off
   // besides while `off()`: drawn as the prefills stand, and drawn so again
   // with them. Not a click on the row it is in.
@@ -1590,6 +1635,7 @@ button.dk-row{color:inherit}
     drawPrefill(button)
     button.addEventListener('click', event => {
       event.stopPropagation()
+      press(button, () => prefilling.has(key))
       prefill(key, button.dataset.label, text())
     })
     return button
@@ -1601,6 +1647,7 @@ button.dk-row{color:inherit}
   }
   const showPrefills = () => {
     for (const button of document.querySelectorAll('[data-prefill]')) drawPrefill(button)
+    placePressed()
   }
   // Fills in the text as the thing `key`, from a button with the words
   // `label`; every button of the same is off from the click and stays off
@@ -1668,9 +1715,11 @@ button.dk-row{color:inherit}
     button.dataset.execute = String(number)
     button.dataset.label = label
     drawExecute(button)
-    // Not a click on the row it is in.
+    // Not a click on the row it is in. The asking's "接管" places the focus
+    // by its own rules.
     button.addEventListener('click', event => {
       event.stopPropagation()
+      if (button.dataset.takeover === undefined) press(button, () => filling.has(number))
       onClick()
     })
     return button
@@ -1825,7 +1874,7 @@ button.dk-row{color:inherit}
   })
   window.addEventListener('blur', () => {
     away = true
-    refocus = undefined
+    refocus = pressed = undefined
   })
   window.addEventListener('focus', () => {
     away = false
@@ -2088,7 +2137,18 @@ button.dk-row{color:inherit}
       notice.hidden = why === undefined || (notice === $('into-noexec') && into?.steps.at(-1).task === undefined)
       if (why !== undefined) sayUnexecutable(notice, why)
     }
+    const from = document.activeElement
     for (const button of document.querySelectorAll('[data-execute]')) drawExecute(button)
+    // The focus on a "执行" put off where it is, as implement can no longer
+    // be used, goes on its row or card, else on the first control of what
+    // holds it: the browser would move it off onto the page. The asking's
+    // "接管" places the focus by its own rules.
+    if (from?.dataset.execute !== undefined && from.disabled && from.dataset.takeover === undefined && !filling.has(Number(from.dataset.execute))) {
+      const holder = from.closest('[data-focus^="row:"], [data-focus^="card:"]')
+      const layer = from.closest('#into, [data-panel]')
+      ;(holder ?? [...layer.querySelectorAll('button, [data-focus]')].find(each => !each.disabled && each.closest('[hidden]') === null))?.focus({ preventScroll: true })
+    }
+    placePressed()
     // The asking's "接管" the focus was on, off until now, takes it again.
     const focus = takeover?.focus === undefined ? null : document.querySelector(`[data-takeover="${takeover.focus}"]`)
     if (focus !== null && !focus.disabled && document.activeElement !== focus) focus.focus()
@@ -2186,6 +2246,8 @@ button.dk-row{color:inherit}
       el('span', 'dk-skill__actions', prefillButton(skill), smallButton('原文')),
     )
     row.tabIndex = 0
+    // Known to the focus by the skill's name.
+    row.dataset.focus = `skill:${skill.name}`
     // A click on the row or on "原文" opens the skill's text.
     row.addEventListener('click', () => openSkillText(skill))
     return row
@@ -2272,12 +2334,12 @@ button.dk-row{color:inherit}
     skillsKey = key
     if (read.status === 'fulfilled') {
       const answer = read.value
-      showSkills(answer)
+      keepFocus($('skill-list'), () => showSkills(answer))
       askMatt = answer.ok ? (answer.skills.find(skill => skill.name === 'ask-matt') ?? null) : null
       implement = answer.ok ? (answer.skills.find(skill => skill.name === 'implement') ?? null) : { failure: answer.failure }
     } else {
       skillsListed = []
-      $('skill-list').replaceChildren(failedNotice('读取 Skill Source 失败', skillFailure({ message: read.reason.message })))
+      keepFocus($('skill-list'), () => $('skill-list').replaceChildren(failedNotice('读取 Skill Source 失败', skillFailure({ message: read.reason.message }))))
       askMatt = null
       implement = { failure: { message: read.reason.message } }
     }
@@ -2571,7 +2633,7 @@ button.dk-row{color:inherit}
     into = undefined
     closeTakeOver()
     closeResult()
-    refocus = undefined
+    refocus = pressed = undefined
     if (isSwitching) {
       isSwitching = false
       showMap()
