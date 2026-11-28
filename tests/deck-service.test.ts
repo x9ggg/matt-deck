@@ -4044,6 +4044,14 @@ test('started for Codex, deck_skills reads a name as before where, broken at a c
       'long-key': `x: 1${s}${'k'.repeat(1025)}: 2${s}name: actual\ndescription: Works`,
       'no-space': `x:1${s}name: actual\ndescription: Works`,
       'odd-key': `@x: 1${s}name: actual\ndescription: Works`,
+      'quoted-lead': `x: 1${s}name: " actual"\ndescription: Works`,
+      'quoted-trail': `x: 1${s}name: 'actual '\ndescription: Works`,
+      'quoted-tab': `x: 1${s}name: "\tactual"\ndescription: Works`,
+      'quoted-nbsp': `x: 1${s}name: "actual\u00a0"\ndescription: Works`,
+      'quoted-two-spaces': `x: 1${s}name: "a  b"\ndescription: Works`,
+      'vertical-tab': `x: 1${s}name: actual\u000b\ndescription: Works`,
+      'form-feed': `x: 1${s}name: actual${s}y: 2\u000c\ndescription: Works`,
+      'tab-comment': `x: 1${s}\t# c${s}name: actual\ndescription: Works`,
     }
     for (const [folder, frontmatter] of Object.entries(writings)) {
       await rawSkill(source, folder, `---\n${frontmatter}\n---\n`)
@@ -4064,18 +4072,28 @@ test('started for Codex, deck_skills reads a name as before where, broken at a c
   }
 })
 
-test('started for Codex, deck_skills reads a name past a line break over an indented comment, as Codex parses it so', async t => {
+test('started for Codex, deck_skills reads a name past a line break over a comment indented by spaces, a key of 1024 characters or a bare colon, as Codex parses it so', async t => {
   for (const separator of ['\r', '\u0085', '\u2028', '\u2029']) {
     const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
     const source = join(user, '.agents', 'skills')
     await rawSkill(source, 'indented-comment', `---\nx: 1${separator}  # c${separator}name: commented\ndescription: Works\n---\n`)
     await rawSkill(source, 'commented', '---\nname: commented\ndescription: Works\n---\n')
+    // A key of 1024 characters, and a colon with nothing after it, are ones
+    // Codex parses too.
+    await rawSkill(source, 'long-key', `---\nx: 1${separator}${'k'.repeat(1024)}: 2${separator}name: keyed\ndescription: Works\n---\n`)
+    await rawSkill(source, 'keyed', '---\nname: keyed\ndescription: Works\n---\n')
+    await rawSkill(source, 'bare-colon', `---\nx:${separator}name: emptied\ndescription: Works\n---\n`)
+    await rawSkill(source, 'emptied', '---\nname: emptied\ndescription: Works\n---\n')
     const deck = startDeck(dir, { HOME: user }, 'codex')
     t.after(deck.stop)
 
     assert.deepEqual(copies(await deck.callTool('deck_skills')), [
+      ['bare-colon', 'missing'],
       ['commented', 'several'],
+      ['emptied', 'several'],
       ['indented-comment', 'missing'],
+      ['keyed', 'several'],
+      ['long-key', 'missing'],
     ], JSON.stringify(separator))
   }
 })

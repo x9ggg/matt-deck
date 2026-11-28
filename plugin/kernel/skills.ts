@@ -255,18 +255,23 @@ const codexName = (text: string, folder: string) => {
   // Codex parses the pieces only where they make a frontmatter it can parse;
   // where not, it goes on to read it line by line, as Deck did before. So
   // Deck reads its name off the pieces only where each is a line of spaces
-  // alone, a comment, or an unindented `key: value` field whose key is of 1024
-  // characters at most and not written twice, and whose value is plain text
-  // or a closed quote: no block, flow, escape, unquoted value holding a colon
-  // and a space or ending in one or opening with a dash and a space, a lone
-  // dash, `]` or `}`; no metadata with a value; no name of `~` or null, a
-  // comment, quoted blanks or one followed by a comment. Otherwise it reads
-  // the lines as before.
+  // alone, a comment indented by spaces or none, or an unindented `key: value`
+  // field whose key is of 1024 characters at most and not written twice, and
+  // whose value is plain text or a closed quote: no character YAML refuses,
+  // no block, flow, escape, unquoted value holding a colon and a space or
+  // ending in one or opening with a dash and a space, a lone dash, `]` or
+  // `}`; no metadata with a value; no name of `~` or null, a comment, quoted
+  // blanks, one followed by a comment or one Codex trims or joins at single
+  // spaces otherwise. Otherwise it reads the lines as before.
   let readable = pieces.length > frontmatter.length
   const keys = new Set<string>()
   for (const piece of readable ? pieces : []) {
-    if (/^ *$/.test(piece) || /^[ \t]*#/.test(piece)) {
+    if (/^ *$/.test(piece) || /^ *#/.test(piece)) {
       continue
+    }
+    if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u0084\u0086-\u009F\uFFFE\uFFFF]/.test(piece)) {
+      readable = false
+      break
     }
     const colon = piece.indexOf(':')
     const key = colon > 0 ? piece.slice(0, colon) : ''
@@ -292,7 +297,9 @@ const codexName = (text: string, folder: string) => {
           raw === 'NULL' ||
           raw[0] === '#' ||
           (quoted && !/[^ \t]/.test(parsed.value)) ||
-          (!quoted && /[ \t]#/.test(raw))))
+          (!quoted && /[ \t]#/.test(raw)) ||
+          // Codex trims a name and joins it at single spaces.
+          parsed.value.split(/\p{White_Space}+/u).filter(Boolean).join(' ') !== parsed.value))
     ) {
       readable = false
       break
