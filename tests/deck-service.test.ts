@@ -477,6 +477,32 @@ test('started for Codex, deck_setup_survey says $ask-matt in Codex calls an ask-
   }
 })
 
+test('started for Codex, deck_setup_survey says $ask-matt calls no ask-matt whose file holds invalid UTF-8 bytes while other skills in the same directory still scan', async t => {
+  const user = await home()
+  const dir = await workspace(
+    JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path: '~/.agents/skills' } }),
+  )
+  const source = join(user, '.agents', 'skills')
+  await mkdir(join(source, 'ask-matt'), { recursive: true })
+  await writeFile(
+    join(source, 'ask-matt', 'SKILL.md'),
+    Buffer.concat([Buffer.from('---\nname: ask-matt\ndescription: Ask what to do next.\n---\n\nBody '), Buffer.from([0xff])]),
+  )
+  await skill(source, 'tdd')
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const surveyed = await codex.callTool('deck_setup_survey')
+  const listed = await codex.callTool('deck_skills')
+
+  assert.deepEqual(surveyed.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: false }])
+  assert.equal(surveyed.structuredContent.existing.hostCallsAskMatt, false)
+  assert.deepEqual(copies(listed), [
+    ['ask-matt', 'missing'],
+    ['tdd', 'same'],
+  ])
+})
+
 test('started for Codex, deck_setup_survey offers first the copy of Matt skills whose ask-matt $ask-matt in Codex calls, the others after it in their order', async t => {
   const dir = await workspace()
   const user = await home()
@@ -3361,6 +3387,122 @@ test('started for Codex, deck_skills takes no file of the same name Codex does n
   }
 
   assert.deepEqual(results, [[['ok', 'same']], [['ok', 'different']]])
+})
+
+test('started for Codex, deck_skills accepts complex YAML frontmatter and non-Rust whitespace, excludes U+0085-only descriptions and nested/empty metadata', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const source = join(user, '.agents', 'skills')
+  for (const [folder, text] of [
+    ['block', '---\nname: block\n? |-\n  description\n: Works\n---\n'],
+    ['escaped', '---\nname: escaped\n"d\\u0065scription": Works\n---\n'],
+    ['flow', '---\n{\ndescription:\nWorks\n}\n---\n'],
+    ['feff', '---\nname: feff\ndescription: "\uFEFF"\n---\n'],
+    ['unquoted-feff', '---\nname: unquoted-feff\ndescription: \uFEFF\n---\n'],
+    ['u0085', '---\nname: u0085\ndescription: "\u0085"\n---\n'],
+    ['block-u0085', '---\nname: block-u0085\ndescription: >\n  \u0085\n---\n'],
+    ['block-feff', '---\nname: block-feff\ndescription: >\n  \uFEFF\n---\n'],
+    ['single-blank', "---\nname: single-blank\ndescription: '   '\n---\n"],
+    ['comment-only-desc', '---\nname: comment-only-desc\ndescription:   # comment\n---\n'],
+    ['escaped-val', '---\nname: escaped-val\ndescription: "\\u0041"\n---\n'],
+    ['dup-desc', '---\nname: dup-desc\ndescription: "   "\ndescription: Works\n---\n'],
+    ['with-meta', '---\nname: with-meta\nmetadata:\n  author: matt\n---\n'],
+    ['nested-desc', '---\nname: nested-desc\nmetadata:\n  description: Nested only.\n---\n'],
+  ]) {
+    await rawSkill(source, folder!, text!)
+  }
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_skills')
+
+  assert.deepEqual(copies(result), [
+    ['block', 'same'],
+    ['block-feff', 'same'],
+    ['block-u0085', 'missing'],
+    ['comment-only-desc', 'missing'],
+    ['dup-desc', 'same'],
+    ['escaped', 'same'],
+    ['escaped-val', 'same'],
+    ['feff', 'same'],
+    ['flow', 'same'],
+    ['nested-desc', 'missing'],
+    ['single-blank', 'missing'],
+    ['u0085', 'missing'],
+    ['unquoted-feff', 'same'],
+    ['with-meta', 'missing'],
+  ])
+})
+
+test('started for Codex, deck_skills takes a quoted description holding a line break, or a line going on past a U+0085, for one it cannot read, so counts it as having one', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const source = join(user, '.agents', 'skills')
+  for (const [folder, text] of [
+    ['double-cr', '---\nname: double-cr\ndescription: "a\rb"\n---\n'],
+    ['single-line-separator', "---\nname: single-line-separator\ndescription: 'a\u2028b'\n---\n"],
+    ['double-paragraph-separator', '---\nname: double-paragraph-separator\ndescription: "Works\u2029"\n---\n'],
+    ['after-nel', '---\nname: after-nel\nx: a\u0085description: Works\n---\n'],
+    ['indented-after-nel', '---\nname: indented-after-nel\nx:\n  a\u0085description: Works\n---\n'],
+    ['nel-alone', '---\nname: nel-alone\ndescription: \u0085\n---\n'],
+  ]) {
+    await rawSkill(source, folder!, text!)
+  }
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_skills')
+
+  assert.deepEqual(copies(result), [
+    ['after-nel', 'same'],
+    ['double-cr', 'same'],
+    ['double-paragraph-separator', 'same'],
+    ['indented-after-nel', 'same'],
+    ['nel-alone', 'missing'],
+    ['single-line-separator', 'same'],
+  ])
+})
+
+test('started for Codex, deck_skills skips files with invalid UTF-8 even in the body when scanning Codex skill directories', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const badBytes = Buffer.concat([Buffer.from('---\nname: bad\ndescription: Valid frontmatter.\n---\n\nBody '), Buffer.from([0xff])])
+  await mkdir(join(user, '.agents', 'skills', 'bad'), { recursive: true })
+  await writeFile(join(user, '.agents', 'skills', 'bad', 'SKILL.md'), badBytes)
+  const alone = startDeck(dir, { HOME: user }, 'codex')
+  t.after(alone.stop)
+  const aloneResult = await alone.callTool('deck_skills')
+  assert.deepEqual(copies(aloneResult), [['bad', 'missing']])
+
+  const paired = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  await skillFile(join(paired.user, '.claude', 'skills'), 'bad', 'Valid skill.')
+  await mkdir(join(paired.user, '.agents', 'skills'), { recursive: true })
+  await symlink(join(paired.user, '.claude', 'skills', 'bad'), join(paired.user, '.agents', 'skills', 'bad'))
+  await mkdir(join(paired.user, '.codex', 'skills', 'bad'), { recursive: true })
+  await writeFile(join(paired.user, '.codex', 'skills', 'bad', 'SKILL.md'), badBytes)
+  const withBadSibling = startDeck(paired.dir, { HOME: paired.user }, 'codex')
+  t.after(withBadSibling.stop)
+  const sameResult = await withBadSibling.callTool('deck_skills')
+  assert.deepEqual(copies(sameResult), [['bad', 'same']])
+
+  await skillFile(join(paired.user, '.codex', 'skills'), 'bad', 'Another valid file.')
+  const diffResult = await withBadSibling.callTool('deck_skills')
+  assert.deepEqual(copies(diffResult), [['bad', 'different']])
+})
+
+test('started for Codex, deck_skills still matches a spaced-fence skill by its frontmatter name while the Skill Source keeps its folder name', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  const source = join(user, '.claude', 'skills')
+  await rawSkill(source, 'folder-name', '--- \nname: frontmatter-name\ndescription: Spaced fence.\n ---\n')
+  await skillFile(source, 'frontmatter-name', 'Valid skill.')
+  await mkdir(join(user, '.agents', 'skills'), { recursive: true })
+  await symlink(join(source, 'folder-name'), join(user, '.agents', 'skills', 'folder-name'))
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_skills')
+
+  assert.deepEqual(copies(result), [
+    ['folder-name', 'missing'],
+    ['frontmatter-name', 'different'],
+  ])
 })
 
 test('deck_skills for Claude Code lists a skill with no description as before, with no copy', async t => {

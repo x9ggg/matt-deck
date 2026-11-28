@@ -90,19 +90,152 @@ const parse = (text: string) => {
 // space around it, which a byte order mark is not and U+0085 is.
 const FENCE = /^(?:[^\S\uFEFF]|\u0085)*---(?:[^\S\uFEFF]|\u0085)*$/
 
+// Rust's `str::trim().is_empty()` whitespace rule: includes U+0085 and excludes
+// U+FEFF, unlike JavaScript's `.trim()`.
+const isRustBlank = (text: string) => !/\P{White_Space}/u.test(text)
+
+// Trim only YAML horizontal spaces (` ` and `\t`) so non-whitespace Unicode
+// characters like U+FEFF on unquoted scalars are not dropped before evaluation.
+const trimAsciiSpace = (text: string) => {
+  let start = 0
+  let end = text.length
+  while (start < end && (text[start] === ' ' || text[start] === '\t')) {
+    start++
+  }
+  while (end > start && (text[end - 1] === ' ' || text[end - 1] === '\t')) {
+    end--
+  }
+  return text.slice(start, end)
+}
+
+// Parse a single-line YAML field value only when Deck can interpret it without
+// full YAML parsing; returns undefined on unclosed/escaped/complex syntax.
+const simpleField = (raw: string) => {
+  if (raw === '' || raw[0] === '#') {
+    return { value: '', inBlock: false, allowIndent: true, flow: false }
+  }
+  if (/^[>|][+-]?$/.test(raw)) {
+    return { value: '', inBlock: true, allowIndent: true, flow: false }
+  }
+  if (raw[0] === '>' || raw[0] === '|') {
+    return undefined
+  }
+  if (raw[0] === '"' || raw[0] === "'") {
+    const quote = raw[0]
+    if (raw.length < 2 || raw.at(-1) !== quote) {
+      return undefined
+    }
+    const inner = raw.slice(1, -1)
+    if (inner.includes(quote) || (quote === '"' && inner.includes('\\'))) {
+      return undefined
+    }
+    return { value: inner, inBlock: false, allowIndent: false, flow: false }
+  }
+  if (raw[0] === '{' || raw[0] === '[') {
+    const close = raw[0] === '{' ? '}' : ']'
+    return raw.endsWith(close) ? { value: raw, inBlock: false, allowIndent: false, flow: true } : undefined
+  }
+  if (/^[&*!%@`?,]/.test(raw)) {
+    return undefined
+  }
+  return { value: raw, inBlock: false, allowIndent: true, flow: false }
+}
+
+// True only when the entire frontmatter uses simple YAML lines Deck can
+// interpret reliably (blank lines, comments, unindented `key: value` fields,
+// and indented continuations owned by a preceding field) and `description` is
+// absent or evaluates to Rust whitespace alone. Complex YAML (explicit keys,
+// flow mappings, leading indentation, escapes, duplicate `description` keys)
+// returns false so Codex's own skill loader is not undercounted.
+const hasConfirmedBlankDescription = (frontmatter: string[]) => {
+  let lastKey: string | undefined
+  let inBlock = false
+  let allowIndent = false
+  let seenDescription = false
+  let descriptionState: 'absent' | 'blank' | 'nonblank' = 'absent'
+
+  for (const line of frontmatter) {
+    if (!/[^ \t]/.test(line)) {
+      continue
+    }
+    // YAML breaks a line at U+0085 too, so what goes on past one may be a
+    // field of its own, unless a quoted value holds it.
+    const nel = line.indexOf('\u0085')
+    if (nel >= 0 && !isRustBlank(line.slice(nel)) && !/^[\w-]+:[ \t]+["']/.test(line)) {
+      return false
+    }
+    if (line[0] === ' ' || line[0] === '\t') {
+      if (lastKey === undefined) {
+        return false
+      }
+      if (!inBlock && /^[ \t]*#/.test(line)) {
+        continue
+      }
+      if (!allowIndent) {
+        return false
+      }
+      if (lastKey === 'description' && !isRustBlank(line)) {
+        descriptionState = 'nonblank'
+      }
+      continue
+    }
+    if (line[0] === '#') {
+      inBlock = false
+      continue
+    }
+
+    const colon = line.indexOf(':')
+    const key = colon > 0 ? line.slice(0, colon) : ''
+    const after = line.slice(colon + 1)
+    // As in fieldsOf, a value holding a carriage return or a Unicode line or
+    // paragraph separator makes the line no field: under a block it goes on
+    // the block, otherwise it names nothing, and no line after it belongs to it.
+    // Quoted, the value may hold them, so Deck cannot tell.
+    if (colon > 0 && /^[\w-]+$/.test(key) && /[\r\u2028\u2029]/.test(after.trim())) {
+      if (/^["']/.test(after.trim())) {
+        return false
+      }
+      if (inBlock) {
+        if (lastKey === 'description' && !isRustBlank(line)) {
+          descriptionState = 'nonblank'
+        }
+      } else {
+        lastKey = undefined
+      }
+      continue
+    }
+    if (colon <= 0 || !/^[\w-]+$/.test(key)) {
+      return false
+    }
+    if (after !== '' && after[0] !== ' ' && after[0] !== '\t') {
+      return false
+    }
+    const parsed = simpleField(trimAsciiSpace(after))
+    if (parsed === undefined) {
+      return false
+    }
+
+    if (key === 'description') {
+      if (seenDescription || parsed.flow) {
+        return false
+      }
+      seenDescription = true
+      descriptionState = parsed.inBlock || isRustBlank(parsed.value) ? 'blank' : 'nonblank'
+    }
+    lastKey = key
+    inBlock = parsed.inBlock
+    allowIndent = parsed.allowIndent
+  }
+
+  return descriptionState !== 'nonblank'
+}
+
 // The name Codex loads a skill file in `folder` by, or undefined when Codex
 // loads no skill from it (codex-rs/skills/src/parser.rs): it has no
 // frontmatter, between a first line and a later one that are fences,
-// holding a line at least; or no description, or one of space alone; or its
-// name, its frontmatter's or else its folder's, is longer than 64
-// characters, counted as Unicode code points. What only YAML would tell,
-// Deck does not: it takes a file for one with no description only where no
-// line may hold a description key, or where the one line that may is the key
-// as its fields read it, empty, and the next line holding more than space or
-// a comment is not indented, so goes on with no value of it. A key written
-// otherwise (indented, quoted, a space before its colon, in a flow mapping,
-// as an explicit key), or two of them, it takes for a description there.
-const DESCRIPTION_KEY = /(?:^|[\s{,])["']?description["']?\s*:|^\s*\?\s*["']?description\b/
+// holding a line at least; or Deck can confirm it has no description or one
+// of Rust whitespace alone; or its name, its frontmatter's or else its
+// folder's, is longer than 64 characters, counted as Unicode code points.
 const codexName = (text: string, folder: string) => {
   const lines = text.split(/\r?\n/)
   const end = lines.findIndex((line, n) => n > 0 && FENCE.test(line))
@@ -112,12 +245,7 @@ const codexName = (text: string, folder: string) => {
   const frontmatter = lines.slice(1, end)
   const fields = fieldsOf(frontmatter)
   const name = fields.name || folder
-  const keys = frontmatter.flatMap((line, n) => (DESCRIPTION_KEY.test(line) ? [n] : []))
-  const below = keys.length === 1 ? frontmatter.slice(keys[0]! + 1).find(line => !/^\s*(?:#.*)?$/.test(line)) : undefined
-  const isBlank =
-    keys.length === 0 ||
-    (keys.length === 1 && /^description:/.test(frontmatter[keys[0]!]!) && (fields.description ?? '').trim() === '' && !/^\s/.test(below ?? ''))
-  if (isBlank || [...name].length > 64) {
+  if (hasConfirmedBlankDescription(frontmatter) || [...name].length > 64) {
     return undefined
   }
 
@@ -215,6 +343,10 @@ const readAll = async (source: SkillSource, workspace: string, home: string, cal
 // directories (`MAX_SCAN_DEPTH` in codex-rs/ext/skills/src/loader/mod.rs).
 const CODEX_SCAN_DEPTH = 6
 
+// Codex decodes the whole skill file strictly as UTF-8, skipping files with
+// invalid sequences while preserving any leading BOM for fence matching.
+const HOST_UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+
 // Every skill file the host finds itself under `directories` and loads, its
 // links resolved, with the name the host knows it by: its frontmatter's
 // `name`, or when that is empty the name of its folder, links resolved. The
@@ -244,7 +376,9 @@ const scanHost = async (directories: string[], workspace: string, home: string) 
             queue.push({ dir: path, depth: depth + 1 })
           }
         } else if (entry.isFile() && entry.name === 'SKILL.md') {
-          const text = await readFile(path, 'utf8').catch(() => undefined)
+          const text = await readFile(path)
+            .then(bytes => HOST_UTF8.decode(bytes))
+            .catch(() => undefined)
           if (text !== undefined) {
             const file = await realpath(path)
             const name = codexName(text, basename(dirname(file)))
