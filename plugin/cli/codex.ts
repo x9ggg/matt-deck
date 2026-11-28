@@ -15,7 +15,7 @@ import { CODEX_CONFIGURE_SKILL, CODEX_HOOK_TOOL } from '../server/hosts.ts'
 
 const USAGE = `Usage: node <matt-deck>/cli/codex.ts <install|uninstall>
 
-install：把 Deck 服务注册进 Codex 的用户全局配置 ~/.codex/config.toml，原有内容保留；在 ~/.agents/skills 里生成配置技能 ${CODEX_CONFIGURE_SKILL}，在它旁边写 agents/openai.yaml，让 Codex 只在你用 $${CODEX_CONFIGURE_SKILL} 调用时用它（那里已有一份不是 Deck 写的就不改）；在 ~/.codex/hooks.json 里加上 Deck 的钩子，原有的钩子保留，改之前先备份。装完要在终端里运行一次 codex 信任这个钩子，再重启 Codex 桌面应用。注册和配置技能指向运行 install 的这一份插件，它挪了位置或更新之后要重新运行一次 install。
+install：把 Deck 服务注册进 Codex 的用户全局配置 ~/.codex/config.toml，原有内容保留；在 ~/.agents/skills 里生成配置技能 ${CODEX_CONFIGURE_SKILL}，在它旁边写 agents/openai.yaml，让 Codex 只在你用 $${CODEX_CONFIGURE_SKILL} 调用时用它（那里已有一份不是 Deck 写的就不改）；在 ~/.codex/hooks.json 里加上 Deck 的钩子，原有的钩子保留，改之前先备份。装完要在终端里运行一次 codex 信任这个钩子，再重启 Codex 桌面应用。注册和配置技能指向运行 install 的这一份插件，它挪了位置或更新之后要重新运行一次 install；注册里的 node 路径没了之后（例如版本管理器换掉或卸掉了这个版本），也要重新运行一次 install。
 uninstall：从 ~/.codex/config.toml 移除 Deck 服务的注册，别的内容不动；移除 Deck 生成的 ${CODEX_CONFIGURE_SKILL} 和 Deck 写的 agents/openai.yaml；从 ~/.codex/hooks.json 移除 Deck 的钩子。
 退出码：0 成功，1 读写失败、要读的文件是一个目录（uninstall 时只算 config.toml 和 hooks.json）、要写的位置写不进去或是链到不存在的文件的链接、要写的位置上面的一级是文件或链到不存在的位置的链接、config.toml 里有不是 UTF-8 的字节、config.toml 里有到文件末尾都没闭合的数组（或内联表、多行字符串）、Deck 服务注册不是 [mcp_servers.matt_deck] 表头的写法、install 时 mcp_servers 写成了内联表、那里已有一份不是 Deck 生成的 ${CODEX_CONFIGURE_SKILL}、hooks.json 读不懂或里有 Deck 改写时会变样的写法，2 参数错误。
 `

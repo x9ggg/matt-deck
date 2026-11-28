@@ -21,7 +21,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 - 一个新建的目录，当作未配置的项目：在里面运行 `git init`，再 `git remote add origin <准备里那个仓库的地址>`，不放 `.matt-deck/config.json`。Task Source 没有字段指定仓库，就是 Workspace 自己的 GitHub 仓库，`gh` 在 Workspace 里运行，从 remote 认出仓库；不是 git 仓库的文件夹，Workspace 就是它自己，`gh` 报 `not a git repository`，配置之后 Pane 显示的是读取失败。也不要建在别的检出里面：Deck 从会话的目录往上找最近的 `.git`，建在某个仓库里的目录算那个仓库的项目，1.5 可能看不到“此项目未配置。”。第一次在桌面应用里打开它，要先在宿主的提示里信任它（#68 第 4 步）。
 - 改过 `plugin/codex/pane.html` 之后要重启桌面应用：宿主在一次运行里缓存页面，新开的标签页拿到的还是旧页面（#68）。
 - 6.2、8.6 和 8.7 用一份记日志的页面副本：直接改专门检出里的 `plugin/codex/pane.html`，不提交。6.2 开始前换上、重启桌面应用，一直留到第 8 节做完；第 9 节之前运行 `git -C <检出> checkout plugin/codex/pane.html` 换回原来的页面，再重启。不要在第 8 节中间换：重启会让那里备好的乙的 Occupancy 变成 Orphaned。改法照页面现有的结构：在 `<body>` 末尾的 `<script>` 前面加一个 `<pre id="probe-log" style="color:var(--ink);white-space:pre-wrap"></pre>`（它在 `.dk-pane` 外面，不写颜色的话深色下是黑字，不写换行的话长行被截）；在 `<script>` 里那个 async 函数的开头定义一个 `log`，把一行 `new Date().toISOString()`、事件和当时的 `document.activeElement` 写进 `probe-log` 末尾，同时 `console.log` 一份；元素写成标签名加它的文字，文字截到前 15 个字左右，如 `BUTTON 取消`；`BODY`、`HTML` 只写标签名：它们的文字是整页的内容，前 15 个字多半是空白，写出来没有意义（载入时、点“我现在该做什么”之后焦点落回页面时、之后每 2 秒一次的 `deck_recommendation` 都会写这样一行）；`null` 照写。每行同时记下 `document.hasFocus()`（8.6、8.7 用）。在 `callTool` 的第一行 `log(name)`，60 秒一次的读取、“刷新”和 `deck_recommendation` 都经过它；在 `log` 定义之后立刻记一次 `document.visibilityState`，再 `document.addEventListener('visibilitychange', () => log(document.visibilityState))`；再加 `document.addEventListener('focusout', event => { log(...); setTimeout(() => log('focusout 之后'), 0) }, true)`（8.6、8.7 用），第一次记 `event.target` 和 `event.relatedTarget`：派发 `focusout` 时焦点还没落到新元素上，这一行的 `activeElement` 多半是 `BODY` 或 `null`，焦点落到哪里看紧接的“focusout 之后”那一行（8.7 说了什么时候这一行不算数）。再加 `document.addEventListener('focusin', event => log(...), true)`，记 `event.target`；和 `window.addEventListener('focus', () => log('window focus'))`、`window.addEventListener('blur', () => log('window blur'))`（8.6 用：⌘Tab 回到桌面应用时 `focusout` 和 `visibilitychange` 都不一定有，回来时焦点进没进页面看 `window focus` 那一行和随后的 `focusin`）。这几行照样带 `activeElement` 和 `hasFocus`。看日志：在 Pane 里滚到最底下读 `probe-log`，用截屏留下；滚动不点页面，不改焦点。Pane 重画时 `probe-log` 不会被清掉：页面重画的只是 `.dk-pane` 里的几块，`<pre>` 在它外面。**要核对**：宿主会不会重新加载页面：日志从头开始、少了前面的行，就是重新加载过，照实记下。`console.log` 那一份能不能在桌面应用里看到，没有记录看过，看不到就只用 `probe-log`。`document.hasFocus()` 在桌面应用里的表现也没有看过：按浏览器的行为，焦点在页面里时是 `true`，回到宿主的输入框时是 `false`。
-- 下面说“预填”，指 Pane 把文字填进 Codex 的输入框、不发出：这件事在 `adr6-thread-tab` 探针“预填技能调用”里看到过，各条只写填进去的文字。这适用于下面所有预填的步骤（1.5、第 3 节、第 4 节、6.2、第 8 节的接管）：宿主拒绝预填时，Pane 在标签页下面出一条红框的结果提示“没有填入输入框”（“我现在该做什么”和“再问一次”被拒时，写在“下一步”里“没有填入推荐请求”那条提示里），说明是“宿主拒绝了这次预填：<宿主给的原因>。”加怎么重试；遇到时把宿主给的原因照实记下。
+- 下面说“预填”，指 Pane 把文字填进 Codex 的输入框、不发出：这件事在 `adr6-thread-tab` 探针“预填技能调用”里看到过，各条只写填进去的文字。这适用于下面所有预填的步骤（1.5、第 3 节、第 4 节、6.2、第 8 节的接管）：宿主拒绝预填时，Pane 在标签页下面出一条红框的结果提示“没有填入输入框”（未配置的项目里没有标签页，1.5 的“配置这个项目”被拒时，这条提示就在抬头下面；第 8 节接管成了之后 Execute Prompt 被拒时，标题是“#<编号> 已转给本 Session，Execute Prompt 没有填入”；“我现在该做什么”和“再问一次”被拒时，写在“下一步”里“没有填入推荐请求”那条提示里），说明是“宿主拒绝了这次预填：<宿主给的原因>。”加怎么重试；遇到时把宿主给的原因照实记下。
 - 下面说“打开 Pane”，指在会话里按 ⌘T 或点右侧标签栏的“＋”，在“打开”旁的更多工具菜单里选 Matt Deck。
 
 ## 1. 安装、信任钩子和重启
@@ -29,7 +29,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 **1.1 安装的输出**
 
 - 做：运行 `node <检出>/plugin/cli/codex.ts install`。准备里已经退出了桌面应用；别的装了 Deck、开在 Configured Project 里的 Claude Code Session 照 8.9 的说法能退的先退：它们的心跳和 install 争本机状态的写锁，争不到的话 install 忘不掉之前收到的钩子调用，1.2 的橙色提示不出现。
-- 应看到：输出逐行说写了 `~/.codex/config.toml`、`~/.agents/skills/matt-deck-configure/SKILL.md`、它旁边的 `agents/openai.yaml`（这里原来就有一份不是 Deck 写的时，说没有改它）、`~/.codex/hooks.json`（原来有这个文件时说备份在 `hooks.json.before-matt-deck`；准备里的 uninstall 留下了备份时，即说“安装前的钩子文件备份留在 … 没有删”的那种，这一行前面还有“之前留下的备份 … 已挪到 …”，挪到的名字是后面加上第一个没被占的编号，如 `hooks.json.before-matt-deck.1`；Deck 之后不再碰这份带编号的，确认内容不再需要后可以自己删）；接着是“接下来两步：在终端里运行一次 codex，在钩子审查里信任 Deck 的钩子；再重启 Codex 桌面应用。之后每个 Session 的标签页菜单里出现 Matt Deck，发出的 $implement 会登记占用。”；倒数第二行写明注册指向哪一份插件；最后一行写明注册里的 `node` 是哪个路径，这个路径没了之后要重新运行一次 install。`config.toml` 里 `[mcp_servers.matt_deck]` 的 `command` 是一个 `node` 的绝对路径，和最后一行写的一字不差。
+- 应看到：输出逐行说写了 `~/.codex/config.toml`、`~/.agents/skills/matt-deck-configure/SKILL.md`、它旁边的 `agents/openai.yaml`（这里原来就有一份不是 Deck 写的时，说没有改它）、`~/.codex/hooks.json`（原来有这个文件时说备份在 `hooks.json.before-matt-deck`；准备里的 uninstall 留下了备份时，即说“安装前的钩子文件备份留在 … 没有删”的那种，这一行前面还有“之前留下的备份 … 已挪到 …”，挪到的名字是后面加上第一个没被占的编号，如 `hooks.json.before-matt-deck.1`；Deck 之后不再碰这份带编号的，确认内容不再需要后可以自己删）；接着是“接下来两步：在终端里运行一次 codex，在钩子审查里信任 Deck 的钩子；再重启 Codex 桌面应用。之后每个 Session 的标签页菜单里出现 Matt Deck，发出的 $implement 会登记占用。”；“注册和配置技能指向的是 …”那一句写明注册指向哪一份插件；“注册里的 node 是 …”那一句写明注册里的 `node` 是哪个路径，这个路径没了之后要重新运行一次 install。`config.toml` 里 `[mcp_servers.matt_deck]` 的 `command` 是一个 `node` 的绝对路径，和那一句写的一字不差。
 
 **1.2 没信任钩子时**
 
@@ -62,7 +62,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 
 **1.7 注册里的 node**
 
-- 做：拿 1.1 输出最后一行写的 `node` 路径去对 `config.toml` 里的 `command`，看它是哪种（Homebrew 的链接、版本管理器的路径，还是真实路径）。
+- 做：拿 1.1 输出里“注册里的 node 是 …”那一句写的 `node` 路径去对 `config.toml` 里的 `command`，看它是哪种（Homebrew 的链接、版本管理器的路径，还是真实路径）。
 - 应看到：是 Homebrew 的 `bin` 目录里的链接时，重启后桌面应用用这条路径起得来 Deck 服务，Pane 能打开（#68 第 1 步）。别的写法：**要核对**：同样起得来，Pane 能打开（#89）。
 
 **1.8 配置技能只在显式调用时用**
@@ -137,7 +137,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 
 **3.9 钩子慢的时候**
 
-- 做：只让到 GitHub 的连接挂住，而不是立刻失败；到模型服务的连接不能动，否则回合开始不了。只是断网的话，`gh` 可能立刻报连不上，碰不到钩子的 `timeout: 10`。在 `/etc/hosts` 里加一行 `10.255.255.1 api.github.com`（一个不可路由的地址，连接会一直等着），运行 `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder` 让它生效，再在终端里运行 `gh api user`，记下（**要核对**）它多久失败；它在 10 秒内就失败的话（例如立刻报连不上），钩子碰不到 `timeout: 10`，删掉那一行、清缓存，这一步记为没做。Deck 读 Task Source 时调用 `gh` 不设超时，8.6、8.8 等 `gh` 失败全靠这里量出的时长：那两处等过这个时长的两倍 `gh` 还没失败的话，先删掉 `/etc/hosts` 里那一行、清缓存，把那一步记为没做。这个时长超过 60 秒时，Pane 的定时读取在这期间不发起，等这次读取回答（#116），所以失败的回答照常画出来。这一行对整台机器上所有连 `api.github.com` 的程序都生效，别的 Session 里的 `gh` 也会挂住，改回之前不要在别处用。离这个会话的 Pane 上一次读取（60 秒一次的读取或“刷新”）超过 15 秒再发：钩子的工具先用 15 秒内读过的 Task Source，不连 GitHub；超过了就必须现读，`gh` 一直挂到失败。所以这种挡法下这个 Task 一定不登记：Deck 自己读 Task Source 失败，吞掉错误、不登记，不论宿主超时后怎么做。发出 `$implement #<编号>`（另一个可执行的 Task），记下从按发送到回合开始用了多久；回合开始后停下它，agent 读 GitHub 也会挂住。最后删掉 `/etc/hosts` 里那一行，再运行一次上面那条清缓存的命令。
+- 做：只让到 GitHub 的连接挂住，而不是立刻失败；到模型服务的连接不能动，否则回合开始不了。只是断网的话，`gh` 可能立刻报连不上，碰不到钩子的 `timeout: 10`。在 `/etc/hosts` 里加一行 `10.255.255.1 api.github.com`（一个不可路由的地址，连接会一直等着），运行 `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder` 让它生效，再在终端里运行 `gh api user`，记下（**要核对**）它多久失败；它在 10 秒内就失败的话（例如立刻报连不上），钩子碰不到 `timeout: 10`，删掉那一行、清缓存，这一步记为没做。Deck 读 Task Source 时调用 `gh` 不设超时，8.6、8.8 等 `gh` 失败全靠这里量出的时长：那两处等过这个时长的两倍 `gh` 还没失败的话，先删掉 `/etc/hosts` 里那一行、清缓存，把那一步记为没做。这个时长超过 60 秒时，Pane 的定时读取在这期间不发起，等这次读取回答（#116），所以失败的回答照常画出来。这一行对整台机器上所有连 `api.github.com` 的程序都生效，别的 Session 里的 `gh` 也会挂住，改回之前不要在别处用。离这个会话的 Pane 上一次读取（60 秒一次的读取或“刷新”）读完超过 15 秒再发：钩子的工具先用读完 15 秒内的 Task Source，不连 GitHub；超过了就必须现读，`gh` 一直挂到失败。所以这种挡法下这个 Task 一定不登记：Deck 自己读 Task Source 失败，吞掉错误、不登记，不论宿主超时后怎么做。发出 `$implement #<编号>`（另一个可执行的 Task），记下从按发送到回合开始用了多久；回合开始后停下它，agent 读 GitHub 也会挂住。最后删掉 `/etc/hosts` 里那一行，再运行一次上面那条清缓存的命令。
 - 应看到：**要核对**：从按发送到回合开始用了多久，看钩子里写的 `timeout: 10` 的单位是不是秒；超时后宿主怎么做（对话里有没有报错、回合是否照常开始）（#74）。那个 Task 没登记是 Deck 读 Task Source 失败的结果，说明不了宿主的超时行为，不当作这一步的结果。挡着的这段时间里 Pane 的读取也在等 `gh`：一次读取 10 秒还没结束，抬头写“没有应答”，内容顶上出橙框的“Deck 服务还没应答。”（#94）；删掉那一行之后点“刷新”，提示消失。
 
 ## 4. 会话忙碌时预填
@@ -232,7 +232,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 
 **8.8 读屏软件**
 
-- 做：打开 macOS 的旁白（VoiceOver），在 Pane 上打开一个接管确认，等两三分钟不动。再让 Pane 上出现读取失败提示：照 3.9 在 `/etc/hosts` 里加那一行、清 DNS 缓存（只挡 `api.github.com`，到模型服务的连接不动，对整台机器的影响同 3.9），在抬头刚变成“刚刚”时（离下一次 60 秒的读取还远）点“刷新”，等 `gh` 失败、红框出现，再等两三分钟。钩子未生效提示只在本机没记下钩子调用时显示，这时已经看不到，留到第 10 节重装之后、发消息之前做。做完关掉旁白，删掉 `/etc/hosts` 里那一行，再运行一次 3.9 那条清缓存的命令，点“刷新”：第 9、10 节都要连得上 GitHub。
+- 做：打开 macOS 的旁白（VoiceOver），在 Pane 上打开一个接管确认，等两三分钟不动。再让 Pane 上出现读取失败提示：照 3.9 在 `/etc/hosts` 里加那一行、清 DNS 缓存（只挡 `api.github.com`，到模型服务的连接不动，对整台机器的影响同 3.9），然后点“刷新”：它停用着的话（一次读取开始后的 10 秒内），等抬头变成“没有应答”再点。等 `gh` 失败、红框出现，再等两三分钟。钩子未生效提示只在本机没记下钩子调用时显示，这时已经看不到，留到第 10 节重装之后、发消息之前做。做完关掉旁白，删掉 `/etc/hosts` 里那一行，再运行一次 3.9 那条清缓存的命令，点“刷新”：第 9、10 节都要连得上 GitHub。
 - 应看到：挡着的时候，每次读取（“刷新”和之后的定时读取）开始 10 秒还没结束，抬头写“没有应答”，内容最上面出橙框的“Deck 服务还没应答。”/“点“刷新”重新读取。”，直到 `gh` 失败（#94，假宿主下测过）。这是预期：它在每次读取开始 10 秒后出现，`gh` 失败之后消失；定时读取等这次读取回答之后，才在下一个 60 秒的点发起（#116），所以 `gh` 失败的时长超过 60 秒时，两次读取之间隔两分钟或更久。**要核对**：两次之间（`gh` 失败之后、下一次读取开始 10 秒之前）看：“任务”顶上是“读取 Task 失败”，下面是原因（`gh` 的报错认得出是连接问题时是“连不上 GitHub。检查网络后点“刷新”重试。”，认不出时是“`gh` 出错：<报错>。点“刷新”重试。”），抬头的新鲜度写“读取失败”；橙框出现时它排在红框上面，抬头换回“没有应答”。“刷新”那次读取不会被 60 秒的定时读取取代，`gh` 失败时红框就出现；`gh` 失败的时长超过 60 秒时也一样（假宿主下挂 70 秒，60 秒发起的那次在 130 秒画出红框，#116）。改回之后点“刷新”，提示消失（假宿主下测过）。接管确认带 `role="status"`，每次读取（60 秒一次）整张重建，旁白是否每次都把它重读一遍（#76）。另三种提示也带 `role="status"`：钩子提示每次读取只是显示或隐藏，读取失败提示每次换一遍文字，橙框每次读取显示、隐藏一次；看旁白会不会因此重读。写下读了几次、读的是什么。**要核对**：旁白读红框提示时，读出的是标题和说明，前面没有“读取失败”（#128；读屏在宿主的网页视图里实际读到什么，未在桌面应用里核对），写下读到的原话。
 
 **8.9 结束 Claude Code 的 Session**
@@ -262,7 +262,7 @@ Deck 在 Codex 桌面应用上的有些行为，两个测试接缝（Deck 服务
 - 做：不认的话，最后在终端里运行一次 `codex`，在钩子审查里再信任 Deck 的钩子，重启桌面应用，免得走完清单之后钩子不跑。
 - 应看到：终端里出现 Deck 的钩子的审查，信任之后 `config.toml` 的 `[hooks.state]` 里有它的记录（同 1.3）。
 - 做：在平常用的那份检出里运行一次 `node <平常的检出>/plugin/cli/codex.ts install`，重启桌面应用。走到这里，注册和 `~/.agents/skills/matt-deck-configure` 指的都是专门的检出，不换回来的话，删掉专门的检出之后 Codex 就起不来 Deck 服务。钩子已经在，install 不动它，信任不受影响。走完之后 Deck 是装着的；准备之前它不在 Codex 里的话，想恢复原样就再运行一次 `node <平常的检出>/plugin/cli/codex.ts uninstall`。
-- 应看到：install 说“Deck 的钩子已经在 … 里，没有改动。”，倒数第二行写的注册指向平常的那份检出。
+- 应看到：install 说“Deck 的钩子已经在 … 里，没有改动。”，“注册和配置技能指向的是 …”那一句写的是平常的那份检出。
 - 做：准备里重跑过配置、换了 Skill Source 的话，把它改回原来那份：在 Configured Project 里新建会话，发 `$matt-deck-configure`，配置技能问是否修改时选修改，Task Source 照原样，Skill Source 选准备里抄下的那一份（本机找到的插件和目录都在候选里）。候选里没有它的话，手工把 `.matt-deck/config.json` 里的 `skillSource` 改回抄下的那一段。没重跑过就跳过这一步。
 - 应看到：`.matt-deck/config.json` 里的 `skillSource` 和准备里抄下的那一段一样，`taskSource` 没变。这之后 Claude Code 里“执行”预填的又是改之前的写法，Codex 的 Pane 里“执行”等照准备里说的停用，都和走清单之前一样。
 - 做：删掉准备里放的链接：`~/.agents/skills/<技能名>` 上为各个技能各放的一个，和 `~/.claude/skills/implement`。只删清单放的，原来就有的不动，`~/.agents/skills/matt-deck-configure` 也不动：它是 install 写的实目录，不是链接。不删的话，`~/.agents/skills` 里的留在这台机器上所有 Codex 项目里，`~/.claude/skills/implement` 让所有项目的 Claude Code 都多出一个 `/implement`。删掉之后，项目的 Skill Source 靠这些链接才是 Codex 找得到的那一份的，Codex 的 Pane 里“执行”等又会停用（见准备）；Skill Source 原本就是目录的，Claude Code 里点“执行”预填的 `/implement #<编号>` 又不登记 Occupancy，和走清单之前一样。

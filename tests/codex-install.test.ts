@@ -599,6 +599,9 @@ test('the Codex command line takes install or uninstall', async () => {
       assert.equal(error.code, 2)
       assert.match(error.stderr, /Usage:/)
       assert.match(error.stderr, /挪了位置或更新之后.*重新运行一次 install/)
+      // As install's own output says: run it again once the node the
+      // registration starts is gone.
+      assert.match(error.stderr, /注册里的 node 路径没了之后（例如版本管理器换掉或卸掉了这个版本），也要重新运行一次 install/)
       return true
     })
   }

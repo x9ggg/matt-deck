@@ -54,7 +54,13 @@ node matt-deck/plugin/cli/codex.ts install
 
 它最多改四个用户全局的文件（Deck 的钩子已经在 `hooks.json` 里时不改它），另在改 `hooks.json` 之前写一份它的备份（见下面第四项），每改一个都在输出里说一句；真把钩子写进 `hooks.json` 时，还会忘掉本机状态里记下的钩子调用（见下面“钩子未生效的提示”）：
 
-- `~/.codex/config.toml`：追加 `[mcp_servers.matt_deck]`，把 Deck 服务注册进 Codex，原有内容保留。注册写的是运行 install 的那个 `node` 的绝对路径（`PATH` 里第一个绝对路径的、解开链接后就是这个 `node` 的条目：通常是指向它的链接，例如 Homebrew 的 `bin` 目录里的那个；真实路径所在的目录排在链接前面时，写的是真实路径；`PATH` 里没有哪个绝对路径的条目解开链接后是它时，也写真实路径，即 `process.execPath`；fnm 这类版本管理器给每个 shell 一个 `PATH` 目录、经一个目录链接指到版本目录时，写的是经过这个目录链接的路径），和这份检出里 `plugin/server/main.ts` 的路径。install 的输出最后一行写明注册里的 `node` 是哪个路径，和 `config.toml` 里的 `command` 一字不差。
+- `~/.codex/config.toml`：追加 `[mcp_servers.matt_deck]`，把 Deck 服务注册进 Codex，原有内容保留。注册写的是运行 install 的那个 `node` 的绝对路径，和这份检出里 `plugin/server/main.ts` 的路径。`node` 写哪个路径，看 `PATH`：
+  - 写的是 `PATH` 里第一个绝对路径的、解开链接后就是这个 `node` 的条目，通常是指向它的链接，例如 Homebrew 的 `bin` 目录里的那个。
+  - 真实路径所在的目录排在链接前面时，第一个这样的条目就是真实路径，写的是真实路径。
+  - `PATH` 里没有哪个绝对路径的条目解开链接后是它时，也写真实路径，即 `process.execPath`。
+  - fnm 这类版本管理器给每个 shell 一个 `PATH` 目录、经一个目录链接指到版本目录时，写的是经过这个目录链接的路径。
+
+  install 的输出里“注册里的 node 是 …”那一句写明是哪个路径，和 `config.toml` 里的 `command` 一字不差。
 - `~/.agents/skills/matt-deck-configure/SKILL.md`：生成配置技能 `matt-deck-configure`，内容只有一句，让 agent 照这份检出里的配置技能做。这个位置已有一份不是 Deck 生成的同名技能时，install 什么都不改，以退出码 1 结束。它带一行 Deck 的标记，Deck 认出它是自己生成的，Skill Source 里有它时也不把它当成 Skill Source 的技能：Pane 的技能列表里没有它，`deck_skills` 不列，`deck_skill` 说没有这个技能，两个宿主都一样（#87）。
 - `~/.agents/skills/matt-deck-configure/agents/openai.yaml`：写上 `policy.allow_implicit_invocation: false`，Codex 只在你发 `$matt-deck-configure` 时用配置技能，不自己挑它来用；Codex 不认技能文件里的 `disable-model-invocation`。这里已有一份不是 Deck 写的（没有 Deck 那行注释）时，install 不改它，照常装好别的，在输出里说一句；这时 Codex 照那份文件决定什么时候用这个技能。早先装过、这里还没有这份文件的，重跑一次 install 就补上。
 - `~/.codex/hooks.json`：在 `UserPromptSubmit` 上加 Deck 的钩子，排在原有的钩子后面。改之前把原文件备份成 `~/.codex/hooks.json.before-matt-deck`，权限不比原文件宽；原来没有这个文件就不备份。
@@ -63,7 +69,7 @@ node matt-deck/plugin/cli/codex.ts install
 
 再运行一次 install，注册和配置技能重写一遍，已经在的钩子不动。下面几种情况要重跑：
 
-- 这份检出挪了位置或更新了。注册和配置技能指向的是运行 install 的那一份，输出的倒数第二行写明是哪一份。
+- 这份检出挪了位置或更新了。注册和配置技能指向的是运行 install 的那一份，输出里“注册和配置技能指向的是 …”那一句写明是哪一份。
 - 注册里的 `node` 路径没了，例如用 nvm 这类版本管理器装的 node 换了版本，或者注册经过的是 fnm 这类每个 shell 一份的目录链接、这个链接被清掉了。这时 Codex 起不来 Deck 服务，Pane 打不开。
 - 早先装过、`~/.agents/skills` 里还没有 `matt-deck-configure` 的。
 
@@ -91,7 +97,7 @@ Codex 把信任记在 `~/.codex/config.toml` 的 `hooks.state` 里，按钩子�
 
 ### 钩子未生效的提示
 
-自 install 最近一次把 Deck 的钩子写进 `hooks.json` 以来，本机的 Deck 服务没在任何已配置的项目里收到过钩子的调用时，所有已配置项目的 Pane 顶部有一条橙色提示“钩子未生效，开始执行不会登记占用。”，点“怎么做”是运行 `codex`、信任钩子、重启这三步。下面几种情况里，它和钩子实际能不能跑对不上：
+自 install 最近一次把 Deck 的钩子写进 `hooks.json` 以来，本机的 Deck 服务没在任何已配置的项目里收到过钩子的调用时，已配置项目的 Pane 顶部有一条橙色提示“钩子未生效，开始执行不会登记占用。”（在未配置时收到过钩子调用的那个 Session，配置完之后它的 Pane 上没有这条提示，见下面第一条），点“怎么做”是运行 `codex`、信任钩子、重启这三步。下面几种情况里，它和钩子实际能不能跑对不上：
 
 - **首次配置之后别的 Session 里仍在**：未配置的项目里收到的钩子调用不写本机状态，只记在那个 Session 的 Deck 服务里。所以在一个 Session 里配置完，钩子跑着的话，这个 Session 的 Pane 上提示就消失；别的 Session 的 Pane 上，要等任一已配置的项目里发出一条消息，提示才消失。安装后已经在已配置的项目里发过消息的话，提示本来就不在。
 - **卸载再装之后又出现**：install 把钩子写回去时提示通常会重新出现（那时本机状态正被写着、install 忘不掉之前收到的调用的话，就不出现），要在任一已配置的项目里发一条消息才消失，哪怕 Codex 的信任记录还认。
