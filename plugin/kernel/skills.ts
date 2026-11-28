@@ -82,9 +82,13 @@ const FENCE = /^(?:[^\S\uFEFF]|\u0085)*---(?:[^\S\uFEFF]|\u0085)*$/
 // holding a line at least; or no description, or one of space alone; or its
 // name, its frontmatter's or else its folder's, is longer than 64
 // characters, counted as Unicode code points. What only YAML would tell,
-// Deck does not: a description it does not read as its fields do, under a
-// key written otherwise (indented, quoted, a space before its colon) or on
-// the indented lines below an empty one, it takes for one there.
+// Deck does not: it takes a file for one with no description only where no
+// line may hold a description key, or where the one line that may is the key
+// as its fields read it, empty, and the next line holding more than space or
+// a comment is not indented, so goes on with no value of it. A key written
+// otherwise (indented, quoted, a space before its colon, in a flow mapping,
+// as an explicit key), or two of them, it takes for a description there.
+const DESCRIPTION_KEY = /(?:^|[\s{,])["']?description["']?\s*:|^\s*\?\s*["']?description\b/
 const codexName = (text: string, folder: string) => {
   const lines = text.split(/\r?\n/)
   const end = lines.findIndex((line, n) => n > 0 && FENCE.test(line))
@@ -94,10 +98,11 @@ const codexName = (text: string, folder: string) => {
   const frontmatter = lines.slice(1, end)
   const fields = fieldsOf(frontmatter)
   const name = fields.name || folder
-  const at = frontmatter.findIndex(line => /^\s*(["']?)description\1\s*:/.test(line))
+  const keys = frontmatter.flatMap((line, n) => (DESCRIPTION_KEY.test(line) ? [n] : []))
+  const below = keys.length === 1 ? frontmatter.slice(keys[0]! + 1).find(line => !/^\s*(?:#.*)?$/.test(line)) : undefined
   const isBlank =
-    at === -1 ||
-    (/^description:/.test(frontmatter[at]!) && (fields.description ?? '').trim() === '' && !/^\s+\S/.test(frontmatter[at + 1] ?? ''))
+    keys.length === 0 ||
+    (keys.length === 1 && /^description:/.test(frontmatter[keys[0]!]!) && (fields.description ?? '').trim() === '' && !/^\s/.test(below ?? ''))
   if (isBlank || [...name].length > 64) {
     return undefined
   }

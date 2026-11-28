@@ -455,17 +455,19 @@ test('started for Codex, deck_setup_survey says $ask-matt in Codex calls no ask-
   assert.equal(result.structuredContent.existing.hostCallsAskMatt, false)
 })
 
-test('started for Codex, deck_setup_survey says $ask-matt in Codex calls an ask-matt whose description is written on the line below its key, offered or existing', async t => {
-  const user = await home()
-  const dir = await workspace(JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path: '~/.agents/skills' } }))
-  await rawSkill(join(user, '.agents', 'skills'), 'ask-matt', '---\nname: ask-matt\ndescription:\n  "Ask what to do next."\n---\n')
-  const codex = startDeck(dir, { HOME: user }, 'codex')
-  t.after(codex.stop)
+test('started for Codex, deck_setup_survey says $ask-matt in Codex calls an ask-matt whose description is written on the lines below its key, offered or existing', async t => {
+  for (const below of ['  "Ask what to do next."\n', '\n  Ask what to do next.\n', '   \n  Ask what to do next.\n']) {
+    const user = await home()
+    const dir = await workspace(JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path: '~/.agents/skills' } }))
+    await rawSkill(join(user, '.agents', 'skills'), 'ask-matt', `---\nname: ask-matt\ndescription:\n${below}---\n`)
+    const codex = startDeck(dir, { HOME: user }, 'codex')
+    t.after(codex.stop)
 
-  const result = await codex.callTool('deck_setup_survey')
+    const result = await codex.callTool('deck_setup_survey')
 
-  assert.deepEqual(result.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true }])
-  assert.equal(result.structuredContent.existing.hostCallsAskMatt, true)
+    assert.deepEqual(result.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true }], below)
+    assert.equal(result.structuredContent.existing.hostCallsAskMatt, true, below)
+  }
 })
 
 test('started for Codex, deck_setup_survey offers first the copy of Matt skills whose ask-matt $ask-matt in Codex calls, the others after it in their order', async t => {
@@ -2996,6 +2998,17 @@ test('started for Codex, deck_skills takes a description Deck cannot read as emp
     ['space-before-colon', '---\nname: space-before-colon\ndescription : Use when the user asks.\n---\n'],
     ['indented', '---\n  name: indented\n  description: Use when the user asks.\n---\n'],
     ['quoted-key', '---\nname: quoted-key\n"description": Use when the user asks.\n---\n'],
+    // The value below the key after a blank line, one of space alone, or a
+    // comment, its lines ending in LF or CRLF.
+    ['after-blank', '---\nname: after-blank\ndescription:\n\n  Use when asked.\n---\n'],
+    ['after-space', '---\nname: after-space\ndescription:\n   \n  Use when asked.\n---\n'],
+    ['after-comment', '---\nname: after-comment\ndescription:\n# a note\n  Use when asked.\n---\n'],
+    ['after-all', '---\nname: after-all\ndescription:\n\n# a note\n\n  Use when asked.\n---\n'],
+    ['after-blank-crlf', '---\r\nname: after-blank-crlf\r\ndescription:\r\n\r\n  Use when asked.\r\n---\r\n'],
+    // An explicit key, and a flow mapping, its keys quoted or not.
+    ['explicit-key', '---\nname: explicit-key\n? description\n: Use when asked.\n---\n'],
+    ['flow-map', '---\n{name: flow-map, description: Use when asked.}\n---\n'],
+    ['flow-map-quoted', '---\n{"name": "flow-map-quoted", "description": "Use when asked."}\n---\n'],
     // An empty frontmatter holds no description.
     ['empty-frontmatter', '---\n---\n'],
   ]) {
@@ -3007,7 +3020,15 @@ test('started for Codex, deck_skills takes a description Deck cannot read as emp
   const result = await codex.callTool('deck_skills')
 
   assert.deepEqual(copies(result), [
+    ['after-all', 'same'],
+    ['after-blank', 'same'],
+    ['after-blank-crlf', 'same'],
+    ['after-comment', 'same'],
+    ['after-space', 'same'],
     ['empty-frontmatter', 'missing'],
+    ['explicit-key', 'same'],
+    ['flow-map', 'same'],
+    ['flow-map-quoted', 'same'],
     ['indented', 'same'],
     ['next-line', 'same'],
     ['next-line-quoted', 'same'],
