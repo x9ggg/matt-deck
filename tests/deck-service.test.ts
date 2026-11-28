@@ -642,6 +642,35 @@ test('started for Codex, deck_setup_survey keeps apart copies sharing ask-matt a
   ])
 })
 
+test('started for Codex, deck_setup_survey keeps apart copies sharing their ask-matt folder\'s file and their implement where only one holds a second ask-matt, the one Codex calls', async t => {
+  // A plugin holds ask-matt and implement; ~/.claude/skills links both and
+  // a second ask-matt, which ~/.agents/skills, where Codex looks, links as
+  // ask-matt, beside the implement.
+  const user = await home()
+  const matt = join(user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
+  await skill(join(matt, 'skills'), 'ask-matt')
+  await skill(join(matt, 'skills'), 'implement')
+  await rawSkill(join(user, 'other'), 'ask-matt-again', '---\nname: ask-matt\ndescription: Ask again.\n---\n')
+  await installedPlugins(user, { 'mattpocock-skills@official': [{ scope: 'user', installPath: matt }] })
+  await mkdir(join(user, '.claude', 'skills'), { recursive: true })
+  await symlink(join(matt, 'skills', 'ask-matt'), join(user, '.claude', 'skills', 'ask-matt'))
+  await symlink(join(matt, 'skills', 'implement'), join(user, '.claude', 'skills', 'implement'))
+  await symlink(join(user, 'other', 'ask-matt-again'), join(user, '.claude', 'skills', 'ask-matt-again'))
+  await mkdir(join(user, '.agents', 'skills'), { recursive: true })
+  await symlink(join(user, 'other', 'ask-matt-again'), join(user, '.agents', 'skills', 'ask-matt'))
+  await symlink(join(matt, 'skills', 'implement'), join(user, '.agents', 'skills', 'implement'))
+  const codex = startDeck(await workspace(), { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_setup_survey')
+
+  assert.deepEqual(result.structuredContent.skillSources, [
+    { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: true, hostCallsImplement: true },
+    { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true, hostCallsImplement: true },
+    { type: 'plugin', name: 'mattpocock-skills', hostCallsAskMatt: false, hostCallsImplement: true },
+  ])
+})
+
 test('started for Codex, in one home a Skill Source holding two implements and two ask-matts is called by Codex, by deck_setup_survey and by deck_skills alike, where Codex links only the second of each, and not where it links both', async t => {
   const user = await home()
   const dir = await workspace(JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path: '~/my-skills' } }))
