@@ -2057,10 +2057,18 @@ button.dk-row{color:inherit}
       if (!(answer.ok && answer.occupied)) return false
       // Read again, the project may be not configured by now, or implement
       // not the same copy: nothing is filled in then, and the result notice
-      // says why. A read that fails, or is late and taken over by another,
-      // cannot say: nothing is filled in either, the notice says so, and the
-      // next read that answers draws the Task as this Session's.
-      const tasksRead = await readAgain
+      // says why. A read that fails, or goes 10 seconds unanswered from when
+      // it was asked (including time queued behind another read), cannot say:
+      // this prefill wait ends then, the notice says so, and the read itself
+      // goes on as usual, drawing the Task as this Session's once answered.
+      const tasksRead = await new Promise(resolve => {
+        const settle = result => {
+          clearTimeout(wait)
+          resolve(result)
+        }
+        const wait = setTimeout(() => settle(false), 10_000)
+        readAgain.then(settle)
+      })
       if (tasksRead && implement?.copy === 'same') return true
       const unusable = unexecutable()
       showResult(movedTitle,

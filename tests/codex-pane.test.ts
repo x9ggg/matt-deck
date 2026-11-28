@@ -5375,7 +5375,7 @@ test('a takeover that moved the Occupancy, read again as implement can no longer
   }
 })
 
-test('a takeover that moved the Occupancy, read again late and taken over by "刷新", fills in nothing and says the Tasks were not read once the late read answers', async t => {
+test('a takeover that moved the Occupancy, read again late and taken over by "刷新", fills in nothing and says the Tasks were not read at 10 seconds, still once the late read answers', async t => {
   let moved = false
   const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
     moved = true
@@ -5396,17 +5396,253 @@ test('a takeover that moved the Occupancy, read again late and taken over by "�
   const { document } = page
   await page.click(rowButton(document, 72, '接管'))
   await page.click(askButton(document, '接管'))
-  const late = page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_map').at(-1)
+  const late = lastTasksRead(page)
 
   await page.advance(10_000)
+  assert.deepEqual(resultShown(page), movedNotFilled('接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。'))
   await page.click(document.querySelector('.dk-head > button'))
-  assert.equal(resultShown(page), undefined)
+  assert.deepEqual(resultShown(page), movedNotFilled('接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。'))
   await page.respond(late, { result: deck.answer('deck_map', {}) })
 
   assert.deepEqual(calledWith(page, 'deck_execute'), [])
   assert.deepEqual(prefills(page), [])
   assert.deepEqual(resultShown(page), movedNotFilled('接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。'))
   assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'])
+})
+
+test('a takeover that moved the Occupancy whose read again goes unanswered ends its prefill wait at 10 seconds from requesting it, including time queued behind a read under way', async t => {
+  for (const queued of [false, true]) {
+    let moved = false
+    let holdMaps = false
+    const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
+      moved = true
+      return deck.occupyAsIs(args)
+    })
+    const page = await openPage({
+      answer: (name, args) => {
+        if (name === 'deck_map' && (holdMaps || moved)) return undefined
+        return deck.answer(name, args)
+      },
+    })
+    t.after(page.close)
+    const { document } = page
+    await page.click(rowButton(document, 72, '接管'))
+
+    if (queued) {
+      const beforeTakeover = deck.answer('deck_map', {}) as any
+      holdMaps = true
+      await page.advance(60_000)
+      const earlier = lastTasksRead(page)
+      await page.advance(4_000)
+      await page.click(askButton(document, '接管'))
+      await page.advance(4_000)
+      holdMaps = false
+      await page.respond(earlier, { result: beforeTakeover })
+      await page.advance(5_999)
+    } else {
+      await page.click(askButton(document, '接管'))
+      await page.advance(9_999)
+    }
+
+    assert.equal(resultShown(page), undefined, String(queued))
+    assert.deepEqual(prefills(page), [], String(queued))
+    assert.deepEqual(calledWith(page, 'deck_execute'), [], String(queued))
+    await page.advance(1)
+
+    assert.deepEqual(resultShown(page), movedNotFilled('接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。'), String(queued))
+    assert.deepEqual(calledWith(page, 'deck_release'), [], String(queued))
+    assert.deepEqual(calledWith(page, 'deck_execute'), [], String(queued))
+    assert.deepEqual(prefills(page), [], String(queued))
+  }
+})
+
+test('a takeover whose read again never answers keeps the moved Occupancy across "刷新", enables "执行" once released, and prefills one Execute Prompt when clicked', async t => {
+  let moved = false
+  let withheld = false
+  const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
+    moved = true
+    return deck.occupyAsIs(args)
+  })
+  const page = await openPage({
+    answer: (name, args) => {
+      if (name === 'deck_map' && moved && !withheld) {
+        withheld = true
+        return undefined
+      }
+      return deck.answer(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  await page.advance(10_000)
+
+  assert.deepEqual(calledWith(page, 'deck_release'), [])
+  assert.deepEqual(resultShown(page), movedNotFilled('接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。'))
+
+  await page.click(document.querySelector('.dk-head > button'))
+  assert.equal(text(rowOf(document, 72).querySelector('.dk-row__meta')), '进行中 · 本 Session ready-for-agent')
+  assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'])
+
+  await page.click(rowButton(document, 72, '释放'))
+  assert.deepEqual(calledWith(page, 'deck_release'), [{ task: 72, session: SESSION.session }])
+  assert.equal(resultShown(page), undefined)
+  assert.deepEqual(executeShown(rowExecute(document, 72)), ['执行', true])
+
+  await page.click(rowExecute(document, 72))
+  assert.deepEqual(calledWith(page, 'deck_execute'), [{ task: 72 }])
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(72))])
+  assert.deepEqual(executeShown(rowExecute(document, 72)), ['已填入', false])
+  await page.advance(5_000)
+  assert.deepEqual(executeShown(rowExecute(document, 72)), ['执行', true])
+})
+
+test('a takeover whose read again answers after the 10-second timeout updates the list if still current, never runs deck_execute or prefills, and does not bring back a dismissed or replaced notice', async t => {
+  const timeoutNotice = movedNotFilled('接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。')
+  const cases: Array<readonly [string, (page: Awaited<ReturnType<typeof openPage>>) => Promise<void>, ReturnType<typeof resultShown>]> = [
+    ['kept', async () => {}, timeoutNotice],
+    [
+      'dismissed',
+      async page => {
+        await page.click(tabNamed(page.document, '地图'))
+        await page.click(tabNamed(page.document, '任务'))
+        assert.equal(resultShown(page), undefined)
+      },
+      undefined,
+    ],
+    [
+      'replaced',
+      async page => {
+        await page.click(rowExecute(page.document, 70))
+        assert.deepEqual(resultShown(page), notFilled('执行'))
+      },
+      notFilled('执行'),
+    ],
+  ]
+  for (const [kase, afterTimeout, expected] of cases) {
+    let moved = false
+    let withheld = false
+    const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
+      moved = true
+      return deck.occupyAsIs(args)
+    })
+    const page = await openPage({
+      answer: (name, args) => {
+        if (name === 'deck_map' && moved && !withheld) {
+          withheld = true
+          return undefined
+        }
+        return deck.answer(name, args)
+      },
+      answerMessage: refuses(),
+    })
+    t.after(page.close)
+    const { document } = page
+    await page.click(rowButton(document, 72, '接管'))
+    await page.click(askButton(document, '接管'))
+    const lateRead = lastTasksRead(page)
+    await page.advance(10_000)
+
+    await afterTimeout(page)
+    await page.respond(lateRead, { result: deck.answer('deck_map', {}) as any })
+
+    assert.equal(lateShown(page), undefined, kase)
+    assert.deepEqual(freshShown(document), ['刚刚', false], kase)
+    assert.equal(text(rowOf(document, 72).querySelector('.dk-row__meta')), '进行中 · 本 Session ready-for-agent', kase)
+    assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'], kase)
+    assert.deepEqual(calledWith(page, 'deck_execute'), kase === 'replaced' ? [{ task: 70 }] : [], kase)
+    assert.deepEqual(prefills(page), kase === 'replaced' ? [prefilled(executePromptOf(70))] : [], kase)
+    assert.deepEqual(resultShown(page), expected, kase)
+  }
+})
+
+test('a takeover whose read again answers after refresh, release and starting a new execution leaves the new execution\'s button state, prefills and notice untouched', async t => {
+  let moved = false
+  let withheld = false
+  let holdMessage = false
+  const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
+    moved = true
+    return deck.occupyAsIs(args)
+  })
+  const page = await openPage({
+    answer: (name, args) => {
+      if (name === 'deck_map' && moved && !withheld) {
+        withheld = true
+        return undefined
+      }
+      return deck.answer(name, args)
+    },
+    answerMessage: () => (holdMessage ? undefined : { result: {} }),
+  })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  const lateRead = lastTasksRead(page)
+  await page.advance(10_000)
+
+  await page.click(document.querySelector('.dk-head > button'))
+  const staleAfterTakeover = deck.answer('deck_map', {}) as any
+  await page.click(rowButton(document, 72, '释放'))
+  holdMessage = true
+  await page.click(rowExecute(document, 72))
+  assert.deepEqual(executeShown(rowExecute(document, 72)), ['执行', false])
+  assert.equal(resultShown(page), undefined)
+
+  await page.respond(lateRead, { result: staleAfterTakeover })
+
+  assert.deepEqual(calledWith(page, 'deck_execute'), [{ task: 72 }])
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(72))])
+  assert.equal(resultShown(page), undefined)
+  assert.deepEqual(executeShown(rowExecute(document, 72)), ['执行', false])
+
+  await page.respond(prefillsSent(page)[0], { result: {} })
+  assert.deepEqual(executeShown(rowExecute(document, 72)), ['已填入', false])
+  await page.advance(5_000)
+  assert.deepEqual(executeShown(rowExecute(document, 72)), ['执行', true])
+})
+
+test('a takeover whose read again answers within 10 seconds prefills once if usable, or shows the failure immediately if it fails', async t => {
+  for (const failing of [false, true]) {
+    let moved = false
+    let withheld = false
+    const deck = deckThatOccupies(TASKS.groups.inProgress, args => {
+      moved = true
+      return deck.occupyAsIs(args)
+    })
+    const page = await openPage({
+      answer: (name, args) => {
+        if (name === 'deck_map' && moved && !withheld) {
+          withheld = true
+          return undefined
+        }
+        return deck.answer(name, args)
+      },
+    })
+    t.after(page.close)
+    const { document } = page
+    await page.click(rowButton(document, 72, '接管'))
+    await page.click(askButton(document, '接管'))
+    const readAgain = lastTasksRead(page)
+
+    if (failing) {
+      await page.advance(5_000)
+      await page.respond(readAgain, { result: mapRead({ ok: false, failure: { kind: 'offline', message: 'fetch failed 6t1q' } }) })
+      assert.deepEqual(resultShown(page), movedNotFilled('接管之后没有读到 Task。读取恢复之后，点“释放”再点“执行”。'))
+      assert.deepEqual(calledWith(page, 'deck_execute'), [])
+      assert.deepEqual(prefills(page), [])
+    } else {
+      await page.advance(9_999)
+      await page.respond(readAgain, { result: deck.answer('deck_map', {}) as any })
+      assert.equal(resultShown(page), undefined)
+      assert.deepEqual(calledWith(page, 'deck_execute'), [{ task: 72 }])
+      assert.deepEqual(prefills(page), [prefilled(executePromptOf(72))])
+      await page.advance(10_000)
+      assert.equal(resultShown(page), undefined)
+      assert.deepEqual(prefills(page), [prefilled(executePromptOf(72))])
+    }
+  }
 })
 
 test('the result notice of an Execute Prompt not given, or not filled in after a takeover, stays through the timed reads and "刷新"; it goes with another tab, into a detail and back from one, and as the next prefill, takeover or release begins', async t => {
