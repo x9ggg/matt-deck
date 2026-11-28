@@ -8092,3 +8092,113 @@ test('the Recommendation\'s "执行这个 Task" goes by what the list says of th
 
   assert.deepEqual(executeShown(page.document.querySelector('.dk-rec [data-execute]')), ['执行这个 Task', true])
 })
+
+// A red notice's ✕ is drawn for the eye alone: a screen reader reads the
+// notice's title and words, and no "读取失败" before them. Of the notice
+// shown under its title: its role, then its ✕'s aria-hidden, role and
+// aria-label.
+const crossOf = (page: { window: any; document: Document }, title: string) => {
+  const notice = [...page.document.querySelectorAll('.dk-notice.is-danger')].find(
+    each => shown(page, each) && text(each.querySelector('.dk-notice__title')) === title,
+  )
+  assert.ok(notice, title)
+  const cross = notice.querySelector('.dk-plate.is-error')!
+  return [notice.getAttribute('role'), cross.getAttribute('aria-hidden'), cross.getAttribute('role'), cross.getAttribute('aria-label')]
+}
+const HIDDEN_CROSS = ['status', 'true', null, null]
+const noneSaysReadFailed = (page: { document: Document }) => assert.equal(page.document.querySelector('[aria-label="读取失败"]'), null)
+const OFFLINE = answered({ ok: false, failure: { kind: 'offline', message: 'dial tcp 9z' } })
+
+test('a red notice of a read that failed holds its ✕ from a screen reader, which reads its title and words alone', async t => {
+  const config = await openPage({
+    answer: name => (name === 'deck_config' ? { content: [{ type: 'text', text: '.matt-deck/config.json is not valid JSON' }], isError: true } : answered(SESSION)),
+  })
+  t.after(config.close)
+  assert.deepEqual(crossOf(config, '读取项目配置失败'), HIDDEN_CROSS)
+  noneSaysReadFailed(config)
+
+  // The Tasks, in "任务", in "地图", and over a detail.
+  let failing = 'deck_map'
+  const tasks = await openPage({ answer: (name, args: any) => (name === failing ? OFFLINE : deckWithSkills()(name, args)) })
+  t.after(tasks.close)
+  assert.deepEqual(crossOf(tasks, '读取 Task 失败'), HIDDEN_CROSS)
+  await tasks.click(tabNamed(tasks.document, '地图'))
+  assert.deepEqual(crossOf(tasks, '读取 Task 失败'), HIDDEN_CROSS)
+  noneSaysReadFailed(tasks)
+  failing = ''
+  await tasks.click(tabNamed(tasks.document, '任务'))
+  await tasks.click(tasks.document.querySelector('.dk-head > button'))
+  await tasks.click(rowOf(tasks.document, 70))
+  failing = 'deck_map'
+  await tasks.advance(60_000)
+  assert.deepEqual(crossOf(tasks, '读取 Task 失败'), HIDDEN_CROSS)
+  noneSaysReadFailed(tasks)
+
+  // A Task's detail.
+  const one = await openPage({ answer: (name, args: any) => (name === 'deck_task' ? OFFLINE : deckWithSkills()(name, args)) })
+  t.after(one.close)
+  await one.click(rowOf(one.document, 70))
+  assert.deepEqual(crossOf(one, '读取 #70 失败'), HIDDEN_CROSS)
+  noneSaysReadFailed(one)
+
+  // The Skill Source, and a skill's text.
+  const source = await openSkills((name: string, args: any) => (name === 'deck_skills' ? OFFLINE : deckWithSkills()(name, args)))
+  t.after(source.close)
+  assert.deepEqual(crossOf(source, '读取 Skill Source 失败'), HIDDEN_CROSS)
+  noneSaysReadFailed(source)
+  const skill = await openSkills((name: string, args: any) => (name === 'deck_skill' ? OFFLINE : deckWithSkills()(name, args)))
+  t.after(skill.close)
+  await skill.click([...skill.document.querySelectorAll('.dk-skill')].find(row => text(row.querySelector('.dk-skill__name')) === IMPLEMENT)!)
+  assert.deepEqual(crossOf(skill, '读取技能失败'), HIDDEN_CROSS)
+  noneSaysReadFailed(skill)
+})
+
+test('a red notice of a doing that did not happen holds its ✕ from a screen reader, which reads its title and words alone', async t => {
+  // A prefill the Host refuses.
+  const configure = await openPage({ answer: deckAt('/work/elsewhere', false), answerMessage: refuses() })
+  t.after(configure.close)
+  await configure.click(configure.document.querySelector('.dk-empty button'))
+  assert.deepEqual(crossOf(configure, '没有填入输入框'), HIDDEN_CROSS)
+  noneSaysReadFailed(configure)
+
+  // A link the Host refuses to open.
+  const link = await openPage({ answer: deckAt('/work/matt-deck'), answerOpenLink: refuses() })
+  t.after(link.close)
+  await link.click(rowOf(link.document, 70))
+  await link.click(barButton(link.document, '在 GitHub 打开'))
+  assert.deepEqual(crossOf(link, '没有打开链接'), HIDDEN_CROSS)
+  noneSaysReadFailed(link)
+
+  // A release that releases nothing.
+  const deck = deckThatOccupies()
+  const release = await openPage({ answer: (name, args: any) => (name === 'deck_release' ? OFFLINE : deck.answer(name, args)) })
+  t.after(release.close)
+  await release.click(rowButton(release.document, 74, '释放'))
+  assert.deepEqual(crossOf(release, '#74 没有释放'), HIDDEN_CROSS)
+  noneSaysReadFailed(release)
+
+  // A takeover held by a third Session by now.
+  const third = deckThatOccupies(undefined, () => answered({ ok: true, occupied: false, occupant: '019a8c3e-1f2b-7c4d-9e0f-0a1bc0ffee12', occupantHost: 'codex', occupantShort: 'c0ffee12', isOrphaned: false }))
+  const takeOver = await openPage({ answer: third.answer })
+  t.after(takeOver.close)
+  await takeOver.click(rowButton(takeOver.document, 72, '接管'))
+  await takeOver.click(askButton(takeOver.document, '接管'))
+  assert.deepEqual(crossOf(takeOver, '#72 没有接管'), HIDDEN_CROSS)
+  noneSaysReadFailed(takeOver)
+
+  // A takeover that moved the Occupancy, its Execute Prompt refused.
+  const moved = await openPage({ answer: deckThatOccupies().answer, answerMessage: refuses() })
+  t.after(moved.close)
+  await moved.click(rowButton(moved.document, 72, '接管'))
+  await moved.click(askButton(moved.document, '接管'))
+  assert.deepEqual(crossOf(moved, '#72 已转给本 Session，Execute Prompt 没有填入'), HIDDEN_CROSS)
+  noneSaysReadFailed(moved)
+
+  // A Recommendation Request the Deck service cannot make.
+  const recommends = deckThatRecommends()
+  const ask = await openNext({ answer: (name: string, args: any) => (name === 'deck_ask' ? OFFLINE : recommends.answer(name, args)) })
+  t.after(ask.close)
+  await ask.click(button(ask, '我现在该做什么'))
+  assert.deepEqual(crossOf(ask, '没有填入推荐请求'), HIDDEN_CROSS)
+  noneSaysReadFailed(ask)
+})

@@ -372,7 +372,7 @@ button.dk-row{color:inherit}
   </div>
   <p class="dk-why" id="loading">正在读取项目配置…</p>
   <div class="dk-notice is-danger" role="status" id="failed" hidden>
-    <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+    <span class="dk-plate is-error dk-plate--sm" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
     <div class="dk-notice__body">
       <span class="dk-notice__title heading">读取项目配置失败</span>
       <span class="dk-notice__text"></span>
@@ -393,7 +393,7 @@ button.dk-row{color:inherit}
     </div>
     <p class="dk-why" id="tasks-loading">正在读取 Task…</p>
     <div class="dk-notice is-danger" role="status" id="tasks-failed" hidden>
-      <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+      <span class="dk-plate is-error dk-plate--sm" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
       <div class="dk-notice__body">
         <span class="dk-notice__title heading">读取 Task 失败</span>
         <span class="dk-notice__text"></span>
@@ -422,7 +422,7 @@ button.dk-row{color:inherit}
     </div>
     <p class="dk-why" id="map-loading">正在读取 Task…</p>
     <div class="dk-notice is-danger" role="status" id="map-failed" hidden>
-      <span class="dk-plate is-error dk-plate--sm" role="img" aria-label="读取失败"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+      <span class="dk-plate is-error dk-plate--sm" aria-hidden="true"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
       <div class="dk-notice__body">
         <span class="dk-notice__title heading">读取 Task 失败</span>
         <span class="dk-notice__text"></span>
@@ -1997,6 +1997,8 @@ button.dk-row{color:inherit}
     button.type = 'button'
     return prefiller(button, 'configure', () => configureCall, () => configureCall === undefined)
   }
+  // A red notice: its ✕ is drawn for the eye alone, held from a screen
+  // reader, which reads the title and words.
   const failedNotice = (title, text) => {
     const notice = el(
       'div',
