@@ -1067,7 +1067,7 @@ test('"原文" shows the skill\'s call, its file and its text as written, with "
   assert.equal(document.querySelector('.dk-detail .dk-prose')!.textContent, TEXT)
   assert.deepEqual(
     page.sent.filter(message => message.params?.name === 'deck_skill').map(({ params }) => params.arguments),
-    [{ name: 'implement' }],
+    [{ name: 'implement', path: '~/.claude/skills/implement/SKILL.md' }],
   )
 
   await page.click(barButtons()[1]!)
@@ -2277,6 +2277,93 @@ test('the detail\'s state badge is drawn in its state\'s pair of colours, its wo
     }
     assert.deepEqual(seen, PAIRS[theme], theme)
   }
+})
+
+// Two skills of one name in the Skill Source, each with a call no page
+// could write, so a page that prefills one took it from that row.
+const GRILLS = [
+  { name: 'grill', call: '$grill-first-7q2c', description: '第一份。', path: '~/.claude/skills/grill/SKILL.md' },
+  { name: 'grill', call: '$grill-second-7q2c', description: '第二份。', path: '~/.claude/skills/grill-again/SKILL.md' },
+]
+// The Deck service listing `skills`, reading a skill by its name and, if
+// given, its path, as deck_skill does.
+const deckWithGrills = (skills: object[]) => (name: string, args: any) => {
+  if (name === 'deck_skill') {
+    const skill: any = skills.find((each: any) => each.name === args.name && (args.path === undefined || each.path === args.path))
+    if (skill === undefined) return answered({ ok: false, failure: { kind: 'unknown-skill', message: `the Skill Source has no skill named ${args.name}` } })
+    const { copy, ...read } = skill
+    return answered({ ok: true, skill: { ...read, text: `# ${read.description}\n` } })
+  }
+  return deckWithSkills(skills)(name, args)
+}
+// Each of the 技能 group's rows of grill, as the person reads it.
+const grillRows = (page: { window: any; document: Document }) =>
+  rows(page, [...page.document.querySelectorAll('.dk-group')].filter(group => shown(page, group))[1]!).filter(row => String(row[0]).startsWith('$grill'))
+
+test('of two skills of one name in the 技能 tab, each row\'s "预填" goes by its own row: on for the one Codex calls, filling in its call once, off for the other with its own reason; the rows swapped, the same', async t => {
+  for (const [first, second] of [
+    [{ ...GRILLS[0], copy: 'different' }, { ...GRILLS[1], copy: 'same' }],
+    [{ ...GRILLS[1], copy: 'same' }, { ...GRILLS[0], copy: 'different' }],
+  ]) {
+    const page = await openSkills(deckWithGrills([...SKILLS, first, second]))
+    t.after(page.close)
+    const same = first.copy === 'same' ? first : second
+    const other = first.copy === 'same' ? second : first
+
+    assert.deepEqual(
+      grillRows(page),
+      [first, second].map(each =>
+        each === same ? [each.call, each.description, '预填'] : [each.call, each.description, 'Codex 里的不是同一份，不能预填。', '预填停用'],
+      ),
+    )
+    const row = (call: string) => [...page.document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === call)!
+    await page.click(row(other.call).querySelector('button')!)
+    await page.click(row(same.call).querySelector('button')!)
+    assert.deepEqual(prefills(page), [prefilled(same.call)])
+  }
+})
+
+test('read again, each row of two skills of one name goes by the row of its path in the new read: its "预填" off once that one is no longer the same, or no longer listed', async t => {
+  let listed: object[] = [...SKILLS, { ...GRILLS[0], copy: 'different' }, { ...GRILLS[1], copy: 'same' }]
+  const page = await openSkills((name, args) => deckWithGrills(listed)(name, args))
+  t.after(page.close)
+  const { document } = page
+  const refresh = () => page.click(document.querySelector('.dk-head > button'))
+  await page.click([...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === GRILLS[1]!.call)!)
+  const prefillShown = () => [...document.querySelectorAll<HTMLButtonElement>('.dk-bar button')].find(each => text(each) === '预填')!
+  assert.equal(prefillShown().disabled, false)
+
+  // The first is the same now, the second is not.
+  listed = [...SKILLS, { ...GRILLS[0], copy: 'same' }, { ...GRILLS[1], copy: 'different' }]
+  await refresh()
+  assert.equal(prefillShown().disabled, true)
+
+  // The second gone, the first the same.
+  listed = [...SKILLS, { ...GRILLS[0], copy: 'same' }]
+  await refresh()
+  assert.equal(prefillShown().disabled, true)
+
+  listed = [...SKILLS, { ...GRILLS[0], copy: 'different' }, { ...GRILLS[1], copy: 'same' }]
+  await refresh()
+  assert.equal(prefillShown().disabled, false)
+  await page.click(prefillShown())
+  assert.deepEqual(prefills(page), [prefilled(GRILLS[1]!.call)])
+})
+
+test('the text of the second of two skills of one name is read by its path and shows that one, its "预填" by its row', async t => {
+  const page = await openSkills(deckWithGrills([...SKILLS, { ...GRILLS[0], copy: 'same' }, { ...GRILLS[1], copy: 'different' }]))
+  t.after(page.close)
+  const { document } = page
+
+  await page.click([...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === GRILLS[1]!.call)!)
+
+  assert.deepEqual(
+    page.sent.filter(message => message.params?.name === 'deck_skill').map(({ params }) => params.arguments),
+    [{ name: 'grill', path: GRILLS[1]!.path }],
+  )
+  assert.equal(text(document.querySelector('.dk-detail .dk-why')), GRILLS[1]!.path)
+  assert.equal(document.querySelector('.dk-detail .dk-prose')!.textContent, '# 第二份。\n')
+  assert.equal([...document.querySelectorAll<HTMLButtonElement>('.dk-bar button')].find(each => text(each) === '预填')!.disabled, true)
 })
 
 test('"刷新" with a skill\'s text open turns its "预填" off when the Skill Source cannot be read, and on again once it is read', async t => {

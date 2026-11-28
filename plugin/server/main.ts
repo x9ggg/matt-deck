@@ -502,18 +502,24 @@ const tools = {
     },
   },
   deck_skill: {
-    description: 'Read one skill of this project\'s Skill Source by its name: its call, its file and the text of the file under its frontmatter.',
+    description: 'Read one skill of this project\'s Skill Source by its name: its call, its file and the text of the file under its frontmatter. Given path, as deck_skills lists it, the skill of that name and that file, for a Skill Source holding more than one of a name; without it, the first of the name. A path holding no skill of the name is answered as a name not held.',
     inputSchema: {
       type: 'object',
-      properties: { name: { type: 'string', minLength: 1, description: 'The skill\'s name, as deck_skills lists it.' } },
+      properties: {
+        name: { type: 'string', minLength: 1, description: 'The skill\'s name, as deck_skills lists it.' },
+        path: { type: 'string', minLength: 1, description: 'The skill\'s file, as deck_skills lists it.' },
+      },
       required: ['name'],
       additionalProperties: false,
     },
-    run: async ({ name }: any): Promise<ToolResult> => {
+    run: async ({ name, path }: any): Promise<ToolResult> => {
       if (typeof name !== 'string' || name === '') {
         return { content: [{ type: 'text', text: 'deck_skill takes the name of a skill' }], isError: true }
       }
-      return skillAnswer(async source => ({ skill: await readSkill(source, workspace, homedir(), callOf(host), name) }))
+      if (path !== undefined && (typeof path !== 'string' || path === '')) {
+        return { content: [{ type: 'text', text: 'deck_skill takes the path of a skill file, if any' }], isError: true }
+      }
+      return skillAnswer(async source => ({ skill: await readSkill(source, workspace, homedir(), callOf(host), name, path) }))
     },
   },
   deck_execute: {

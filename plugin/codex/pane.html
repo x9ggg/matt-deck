@@ -2208,10 +2208,11 @@ button.dk-row{color:inherit}
   // Codex finds a skill by its name in its own skill directories; a call it
   // finds another file for, or none, runs no skill of the Skill Source.
   const UNPREFILLABLE = { different: 'Codex 里的不是同一份，不能预填。', several: 'Codex 里有不止一份同名的，按名字调不到，不能预填。', missing: 'Codex 里找不到，不能预填。' }
-  // A skill's "预填", by what the last read of the skills says of it: a
-  // skill no longer listed is found by Codex no more.
+  // A skill's "预填", by what the last read of the skills says of the row of
+  // its file, as two skills may share a name: a skill no longer listed is
+  // found by Codex no more.
   const prefillButton = skill => {
-    const listed = () => skillsListed.find(each => each.name === skill.name)
+    const listed = () => skillsListed.find(each => each.path === skill.path)
     return prefiller(smallButton('预填', 'dk-btn--go'), `skill:${skill.name}`, () => (listed() ?? skill).call, () => listed()?.copy !== 'same')
   }
 
@@ -2230,7 +2231,7 @@ button.dk-row{color:inherit}
     const end = [prefillButton(skill)]
     let answer
     try {
-      answer = await callTool('deck_skill', { name: skill.name })
+      answer = await callTool('deck_skill', { name: skill.name, path: skill.path })
     } catch (error) {
       answer = { ok: false, failure: { message: error.message } }
     }

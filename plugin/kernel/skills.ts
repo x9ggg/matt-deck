@@ -444,8 +444,9 @@ export const listSkills = async (
 }
 
 // One skill with its text: the skill file under its frontmatter, as written.
-export const readSkill = async (source: SkillSource, workspace: string, home: string, callOf: CallOf, name: string) => {
-  const skill = (await readAll(source, workspace, home, callOf)).find(skill => skill.name === name)
+// Given `path`, as deck_skills shows it, the one of that name and that file.
+export const readSkill = async (source: SkillSource, workspace: string, home: string, callOf: CallOf, name: string, path?: string) => {
+  const skill = (await readAll(source, workspace, home, callOf)).find(skill => skill.name === name && (path === undefined || skill.path === path))
   if (skill === undefined) {
     throw new SkillSourceError('unknown-skill', `the Skill Source has no skill named ${name}`)
   }

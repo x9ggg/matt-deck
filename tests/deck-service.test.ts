@@ -4156,6 +4156,34 @@ test('deck_skill reads one skill\'s file under its frontmatter, and says so of a
   assert.equal(await readFile(join(skills, 'ask-matt', 'SKILL.md'), 'utf8'), before)
 })
 
+test('deck_skill given a path reads the skill of that name and that file, of two of one name; without one, the first; a path not holding a skill of that name as a name it does not hold', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  const skills = join(user, '.claude', 'skills')
+  await rawSkill(skills, 'grill', '---\nname: grill\ndescription: 第一份。\n---\n\n# 第一份\n')
+  await rawSkill(skills, 'grill-again', '---\nname: grill\ndescription: 第二份。\n---\n\n# 第二份\n')
+  await skillFile(skills, 'tdd', 'tdd 的说明。')
+  const deck = startDeck(dir, { HOME: user })
+  t.after(deck.stop)
+
+  const read = (args: object) => deck.callTool('deck_skill', args)
+  const second = await read({ name: 'grill', path: '~/.claude/skills/grill-again/SKILL.md' })
+  const first = await read({ name: 'grill' })
+  const astray = await Promise.all([
+    read({ name: 'grill', path: '~/.claude/skills/tdd/SKILL.md' }),
+    read({ name: 'grill', path: '~/.claude/skills/gone/SKILL.md' }),
+  ])
+  const malformed = await Promise.all([{ name: 'grill', path: 3 }, { name: 'grill', path: '' }].map(read))
+
+  assert.deepEqual([second.structuredContent.skill.description, second.structuredContent.skill.text], ['第二份。', '# 第二份\n'])
+  assert.equal(second.structuredContent.skill.path, '~/.claude/skills/grill-again/SKILL.md')
+  assert.deepEqual([first.structuredContent.skill.description, first.structuredContent.skill.text], ['第一份。', '# 第一份\n'])
+  assert.deepEqual(
+    astray.map(result => result.structuredContent),
+    [0, 1].map(() => ({ ok: false, failure: { kind: 'unknown-skill', message: 'the Skill Source has no skill named grill' } })),
+  )
+  assert.deepEqual(malformed.map(result => result.isError), [true, true])
+})
+
 test('deck_skills and deck_skill leave out the configure skill Codex install generated in the Skill Source, for either host; one of that name without its mark is a skill like any', async t => {
   const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
   const skills = join(user, '.agents', 'skills')
