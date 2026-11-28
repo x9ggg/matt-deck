@@ -3949,6 +3949,69 @@ test('started for Codex, deck_skills reads a description of letters, digits and 
   )
 })
 
+test('started for Codex, deck_skills reads the name Codex knows a skill file by past a carriage return, U+0085 or a Unicode line or paragraph separator, as Codex breaks a line there too', async t => {
+  for (const separator of ['\r', '\u0085', '\u2028', '\u2029']) {
+    const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+    const source = join(user, '.agents', 'skills')
+    await rawSkill(source, 'name-fallback', `---\nname: actual${separator}description: Works\n---\n`)
+    await rawSkill(source, 'other-field', `---\nx: 1${separator}name: actual-too\ndescription: Works\n---\n`)
+    await rawSkill(source, 'quoted', `---\ndescription: "a${separator}name: x"\n---\n`)
+    await rawSkill(source, 'after-quote', `---\nx: 'it''s'${separator}name: actual-three\ndescription: Works\n---\n`)
+    await rawSkill(source, 'after-escape', `---\nx: "a\\"b"${separator}name: actual-four\ndescription: Works\n---\n`)
+    // Where Deck cannot tell whether the break falls inside a quoted value,
+    // it reads the line whole, as before.
+    const unsure = {
+      'escaped-single': `x: 'it''s${separator}name: q'\ndescription: Works`,
+      'escaped-double': `x: "a\\"${separator}name: q"\ndescription: Works`,
+      unclosed: `x: "a${separator}name: q\ndescription: Works`,
+      'across-lines': `description: "a\n  b${separator}name: q\n  c"`,
+      'other-key': `名字: "a${separator}name: q"\ndescription: Works`,
+      flow: `x: [ "a${separator}name: q" ]\ndescription: Works`,
+    }
+    for (const [folder, frontmatter] of Object.entries(unsure)) {
+      await rawSkill(source, folder, `---\n${frontmatter}\n---\n`)
+    }
+    const unsureSame = Object.fromEntries(Object.keys(unsure).map(folder => [folder, 'same']))
+    const deck = startDeck(dir, { HOME: user }, 'codex')
+    t.after(deck.stop)
+    // The Skill Source's own reading of names is as before: it takes a line
+    // broken at U+0085 for one field.
+    const listed = separator === '\u0085' ? `actual${separator}description: Works` : 'name-fallback'
+    const copyOf = async () => Object.fromEntries(copies(await deck.callTool('deck_skills')))
+
+    assert.deepEqual(await copyOf(), { [listed]: 'missing', 'after-quote': 'missing', 'after-escape': 'missing', 'other-field': 'missing', quoted: 'same', ...unsureSame }, JSON.stringify(separator))
+
+    await rawSkill(source, 'actual', '---\nname: actual\ndescription: Works\n---\n')
+    await rawSkill(source, 'actual-too', '---\nname: actual-too\ndescription: Works\n---\n')
+    await rawSkill(source, 'actual-three', '---\nname: actual-three\ndescription: Works\n---\n')
+    await rawSkill(source, 'actual-four', '---\nname: actual-four\ndescription: Works\n---\n')
+    await rawSkill(source, 'x', '---\nname: x\ndescription: Works\n---\n')
+
+    assert.deepEqual(
+      await copyOf(),
+      { actual: 'several', 'actual-too': 'several', 'actual-three': 'several', 'actual-four': 'several', 'after-quote': 'missing', 'after-escape': 'missing', [listed]: 'missing', 'other-field': 'missing', quoted: 'same', x: 'same', ...unsureSame },
+      JSON.stringify(separator),
+    )
+  }
+})
+
+test('started for Codex, deck_skills judges a name read past a carriage return by Codex\'s 64 characters at most', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const source = join(user, '.agents', 'skills')
+  const codexSkills = join(user, '.codex', 'skills')
+  await rawSkill(source, 'b64', `---\nname: ${'b'.repeat(64)}\ndescription: Works\n---\n`)
+  await rawSkill(codexSkills, 'other', `---\nx: 1\rname: ${'b'.repeat(64)}\ndescription: Works\n---\n`)
+  await rawSkill(source, 'dup', '---\nname: dup\ndescription: Works\n---\n')
+  await rawSkill(codexSkills, 'dup', `---\nx: 1\rname: ${'b'.repeat(65)}\ndescription: Works\n---\n`)
+  const deck = startDeck(dir, { HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  assert.deepEqual(copies(await deck.callTool('deck_skills')), [
+    ['b'.repeat(64), 'several'],
+    ['dup', 'same'],
+  ])
+})
+
 test('started for Codex, deck_skills counts a description broken inside any other way as having one, as it cannot tell whether Codex loads it', async t => {
   const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
   const source = join(user, '.agents', 'skills')

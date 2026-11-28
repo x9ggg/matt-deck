@@ -249,8 +249,55 @@ const codexName = (text: string, folder: string) => {
     return undefined
   }
   const frontmatter = lines.slice(1, end)
-  const fields = fieldsOf(frontmatter)
-  const name = fields.name || folder
+  // Codex breaks a line at a carriage return, U+0085 and the Unicode line
+  // and paragraph separators too, so its name is read off the pieces; inside
+  // a quoted value opening a piece, up to its closing quote, the line is not
+  // broken. Where a quote or a flow bracket stands elsewhere, or an earlier
+  // line left a quoted value open, Deck cannot tell, and reads the line whole.
+  const pieces: string[] = []
+  const opening = /[\w-]+:[ \t]*(["'])/y
+  const stop = /[\r\u0085\u2028\u2029"'[{]/g
+  let leftOpen = false
+  for (const line of frontmatter) {
+    const own: string[] = []
+    let start = 0
+    let unsure = leftOpen
+    while (!unsure) {
+      opening.lastIndex = start
+      const quote = opening.exec(line)?.[1]
+      let at = quote === undefined ? start : opening.lastIndex
+      while (quote !== undefined && at < line.length && line[at] !== quote) {
+        at += line[at] === '\\' && quote === '"' ? 2 : 1
+      }
+      while (quote === "'" && line[at] === "'" && line[at + 1] === "'") {
+        at += 2
+        while (at < line.length && line[at] !== "'") {
+          at++
+        }
+      }
+      if (quote !== undefined && at >= line.length) {
+        leftOpen = true
+        unsure = true
+        break
+      }
+      stop.lastIndex = quote === undefined ? at : at + 1
+      const found = stop.exec(line)
+      if (found === null) {
+        own.push(line.slice(start))
+        break
+      }
+      if (!/[\r\u0085\u2028\u2029]/.test(found[0])) {
+        unsure = true
+        break
+      }
+      own.push(line.slice(start, found.index))
+      start = found.index + 1
+    }
+    for (const piece of unsure ? [line] : own) {
+      pieces.push(piece)
+    }
+  }
+  const name = fieldsOf(pieces).name || folder
   if (hasConfirmedBlankDescription(frontmatter) || [...name].length > 64) {
     return undefined
   }
