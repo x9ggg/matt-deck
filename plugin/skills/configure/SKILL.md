@@ -27,7 +27,7 @@ Deck 服务连不上时，告诉用户原因并停止。
 `existing.configured` 为 `true` 时，把现有配置（或 `problem`）原样展示给用户，问是否修改。用户不改：`existing` 有 `config` 时跳到第 6 步；只有 `problem` 时停止，配置读不出来，Pane 用不了。用户要改就继续，写入时带 `replace: true`：
 
 - Task Source 照第 3 步重新判定，以这次摸底的结果为准。
-- Skill Source 在第 4 步把 `existing.config.skillSource` 作为推荐项。`existing` 只有 `problem` 时没有现有值，第 4 步只用 `skillSources`。
+- Skill Source 在第 4 步把 `existing.config.skillSource` 列进候选，通常排在最前、作为推荐项；`host` 为 `codex`、Codex 调不到它而候选里另有调得到的时例外，见第 4 步。`existing` 只有 `problem` 时没有现有值，第 4 步只用 `skillSources`。
 
 ## 3. Task Source
 
@@ -42,13 +42,18 @@ Deck 服务连不上时，告诉用户原因并停止。
 
 Skill Source 选定后，Deck 展示和 agent 执行都用这一份；要改就重跑配置。
 
-候选是 `skillSources`。修改已有配置时，把现有的 `skillSource` 排在候选最前；它不在 `skillSources` 里时也加进候选：同一份可能以别的名字列在候选里，也可能本机没有它，不要说成是哪一种。
+候选是 `skillSources`。修改已有配置时，现有的 `skillSource` 也是候选；它不在 `skillSources` 里时也加进候选：同一份可能以别的名字列在候选里，也可能本机没有它，不要说成是哪一种。现有的排在哪：
+
+- 通常把它排在候选最前，它是推荐项。
+- 修改已有配置、并且三件事同时成立时例外：`host` 为 `codex`；`existing.hostCallsAskMatt` 为 `false`；`skillSources` 里至少有一项的 `hostCallsAskMatt` 为 `true`。这时候选照 `skillSources` 的先后列，第一项（Codex 调得到的）是推荐项。现有的不提到最前：它在 `skillSources` 里（`type` 相同，`path` 或 `name` 也相同）的留在原来的位置，不在的加在候选末尾。两种都标明它是“现有的”。
+
+列候选时：
 
 - 候选只有一项：提议它，请用户确认。
 - 有多项：全部列出，请用户选一份。
 - `host` 为 `codex` 时：
   - 第一项是推荐项。
-  - 每项都标出 Codex 调不调得到它的 `ask-matt`：候选看它的 `hostCallsAskMatt`；修改已有配置时排在最前的现有 `skillSource` 看 `existing.hostCallsAskMatt`，不论它在不在 `skillSources` 里。
+  - 每项都标出 Codex 调不调得到它的 `ask-matt`：候选看它的 `hostCallsAskMatt`；修改已有配置时现有的 `skillSource` 看 `existing.hostCallsAskMatt`，不论它排在哪、在不在 `skillSources` 里。
   - 调不到的照列，并告诉用户：选了它，Codex 的 Pane 里技能不能预填，“我现在该做什么”和“执行”也用不了。
 - 为空：告诉用户本机没找到 Matt skills（含 `ask-matt` 技能的位置），请用户给出一个技能目录；确认 `<目录>/ask-matt/SKILL.md` 存在后，记为 `{ "type": "directory", "path": "<目录>" }`，用户目录下的路径写成 `~/...`。用户给不出就停止。
 
