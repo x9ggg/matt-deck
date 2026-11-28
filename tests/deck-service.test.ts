@@ -455,6 +455,19 @@ test('started for Codex, deck_setup_survey says $ask-matt in Codex calls no ask-
   assert.equal(result.structuredContent.existing.hostCallsAskMatt, false)
 })
 
+test('started for Codex, deck_setup_survey says $ask-matt in Codex calls an ask-matt whose description is written on the line below its key, offered or existing', async t => {
+  const user = await home()
+  const dir = await workspace(JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path: '~/.agents/skills' } }))
+  await rawSkill(join(user, '.agents', 'skills'), 'ask-matt', '---\nname: ask-matt\ndescription:\n  "Ask what to do next."\n---\n')
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_setup_survey')
+
+  assert.deepEqual(result.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true }])
+  assert.equal(result.structuredContent.existing.hostCallsAskMatt, true)
+})
+
 test('started for Codex, deck_setup_survey offers first the copy of Matt skills whose ask-matt $ask-matt in Codex calls, the others after it in their order', async t => {
   const dir = await workspace()
   const user = await home()
@@ -2971,6 +2984,35 @@ test('started for Codex, deck_skills finds no copy of a skill whose file Codex d
     ['unclosed', 'missing'],
     ['unnamed', 'same'],
     ['very-long', 'same'],
+  ])
+})
+
+test('started for Codex, deck_skills takes a description Deck cannot read as empty for one: on the indented lines below its key, or under a key written otherwise', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const source = join(user, '.agents', 'skills')
+  for (const [folder, text] of [
+    ['next-line-quoted', '---\nname: next-line-quoted\ndescription:\n  "Use when the user asks."\n---\n'],
+    ['next-line', '---\nname: next-line\ndescription:\n  Use when the user asks.\n---\n'],
+    ['space-before-colon', '---\nname: space-before-colon\ndescription : Use when the user asks.\n---\n'],
+    ['indented', '---\n  name: indented\n  description: Use when the user asks.\n---\n'],
+    ['quoted-key', '---\nname: quoted-key\n"description": Use when the user asks.\n---\n'],
+    // An empty frontmatter holds no description.
+    ['empty-frontmatter', '---\n---\n'],
+  ]) {
+    await rawSkill(source, folder!, text!)
+  }
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_skills')
+
+  assert.deepEqual(copies(result), [
+    ['empty-frontmatter', 'missing'],
+    ['indented', 'same'],
+    ['next-line', 'same'],
+    ['next-line-quoted', 'same'],
+    ['quoted-key', 'same'],
+    ['space-before-colon', 'same'],
   ])
 })
 

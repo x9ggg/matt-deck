@@ -82,16 +82,23 @@ const FENCE = /^(?:[^\S\uFEFF]|\u0085)*---(?:[^\S\uFEFF]|\u0085)*$/
 // holding a line at least; or no description, or one of space alone; or its
 // name, its frontmatter's or else its folder's, is longer than 64
 // characters, counted as Unicode code points. What only YAML would tell,
-// Deck does not.
+// Deck does not: a description it does not read as its fields do, under a
+// key written otherwise (indented, quoted, a space before its colon) or on
+// the indented lines below an empty one, it takes for one there.
 const codexName = (text: string, folder: string) => {
   const lines = text.split(/\r?\n/)
   const end = lines.findIndex((line, n) => n > 0 && FENCE.test(line))
   if (!FENCE.test(lines[0]!) || end < 2) {
     return undefined
   }
-  const fields = fieldsOf(lines.slice(1, end))
+  const frontmatter = lines.slice(1, end)
+  const fields = fieldsOf(frontmatter)
   const name = fields.name || folder
-  if ((fields.description ?? '').trim() === '' || [...name].length > 64) {
+  const at = frontmatter.findIndex(line => /^\s*(["']?)description\1\s*:/.test(line))
+  const isBlank =
+    at === -1 ||
+    (/^description:/.test(frontmatter[at]!) && (fields.description ?? '').trim() === '' && !/^\s+\S/.test(frontmatter[at + 1] ?? ''))
+  if (isBlank || [...name].length > 64) {
     return undefined
   }
 
