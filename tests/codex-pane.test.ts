@@ -6505,6 +6505,51 @@ test('"我现在该做什么" the Deck service answers after 10 seconds counts w
   assert.deepEqual(nextTab(page).phases, ['+已填入', '+等待回报', '+已回答'])
 })
 
+test('"释放" clicked again within 10 seconds leaves the first to count: answered after its notice, the notice goes and the Tasks are read again', async t => {
+  const deck = deckThatOccupies()
+  let first = true
+  const page = await openPage({
+    answer: (name, args: any) => {
+      if (name === 'deck_release' && first) {
+        first = false
+        return undefined
+      }
+      return deck.answer(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+  const releases = () => page.sent.filter(message => message.params?.name === 'deck_release')
+
+  await page.click(rowButton(document, 74, '释放'))
+  await page.advance(5_000)
+  await page.click(rowButton(document, 74, '释放'))
+  assert.ok(rowOf(document, 74).closest('.dk-group')!.querySelector('.dk-group__head')!.textContent!.startsWith('可执行'))
+  await page.advance(5_000)
+  assert.deepEqual(topNotice(page), slowAction('回答到了会照常释放；不想等就再点“释放”。'))
+
+  const reads = calledWith(page, 'deck_map').length
+  await page.respond(releases()[0], { result: answered({ ok: true, released: false }) })
+  assert.equal(topNotice(page)?.title, '#74 没有释放')
+  assert.equal(calledWith(page, 'deck_map').length, reads + 1)
+})
+
+test('a takeover clicked again after the Deck service left it unanswered says in its confirmation what it said before, its buttons off, until 10 seconds pass again', async t => {
+  const deck = deckThatOccupies()
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_occupy' ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  await page.advance(10_000)
+
+  await page.click(askButton(document, '接管'))
+  assert.deepEqual(askShown(page)?.said, ASK_SAID)
+  assert.deepEqual(askShown(page)?.buttons, ['接管（停用）', '取消（停用）'])
+  await page.advance(10_000)
+  assert.deepEqual(askShown(page)?.said, 'Deck 服务还没应答。回答到了会照常接管；不想等就再点“接管”。')
+})
+
 test('an Execute Prompt after a takeover the Host does not answer in 10 seconds says to release and execute again, the Task being this Session\'s', async t => {
   const page = await openPage({ answer: deckThatOccupies().answer, answerMessage: () => undefined })
   t.after(page.close)

@@ -1941,7 +1941,9 @@ button.dk-row{color:inherit}
       failed: failure => showResult(movedTitle, noPrompt(failure, '重跑配置之后，点“释放”再点“执行”。', '点“释放”之后再点“执行”重试。')),
       slow: `#${number} 已转给本 Session。回答到了会照常填入 Execute Prompt；不想等就点“释放”之后再点“执行”。`,
     }, async ({ isLast, pause, resume }) => {
+      // Clicked again, it says what it said before until it is late again.
       takeover.moving = true
+      takeover.slow = false
       showTakeOver()
       // Not answered in 10 seconds, "接管" is on again, and the asking says
       // so while it is open, else the notice in the result notice's place.
@@ -2022,24 +2024,28 @@ button.dk-row{color:inherit}
   // then reads the Tasks again, which show it in the group it is in now.
   // One that passed to another Session since stays with it. Not released,
   // the result notice says why. Not answered in 10 seconds, the notice in
-  // the result notice's place says so; answered after that, it counts while
-  // the Task was released no more since, by `released`, the last release of
-  // each Task by number.
+  // the result notice's place says so; answered after that, it counts unless
+  // the Task was released again once the notice was shown, by `released`,
+  // the last release of each Task by number. Released again before, both
+  // answers count.
   const released = new Map()
   const release = async (number, holder) => {
     closeResult()
+    const before = released.get(number)
+    if (before?.late) before.givenUp = true
     const releasing = {}
     released.set(number, releasing)
     let answer
     let late
     try {
       answer = await callAction('deck_release', { task: number, session: holder }, () => {
+        releasing.late = true
         late = showWarn(SLOW, '回答到了会照常释放；不想等就再点“释放”。')
       })
     } catch (error) {
       answer = { ok: false, failure: { message: error.message } }
     }
-    if (late !== undefined && released.get(number) !== releasing) return
+    if (releasing.givenUp) return
     closeUnanswered(late)
     if (!answer.ok) showResult(`#${number} 没有释放`, retried(answer.failure, '释放'))
     else if (!answer.released) showResult(`#${number} 没有释放`, 'Occupancy 已转给别的 Session。')
