@@ -2618,6 +2618,158 @@ test('deck_task drops a `Part of` or `Blocked by:` line only at the top of the b
   assert.equal(task.description, '登录的一部分。\n\nPart of #2 的做法不适用。\nBlocked by: 上游还没定。')
 })
 
+test('deck_task drops Parent, Blocked by and Acceptance criteria headings regardless of case or emphasis, while keeping look-alike and ordinary headings after them', async t => {
+  const gh = await fakeGh()
+  await gh.answer({
+    stdout: viewed({
+      number: 19,
+      body: [
+        '# parent',
+        '',
+        '#1',
+        '',
+        '## Parenthood',
+        '',
+        'Parenting note stays.',
+        '',
+        '## **Parent**',
+        '',
+        '#2',
+        '',
+        '## Blocked byline',
+        '',
+        'Byline stays.',
+        '',
+        '### *Blocked by*',
+        '',
+        '- #5',
+        '',
+        '### BLOCKED BY',
+        '',
+        '- #6',
+        '',
+        '## User guide',
+        '',
+        'Open the guide.',
+        '- [x] First item',
+        '',
+        '## ACCEPTANCE CRITERIA',
+        '',
+        'Plain text in this section is dropped.',
+        '- [ ] Second item',
+        '- [X] Third item',
+        '',
+        '## Acceptance criteria2',
+        '',
+        'Look-alike stays.',
+        '',
+        '## ***Acceptance Criteria***',
+        '',
+        '- [ ] Fourth item',
+        '',
+        '## ** Parent **',
+        '',
+        '#3',
+        '',
+        '## After',
+        '',
+        'End stays.',
+      ].join('\n'),
+    }),
+  })
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { task } = (await deck.callTool('deck_task', { number: 19 })).structuredContent
+
+  assert.equal(
+    task.description,
+    [
+      '## Parenthood',
+      '',
+      'Parenting note stays.',
+      '',
+      '## Blocked byline',
+      '',
+      'Byline stays.',
+      '',
+      '## User guide',
+      '',
+      'Open the guide.',
+      '',
+      '## Acceptance criteria2',
+      '',
+      'Look-alike stays.',
+      '',
+      '## After',
+      '',
+      'End stays.',
+    ].join('\n'),
+  )
+  assert.deepEqual(task.acceptance, [
+    { text: 'First item', isChecked: true },
+    { text: 'Second item', isChecked: false },
+    { text: 'Third item', isChecked: true },
+    { text: 'Fourth item', isChecked: false },
+  ])
+})
+
+test('deck_task and deck_map keep fenced headings and checklists verbatim and agree on goal past emphasized or cased dropped sections', async t => {
+  const gh = await fakeGh()
+  const taskBody = [
+    '## User guide',
+    '',
+    '~~~md',
+    '## **Parent**',
+    '## ACCEPTANCE CRITERIA',
+    '- [x] Fenced item',
+    '~~~',
+    '',
+    'After fence.',
+    '- [x] Real item',
+  ].join('\n')
+  await gh.answer({ stdout: viewed({ number: 20, body: taskBody }) })
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+
+  const { task } = (await deck.callTool('deck_task', { number: 20 })).structuredContent
+  await gh.issues([
+    issue({
+      number: 1,
+      labels: ['wayfinder:map'],
+      body: '## **Parent**\n#1\n\n## *Blocked by*\n#2\n\n## ACCEPTANCE CRITERIA\n- [ ] Ready.\n\n## Parenthood\nGoal after look-alike. More.\n',
+    }),
+    issue({
+      number: 2,
+      labels: ['wayfinder:map'],
+      body: '## **Parent**\n#1\n\n## User guide\n~~~md\n## BLOCKED BY\nFake goal.\n~~~\n\nReal goal here. Then.\n',
+    }),
+    issue({
+      number: 3,
+      labels: ['wayfinder:map'],
+      body: '## Parent\n#1\n\n## BLOCKED BY\n#2\n\n## ACCEPTANCE CRITERIA\n- [x] Done.\n',
+    }),
+    issue({
+      number: 4,
+      labels: ['wayfinder:map'],
+      body: '```\nInside fence.\n```\n\n## ACCEPTANCE CRITERIA\nNot a goal.\n',
+    }),
+  ])
+  const { maps } = (await deck.callTool('deck_map', { session: 'this-session' })).structuredContent
+
+  assert.equal(task.description, '## User guide\n\n~~~md\n## **Parent**\n## ACCEPTANCE CRITERIA\n- [x] Fenced item\n~~~\n\nAfter fence.')
+  assert.deepEqual(task.acceptance, [{ text: 'Real item', isChecked: true }])
+  assert.deepEqual(
+    maps.map(({ number, goal }: any) => [number, goal]),
+    [
+      [1, 'Goal after look-alike.'],
+      [2, 'Real goal here.'],
+      [3, null],
+      [4, null],
+    ],
+  )
+})
+
 // Bodies as long as GitHub lets one be, 65536 characters, whose lines are
 // blank or only white space until their end or until text, each with the
 // description and the goal read from it. A read whose time grows with the
@@ -2678,6 +2830,94 @@ test('deck_map reads the goal of a Map whose body\'s top is a long run of blank 
     assert.equal(read.goal, goal, `body ${index}`)
     assert.ok(read.ms - plainMs < 1000, `body ${index}: ${read.ms} ms, ${plainMs} ms with plain words`)
   }
+})
+
+// Heading lines at GitHub's 65,536-character limit (and a shorter 16,384-char
+// one) whose prefix spaces and stars do not match a section drawn elsewhere
+// must be checked in time linear in the line's length.
+const SHORT_HEADING_LENGTH = 16384
+const MAX_HEADING_LENGTH = BLANK_TOP
+const LONG_HEADINGS: { name: string; body: string; description?: string; plain: string }[] = [
+  {
+    name: 'short heading with spaces',
+    body: `# ${' '.repeat(SHORT_HEADING_LENGTH - 3)}x`,
+    plain: PLAIN_BODY.slice(0, SHORT_HEADING_LENGTH),
+  },
+  {
+    name: '65536 heading with spaces',
+    body: `# ${' '.repeat(MAX_HEADING_LENGTH - 3)}x`,
+    plain: PLAIN_BODY,
+  },
+  {
+    name: '65536 heading with spaces and stars',
+    body: `## ${' '.repeat(32765)}${'*'.repeat(32766)} x`,
+    plain: PLAIN_BODY,
+  },
+  {
+    name: '65536 heading with stars then spaces',
+    body: `## ${'*'.repeat(32766)}${' '.repeat(32765)} x`,
+    plain: PLAIN_BODY,
+  },
+  {
+    name: '65536 leading spaces before heading',
+    body: `${' '.repeat(MAX_HEADING_LENGTH - 4)}## x`,
+    description: '## x',
+    plain: PLAIN_BODY,
+  },
+  {
+    name: '65536 heading with spaces before Parent',
+    body: `## ${' '.repeat(MAX_HEADING_LENGTH - 32)}Parent\n#1\n\n## User guide\nkept`,
+    description: '## User guide\nkept',
+    plain: PLAIN_BODY,
+  },
+]
+
+test('deck_task reads long heading lines of spaces and stars about as fast as equal-length plain words', async t => {
+  const gh = await fakeGh()
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+  const timed = async (body: string) => {
+    await gh.answer({ stdout: viewed({ number: 9, body }) })
+    const start = await deck.cpuMs()
+    const { task } = (await deck.callTool('deck_task', { number: 9 })).structuredContent
+    return { ms: (await deck.cpuMs()) - start, task }
+  }
+  // Warm up the Deck service and measure plain-word baselines once per length.
+  await timed(PLAIN_BODY)
+  const plainTimes = new Map<number, number>()
+  for (const { plain } of LONG_HEADINGS) {
+    if (!plainTimes.has(plain.length)) {
+      plainTimes.set(plain.length, (await timed(plain)).ms)
+    }
+  }
+
+  for (const { name, body, description = body, plain } of LONG_HEADINGS) {
+    const plainMs = plainTimes.get(plain.length)!
+    const { ms, task } = await timed(body)
+    assert.deepEqual([task.description, task.acceptance], [description, []], name)
+    assert.ok(ms - plainMs < 1000, `${name}: ${ms} ms, ${plainMs} ms with plain words`)
+  }
+})
+
+test('deck_map reads the goal past a 65536-character heading line about as fast as from plain words', async t => {
+  const gh = await fakeGh()
+  const deck = startDeck(await configured(), gh.env)
+  t.after(deck.stop)
+  const timed = async (body: string) => {
+    await gh.issues([issue({ number: 10, labels: ['wayfinder:map'], body })])
+    await deck.callTool('deck_tasks', { refresh: true })
+    const start = await deck.cpuMs()
+    const { structuredContent } = await deck.callTool('deck_map', { session: 'this-session' })
+    return { ms: (await deck.cpuMs()) - start, goal: structuredContent.maps[0].goal }
+  }
+  await timed(PLAIN_BODY)
+  const plainMs = (await timed(PLAIN_BODY)).ms
+  const headingBody = `# ${' '.repeat(MAX_HEADING_LENGTH - SENTENCE.length - 6)}x\n\n${SENTENCE}`
+
+  const read = await timed(headingBody)
+
+  assert.equal(read.goal, SENTENCE)
+  assert.ok(read.ms - plainMs < 1000, `${read.ms} ms with the heading, ${plainMs} ms without`)
 })
 
 test('deck_task says why the Task cannot be read, and takes only a Task number', async t => {

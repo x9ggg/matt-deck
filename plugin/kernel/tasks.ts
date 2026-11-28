@@ -225,9 +225,14 @@ export type TaskDetail = Omit<SourceTaskDetail, 'identity' | 'body'> & {
 
 const CHECKLIST_ITEM = /^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/
 
+// A heading prefix (`#`–`######`, white space, and optional `*` emphasis with
+// its white space), matched once left to right so no two runs of white space
+// can share a space.
+const HEADING_PREFIX = /^#{1,6}\s+(?:\*+\s*)?/
+
 // Sections of a body the detail draws in its own places: what the Task
 // belongs to, what blocks it, its acceptance criteria.
-const DRAWN_ELSEWHERE = /^\s*#{1,6}\s*\**\s*(parent|blocked by|acceptance criteria)\b/i
+const DRAWN_ELSEWHERE = /^(?:parent|blocked by|acceptance criteria)\b/i
 
 // The Task `number`, with the identity of the Task Source holding it.
 export const readTask = async (source: TaskSource, number: number): Promise<{ identity: string; task: TaskDetail }> => {
@@ -269,8 +274,10 @@ export const describedLines = (body: string) => {
       fence = undefined
     }
     if (!isCode) {
-      if (/^\s*#{1,6}\s/.test(line)) {
-        isDropping = DRAWN_ELSEWHERE.test(line)
+      const trimmed = line.trimStart()
+      const prefix = trimmed.match(HEADING_PREFIX)
+      if (prefix !== null) {
+        isDropping = DRAWN_ELSEWHERE.test(trimmed.slice(prefix[0].length))
       }
       const item = line.match(CHECKLIST_ITEM)
       if (item !== null) {
