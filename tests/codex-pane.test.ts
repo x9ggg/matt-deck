@@ -5899,6 +5899,34 @@ test('closed by a takeover answered after the person went to the Host, the askin
   assert.equal(document.activeElement, document.body)
 })
 
+test('closed by a takeover answered after the person went to the Host, the asking puts the focus back where the person is back before the Tasks are read again', async t => {
+  let answer: () => void = () => {}
+  // While `held`, the Tasks' read waits for it.
+  let held: Promise<void> | undefined
+  let release = () => {}
+  const deck: ReturnType<typeof deckThatOccupies> = deckThatOccupies(undefined, args => new Promise(resolve => (answer = () => resolve(deck.occupyAsIs(args)))))
+  const page = await openPage({ answer: (name, args) => (name === 'deck_map' && held !== undefined ? held.then(() => deck.answer(name, args)) : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document, window } = page
+  await page.click(rowButton(document, 72, '接管'))
+  ;(askButton(document, '接管') as HTMLElement).click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  // The person goes to the Host's prompt before the move is answered, and
+  // comes back once it is, before the Tasks are read again.
+  window.dispatchEvent(new window.FocusEvent('blur'))
+  held = new Promise(resolve => (release = resolve))
+  answer()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(askShown(page), undefined)
+  window.dispatchEvent(new window.FocusEvent('focus'))
+
+  held = undefined
+  release()
+  await page.settled()
+
+  assert.equal(document.activeElement, rowButton(document, 72, '释放'))
+})
+
 test('closed, an asking leaves the focus where it is once the person has gone to another tab, or into a detail, before it is placed, and come back', async t => {
   const occupies = deckThatOccupies()
   const recommends = deckThatRecommends()
