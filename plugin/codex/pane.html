@@ -2026,15 +2026,16 @@ button.dk-row{color:inherit}
   // the result notice says why. Not answered in 10 seconds, the notice in
   // the result notice's place says so; answered after that, it counts unless
   // the Task was released again once the notice was shown, by `released`,
-  // the last release of each Task by number. Released again before, both
-  // answers count.
+  // the releases of each Task by number not answered yet. Released again
+  // before, both answers count.
   const released = new Map()
   const release = async (number, holder) => {
     closeResult()
-    const before = released.get(number)
-    if (before?.late) before.givenUp = true
+    const out = released.get(number) ?? new Set()
+    for (const before of out) if (before.late) before.givenUp = true
     const releasing = {}
-    released.set(number, releasing)
+    out.add(releasing)
+    released.set(number, out)
     let answer
     let late
     try {
@@ -2045,6 +2046,7 @@ button.dk-row{color:inherit}
     } catch (error) {
       answer = { ok: false, failure: { message: error.message } }
     }
+    out.delete(releasing)
     if (releasing.givenUp) return
     closeUnanswered(late)
     if (!answer.ok) showResult(`#${number} 没有释放`, retried(answer.failure, '释放'))

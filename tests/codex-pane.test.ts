@@ -6534,6 +6534,32 @@ test('"释放" clicked again within 10 seconds leaves the first to count: answer
   assert.equal(calledWith(page, 'deck_map').length, reads + 1)
 })
 
+test('"释放" clicked a third time once the first is late, the second not yet, gives the first up: its answer after that changes nothing', async t => {
+  const deck = deckThatOccupies()
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_release' ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const releases = () => page.sent.filter(message => message.params?.name === 'deck_release')
+
+  await page.click(rowButton(document, 74, '释放'))
+  await page.advance(5_000)
+  await page.click(rowButton(document, 74, '释放'))
+  await page.advance(5_000)
+  assert.deepEqual(topNotice(page), slowAction('回答到了会照常释放；不想等就再点“释放”。'))
+  await page.advance(2_000)
+  await page.click(rowButton(document, 74, '释放'))
+  assert.equal(topNotice(page), undefined)
+
+  const reads = calledWith(page, 'deck_map').length
+  await page.respond(releases()[0], { result: answered({ ok: false, failure: { kind: 'offline', message: 'fetch failed 6t1q' } }) })
+  assert.equal(topNotice(page), undefined)
+  assert.equal(calledWith(page, 'deck_map').length, reads)
+
+  await page.respond(releases()[2], { result: deck.answer('deck_release', releases()[2].params.arguments) as any })
+  assert.equal(topNotice(page), undefined)
+  assert.ok(rowOf(document, 74).closest('.dk-group')!.querySelector('.dk-group__head')!.textContent!.startsWith('可执行'))
+})
+
 test('a takeover clicked again after the Deck service left it unanswered says in its confirmation what it said before, its buttons off, until 10 seconds pass again', async t => {
   const deck = deckThatOccupies()
   const page = await openPage({ answer: (name, args: any) => (name === 'deck_occupy' ? undefined : deck.answer(name, args)) })
