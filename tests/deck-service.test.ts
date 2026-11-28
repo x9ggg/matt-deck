@@ -4023,6 +4023,19 @@ test('started for Codex, deck_skills reads a name as before where, broken at a c
       'name-dash': `x: 1${s}name: - q\ndescription: Works`,
       'name-blank-quoted': `x: 1${s}name: ' '\ndescription: Works`,
       'name-comment': `x: 1${s}name: A # c\ndescription: Works`,
+      'metadata-value': `description: Works${s}name: actual${s}metadata: b1`,
+      'metadata-number': `description: Works${s}name: actual${s}metadata: 1`,
+      'metadata-quoted': `description: Works${s}name: actual${s}metadata: "q"`,
+      'metadata-twice': `description: Works${s}name: actual${s}metadata:\n  short-description: a\n  short-description: b`,
+      'dash-value': `x: - q${s}name: actual\ndescription: Works`,
+      'lone-dash': `x: -${s}name: actual\ndescription: Works`,
+      'bracket-value': `x: ]a${s}name: actual\ndescription: Works`,
+      'brace-value': `x: }a${s}name: actual\ndescription: Works`,
+      'indent-tab': `x: a${s}\tb${s}name: actual\ndescription: Works`,
+      'indent-uneven': `x:${s}  y: 1${s} z: 2${s}name: actual\ndescription: Works`,
+      'indent-list': `x:${s}  - a${s}  b: 1${s}name: actual\ndescription: Works`,
+      'indent-colon': `x:${s}  y: a: b${s}name: actual\ndescription: Works`,
+      'flow-value': `x: [1, 2]${s}name: actual\ndescription: Works`,
     }
     for (const [folder, frontmatter] of Object.entries(writings)) {
       await rawSkill(source, folder, `---\n${frontmatter}\n---\n`)

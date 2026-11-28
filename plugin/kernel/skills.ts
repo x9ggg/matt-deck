@@ -256,32 +256,28 @@ const codexName = (text: string, folder: string) => {
   // where not, it goes on to read it line by line, as Deck did before. So
   // Deck reads its name off the pieces only where they are plain lines it can
   // read throughout (blank lines, comments, unindented `key: value` fields
-  // with no key twice, no flow, escapes or unclosed quotes and no unquoted
-  // value holding a colon and a space or ending in one, no name of `~` or null, a
-  // comment, a list, quoted blanks or one followed by a comment, and indented
-  // lines under a field that can own them, none under an empty name), and
-  // otherwise off the lines as before.
+  // with no key twice; no flow, escapes or unclosed quotes; no unquoted value
+  // holding a colon and a space or ending in one, or opening with a dash and
+  // a space, a lone dash, `]` or `}`; no metadata with a value; no name of `~`
+  // or null, a comment, quoted blanks or one followed by a comment; and
+  // indented lines only under a block), and otherwise off the lines as
+  // before.
   let readable = pieces.length > frontmatter.length
   const keys = new Set<string>()
-  let owner: 'none' | 'plain' | 'empty' | 'block' | 'closed' = 'none'
-  let emptyName = false
+  let inBlock = false
   for (const piece of readable ? pieces : []) {
     if (!/[^ \t]/.test(piece)) {
       continue
     }
     if (piece[0] === ' ' || piece[0] === '\t') {
-      if (owner !== 'block' && /^[ \t]*#/.test(piece)) {
+      if (inBlock || /^[ \t]*#/.test(piece)) {
         continue
       }
-      if (owner === 'none' || owner === 'closed' || emptyName || (owner === 'plain' && /:([ \t]|$)/.test(piece))) {
-        readable = false
-        break
-      }
-      continue
+      readable = false
+      break
     }
     if (piece[0] === '#') {
-      owner = owner === 'none' ? 'none' : 'closed'
-      emptyName = false
+      inBlock = false
       continue
     }
     const colon = piece.indexOf(':')
@@ -289,30 +285,30 @@ const codexName = (text: string, folder: string) => {
     const after = piece.slice(colon + 1)
     const raw = trimAsciiSpace(after)
     const parsed = simpleField(raw)
+    const quoted = raw[0] === '"' || raw[0] === "'"
     if (
       !/^[\w-]+$/.test(key) ||
       (after !== '' && after[0] !== ' ' && after[0] !== '\t') ||
       keys.has(key) ||
       parsed === undefined ||
       parsed.flow ||
-      (!parsed.inBlock && raw[0] !== '"' && raw[0] !== "'" && /:([ \t]|$)/.test(raw)) ||
-      // Codex takes these names for none, a comment or a list, unlike fieldsOf.
+      (!parsed.inBlock && !quoted && (/:([ \t]|$)/.test(raw) || /^(-([ \t]|$)|[\]}])/.test(raw))) ||
+      (key === 'metadata' && raw !== '') ||
+      // Codex takes these names for none or a comment, unlike fieldsOf.
       (key === 'name' &&
         (raw === '~' ||
           raw === 'null' ||
           raw === 'Null' ||
           raw === 'NULL' ||
           raw[0] === '#' ||
-          /^-([ \t]|$)/.test(raw) ||
-          ((raw[0] === '"' || raw[0] === "'") && !/[^ \t]/.test(parsed.value)) ||
-          (raw[0] !== '"' && raw[0] !== "'" && /[ \t]#/.test(raw))))
+          (quoted && !/[^ \t]/.test(parsed.value)) ||
+          (!quoted && /[ \t]#/.test(raw))))
     ) {
       readable = false
       break
     }
     keys.add(key)
-    emptyName = key === 'name' && parsed.value === '' && !parsed.inBlock
-    owner = parsed.inBlock ? 'block' : parsed.value === '' ? 'empty' : parsed.allowIndent ? 'plain' : 'closed'
+    inBlock = parsed.inBlock
   }
   const name = fieldsOf(readable ? pieces : frontmatter).name || folder
   if (hasConfirmedBlankDescription(frontmatter) || [...name].length > 64) {
