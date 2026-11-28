@@ -257,8 +257,9 @@ const codexName = (text: string, folder: string) => {
   // Deck reads its name off the pieces only where they are plain lines it can
   // read throughout (blank lines, comments, unindented `key: value` fields
   // with no key twice, no flow, escapes or unclosed quotes and no unquoted
-  // value holding a colon and a space or ending in one, and indented lines
-  // under a field that can own them, none under an empty name), and
+  // value holding a colon and a space or ending in one, no name of `~` or null, a
+  // comment, a list, quoted blanks or one followed by a comment, and indented
+  // lines under a field that can own them, none under an empty name), and
   // otherwise off the lines as before.
   let readable = pieces.length > frontmatter.length
   const keys = new Set<string>()
@@ -294,7 +295,17 @@ const codexName = (text: string, folder: string) => {
       keys.has(key) ||
       parsed === undefined ||
       parsed.flow ||
-      (!parsed.inBlock && raw[0] !== '"' && raw[0] !== "'" && /:([ \t]|$)/.test(raw))
+      (!parsed.inBlock && raw[0] !== '"' && raw[0] !== "'" && /:([ \t]|$)/.test(raw)) ||
+      // Codex takes these names for none, a comment or a list, unlike fieldsOf.
+      (key === 'name' &&
+        (raw === '~' ||
+          raw === 'null' ||
+          raw === 'Null' ||
+          raw === 'NULL' ||
+          raw[0] === '#' ||
+          /^-([ \t]|$)/.test(raw) ||
+          ((raw[0] === '"' || raw[0] === "'") && !/[^ \t]/.test(parsed.value)) ||
+          (raw[0] !== '"' && raw[0] !== "'" && /[ \t]#/.test(raw))))
     ) {
       readable = false
       break

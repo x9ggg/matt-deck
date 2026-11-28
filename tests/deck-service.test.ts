@@ -4015,6 +4015,14 @@ test('started for Codex, deck_skills reads a name as before where, broken at a c
       'at-elsewhere': `x: 1${s}name: A\nhint: @a\ndescription: Works`,
       'indented-first': ` y: 1\nx: 1${s}name: A\ndescription: Works`,
       'name-below': `name:${s} actual\ndescription: Works`,
+      'name-tilde': `x: 1${s}name: ~\ndescription: Works`,
+      'name-null': `x: 1${s}name: null\ndescription: Works`,
+      'name-null-title': `x: 1${s}name: Null\ndescription: Works`,
+      'name-null-upper': `x: 1${s}name: NULL\ndescription: Works`,
+      'name-hash': `x: 1${s}name: #c\ndescription: Works`,
+      'name-dash': `x: 1${s}name: - q\ndescription: Works`,
+      'name-blank-quoted': `x: 1${s}name: ' '\ndescription: Works`,
+      'name-comment': `x: 1${s}name: A # c\ndescription: Works`,
     }
     for (const [folder, frontmatter] of Object.entries(writings)) {
       await rawSkill(source, folder, `---\n${frontmatter}\n---\n`)
