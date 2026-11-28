@@ -3937,6 +3937,9 @@ test('started for Codex, deck_skills reads a description of letters, digits and 
       folders.push(folder)
       await rawSkill(source, folder, `---\nname: ${folder}\ndescription: ${writing}\n---\n`)
     }
+    // Under any key the line is no field, so no description is left.
+    folders.push(`${label}-other-key`)
+    await rawSkill(source, `${label}-other-key`, `---\nname: ${label}-other-key\nother: a${separator}b\n---\n`)
   }
   const deck = startDeck(dir, { HOME: user }, 'codex')
   t.after(deck.stop)
@@ -4029,12 +4032,15 @@ test('started for Codex, deck_skills counts a description broken inside any othe
     `a${s}\tb c`,
     `a${s}b${s}c`,
   ]
+  // What follows `description:`: the writings above, a break with no space
+  // after the colon, an unquoted U+0085 and a break at the value's start.
+  const values = (s: string) => [...writings(s).map(writing => ` ${writing}`), `a${s}b`, ' a\u0085b', ` ${s}b`]
   const folders: string[] = []
   for (const [label, separator] of [['cr', '\r'], ['ls', '\u2028'], ['ps', '\u2029']]) {
-    for (const [n, writing] of writings(separator!).entries()) {
+    for (const [n, value] of values(separator!).entries()) {
       const folder = `${label}-${String(n).padStart(2, '0')}`
       folders.push(folder)
-      await rawSkill(source, folder, `---\nname: ${folder}\ndescription: ${writing}\n---\n`)
+      await rawSkill(source, folder, `---\nname: ${folder}\ndescription:${value}\n---\n`)
     }
   }
   const deck = startDeck(dir, { HOME: user }, 'codex')
