@@ -53,12 +53,13 @@ const fieldsOf = (lines: string[]) => {
   const fields: Record<string, string> = {}
   let block: string | undefined
   for (const line of lines) {
-    // Split at the first field colon and trim boundary whitespace separately so
-    // long values with inner spaces are scanned linearly without backtracking.
+    // A field is a key, a colon and a value trimmed of whitespace at both ends;
+    // a value holding a carriage return or a Unicode line or paragraph
+    // separator makes the line no field, so under a block it goes on it.
     const colon = line.indexOf(':')
     const key = colon > 0 ? line.slice(0, colon) : ''
-    if (colon > 0 && /^[\w-]+$/.test(key)) {
-      const value = line.slice(colon + 1).trim()
+    const value = line.slice(colon + 1).trim()
+    if (colon > 0 && /^[\w-]+$/.test(key) && !/[\r\u2028\u2029]/.test(value)) {
       block = /^[>|][+-]?$/.test(value) ? key : undefined
       const quote = value[0]
       fields[key] =

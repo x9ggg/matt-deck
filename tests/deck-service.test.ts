@@ -5,7 +5,6 @@ import { mkdtempSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createInterface } from 'node:readline'
 import { DatabaseSync } from 'node:sqlite'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
@@ -27,10 +26,18 @@ const startDeck = (cwd: string, env: Record<string, string> = {}, host = 'claude
     stdio: ['pipe', 'pipe', 'inherit'],
   })
   const waiting = new Map<number, (message: any) => void>()
-  createInterface({ input: child.stdout }).on('line', line => {
-    const message = JSON.parse(line)
-    waiting.get(message.id)?.(message)
-    waiting.delete(message.id)
+  // Messages are split at newlines only, as the stdio transport writes them:
+  // a description may hold a Unicode line separator, which readline would
+  // also split at.
+  let unread = ''
+  child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+    const lines = (unread + chunk).split('\n')
+    unread = lines.pop()!
+    for (const line of lines.filter(line => line !== '')) {
+      const message = JSON.parse(line)
+      waiting.get(message.id)?.(message)
+      waiting.delete(message.id)
+    }
   })
   const exited = new Promise<never>((_, reject) =>
     child.on('exit', (code, signal) => reject(new Error(`Deck service exited (${code}${signal ? `, ${signal}` : ''})`))),
@@ -3046,6 +3053,25 @@ test('deck_skills trims only field boundaries, keeping inner spaces, paired quot
   )
 })
 
+test('deck_skills reads a line whose value holds a carriage return or a Unicode line or paragraph separator as no field, so under a block it goes on the block', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  const skills = join(user, '.claude', 'skills')
+  await rawSkill(skills, 'under-block', '---\nname: under-block\ndescription: >\n  x\nother: a\u2028b\n  y\n---\n')
+  await rawSkill(skills, 'edges', '---\nname: edges\ndescription:\u2029 kept \r\n---\n')
+  const deck = startDeck(dir, { HOME: user })
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_skills')
+
+  assert.deepEqual(
+    result.structuredContent.skills.map(({ name, description }: any) => [name, description]),
+    [
+      ['edges', 'kept'],
+      ['under-block', 'x other: a\u2028b y'],
+    ],
+  )
+})
+
 test('deck_skills calls the skills of a plugin Skill Source with the plugin prefix, from every folder of it', async t => {
   const { dir, user } = await withSkillSource({ type: 'plugin', name: 'mattpocock-skills' })
   const matt = join(user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
@@ -3399,6 +3425,29 @@ test('started for Codex, deck_skills keeps copy expected for spaced valid and bl
     assert.deepEqual([read.skill.name, read.skill.description, read.skill.copy], ['long', expected, 'same'], label)
     assert.ok(read.ms - plainRead.ms < 1000, `${label}: ${read.ms} ms vs plain ${plainRead.ms} ms (short ${shortRead.ms} ms)`)
   }
+})
+
+test('started for Codex, deck_skills reads a description holding a carriage return or a Unicode line or paragraph separator as none, as Codex does not load it', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const source = join(user, '.agents', 'skills')
+  for (const [folder, separator] of [['carriage-return', '\r'], ['line-separator', '\u2028'], ['paragraph-separator', '\u2029']]) {
+    await rawSkill(source, folder!, `---\nname: ${folder}\ndescription: a${separator}b\n---\n`)
+  }
+  await rawSkill(source, 'under-block', '---\nname: under-block\ndescription: >\n  x\nother: a\u2028b\n  y\n---\n')
+  const deck = startDeck(dir, { HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_skills')
+
+  assert.deepEqual(
+    result.structuredContent.skills.map(({ name, description, copy }: any) => [name, description, copy]),
+    [
+      ['carriage-return', '', 'missing'],
+      ['line-separator', '', 'missing'],
+      ['paragraph-separator', '', 'missing'],
+      ['under-block', 'x other: a\u2028b y', 'same'],
+    ],
+  )
 })
 
 test('started for Codex, deck_skills lists every skill when Codex\'s skill directories hold entries that cannot be read, judging each name by the files that can', { skip: process.getuid?.() === 0 }, async t => {
