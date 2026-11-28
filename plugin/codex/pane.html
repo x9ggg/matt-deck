@@ -1617,8 +1617,10 @@ button.dk-row{color:inherit}
     }
     const { key, layer, busy } = pressed
     const controls = [...document.querySelectorAll('button, [data-focus]')].filter(each => each.closest('[hidden]') === null)
+    // While what it fills in is being filled in, it waits, whether or not a
+    // button drawn meanwhile is drawn off yet.
+    if (busy()) return
     const button = controls.find(each => each.tagName === 'BUTTON' && focusKey(each) === key)
-    if (button?.disabled && busy()) return
     pressed = undefined
     const nowhere = document.activeElement === null || document.activeElement === document.body
     const holder = controls.find(each => each.dataset.focus === key.split('/')[0] && /^(row|card|skill):/.test(each.dataset.focus))

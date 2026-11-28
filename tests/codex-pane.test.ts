@@ -9090,3 +9090,49 @@ test('a detail drawn anew while the window has given the focus to the Host leave
   assert.equal(detailShown(page)?.title, `#73 ${title}`)
   assert.notEqual(document.activeElement, edge())
 })
+
+test('a skill\'s text\'s "预填" pressed before the text is read has the focus back on it 5 seconds after the Host took it', async t => {
+  let holding = true
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_skill' && holding ? undefined : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const prefill = () => [...document.querySelectorAll('.dk-bar button')].find(each => ['预填', '已填入'].includes(text(each)!))
+  await page.click(tabNamed(document, '技能'))
+  await page.click(skillRowOf(document, IMPLEMENT))
+
+  await pressed(page, prefill)
+  holding = false
+  const read = page.sent.filter(message => message.params?.name === 'deck_skill').at(-1)
+  await page.respond(read, { result: deckWithSkills()('deck_skill', read.params.arguments) as any })
+  await pastAFrame()
+  await page.settled()
+  await page.advance(5_000)
+  assert.deepEqual(hasFocus(page, prefill()), [true, false])
+})
+
+test('a prefill button pressed, then another tab and back while it is off, leaves the focus where it is', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+
+  await pressed(page, () => rowExecute(document, 70))
+  await page.click(tabNamed(document, '地图'))
+  await page.click(tabNamed(document, '任务'))
+  await page.advance(5_000)
+  assert.notEqual(document.activeElement, rowExecute(document, 70))
+})
+
+test('a detail drawn anew keeps the focus on "属于"', async t => {
+  let title = 'Task 详情'
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_task' && args.number === 70 ? answered(detail(70, title)) : deckWithSkills()(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowOf(document, 70))
+  const up = () => document.querySelector<HTMLElement>('#into .dk-parent__link')!
+  up().focus()
+
+  title = 'Task 详情改过 5k2p'
+  await page.click(document.querySelector('.dk-head > button'))
+  assert.equal(detailShown(page)?.title, `#70 ${title}`)
+  assert.equal(document.activeElement, up())
+})
