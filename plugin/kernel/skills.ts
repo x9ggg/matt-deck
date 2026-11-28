@@ -46,14 +46,13 @@ const isMissing = (error: any) => error.code === 'ENOENT' || error.code === 'ENO
 const resolveDirectory = (path: string, workspace: string, home: string) =>
   path.startsWith('~/') ? join(home, path.slice(2)) : isAbsolute(path) ? path : join(workspace, path)
 
-// The frontmatter's `key: value` fields, and the body under it. A value
-// written as a block (`>` or `|`, then indented lines) is read as one line:
-// the Pane lists a description on one.
-const parse = (text: string) => {
-  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
+// The `key: value` fields of a frontmatter's lines. A value written as a
+// block (`>` or `|`, then indented lines) is read as one line: the Pane lists
+// a description on one.
+const fieldsOf = (lines: string[]) => {
   const fields: Record<string, string> = {}
   let block: string | undefined
-  for (const line of match?.[1]?.split(/\r?\n/) ?? []) {
+  for (const line of lines) {
     const field = line.match(/^([\w-]+):\s*(.*?)\s*$/)
     if (field !== null) {
       block = /^[>|][+-]?$/.test(field[2]!) ? field[1]! : undefined
@@ -63,7 +62,40 @@ const parse = (text: string) => {
     }
   }
 
-  return { fields, body: text.slice(match?.[0].length ?? 0).replace(/^\s*\n/, '') }
+  return fields
+}
+
+// The frontmatter's fields, and the body under it.
+const parse = (text: string) => {
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
+
+  return { fields: fieldsOf(match?.[1]?.split(/\r?\n/) ?? []), body: text.slice(match?.[0].length ?? 0).replace(/^\s*\n/, '') }
+}
+
+// A frontmatter's fence as Codex reads it: `---`, with what Rust takes for
+// space around it, which a byte order mark is not and U+0085 is.
+const FENCE = /^(?:[^\S\uFEFF]|\u0085)*---(?:[^\S\uFEFF]|\u0085)*$/
+
+// The name Codex loads a skill file in `folder` by, or undefined when Codex
+// loads no skill from it (codex-rs/skills/src/parser.rs): it has no
+// frontmatter, between a first line and a later one that are fences,
+// holding a line at least; or no description, or one of space alone; or its
+// name, its frontmatter's or else its folder's, is longer than 64
+// characters, counted as Unicode code points. What only YAML would tell,
+// Deck does not.
+const codexName = (text: string, folder: string) => {
+  const lines = text.split(/\r?\n/)
+  const end = lines.findIndex((line, n) => n > 0 && FENCE.test(line))
+  if (!FENCE.test(lines[0]!) || end < 2) {
+    return undefined
+  }
+  const fields = fieldsOf(lines.slice(1, end))
+  const name = fields.name || folder
+  if ((fields.description ?? '').trim() === '' || [...name].length > 64) {
+    return undefined
+  }
+
+  return name
 }
 
 // Where the skill files are: the root they lie under, how a path under it is
@@ -157,12 +189,12 @@ const readAll = async (source: SkillSource, workspace: string, home: string, cal
 // directories (`MAX_SCAN_DEPTH` in codex-rs/ext/skills/src/loader/mod.rs).
 const CODEX_SCAN_DEPTH = 6
 
-// Every skill file the host finds itself under `directories`, its links
-// resolved, with the name the host knows it by: its frontmatter's `name`, or
-// when that is empty the name of its folder, links resolved. The directories
-// are walked as Codex walks its own: down to CODEX_SCAN_DEPTH levels, each
-// directory once under each of them, following links to directories but not
-// to files, and never into a hidden directory.
+// Every skill file the host finds itself under `directories` and loads, its
+// links resolved, with the name the host knows it by: its frontmatter's
+// `name`, or when that is empty the name of its folder, links resolved. The
+// directories are walked as Codex walks its own: down to CODEX_SCAN_DEPTH
+// levels, each directory once under each of them, following links to
+// directories but not to files, and never into a hidden directory.
 const scanHost = async (directories: string[], workspace: string, home: string) => {
   const found: { name: string; file: string }[] = []
   for (const directory of directories) {
@@ -189,7 +221,10 @@ const scanHost = async (directories: string[], workspace: string, home: string) 
           const text = await readFile(path, 'utf8').catch(() => undefined)
           if (text !== undefined) {
             const file = await realpath(path)
-            found.push({ name: parse(text).fields.name || basename(dirname(file)), file })
+            const name = codexName(text, basename(dirname(file)))
+            if (name !== undefined) {
+              found.push({ name, file })
+            }
           }
         }
       }

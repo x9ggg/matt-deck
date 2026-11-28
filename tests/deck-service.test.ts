@@ -276,9 +276,16 @@ test('deck_setup_survey shows the existing config of a Configured Project', asyn
   assert.deepEqual(c.structuredContent.existing, { configured: false })
 })
 
+// A skill file Codex loads: named, with a description.
 const skill = async (dir: string, name: string) => {
   await mkdir(join(dir, name), { recursive: true })
-  await writeFile(join(dir, name, 'SKILL.md'), `---\nname: ${name}\n---\n`)
+  await writeFile(join(dir, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name} 的说明。\n---\n`)
+}
+
+// A skill file in a folder named `folder` under `dir`, as written.
+const rawSkill = async (dir: string, folder: string, text: string) => {
+  await mkdir(join(dir, folder), { recursive: true })
+  await writeFile(join(dir, folder, 'SKILL.md'), text)
 }
 
 const installedPlugins = async (home: string, plugins: Record<string, object[]>) => {
@@ -433,6 +440,19 @@ test('started for Codex, deck_setup_survey says of the existing Skill Source too
     [true, true, true, false],
   )
   assert.equal('hostCallsAskMatt' in forClaudeCode.structuredContent.existing, false)
+})
+
+test('started for Codex, deck_setup_survey says $ask-matt in Codex calls no ask-matt whose file has no description, offered or existing', async t => {
+  const user = await home()
+  const dir = await workspace(JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path: '~/.agents/skills' } }))
+  await rawSkill(join(user, '.agents', 'skills'), 'ask-matt', '---\nname: ask-matt\n---\n')
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_setup_survey')
+
+  assert.deepEqual(result.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: false }])
+  assert.equal(result.structuredContent.existing.hostCallsAskMatt, false)
 })
 
 test('started for Codex, deck_setup_survey offers first the copy of Matt skills whose ask-matt $ask-matt in Codex calls, the others after it in their order', async t => {
@@ -2904,6 +2924,81 @@ test('started for Codex, deck_skills finds no copy of a skill whose name $ canno
     ['tdd', 'same'],
   ])
   assert.deepEqual(copies(ofOutside), [['../../.claude/skills/walker', 'missing']])
+})
+
+test('started for Codex, deck_skills finds no copy of a skill whose file Codex does not load: no description, or an empty one, no frontmatter as Codex reads one, or a name past 64 characters', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const source = join(user, '.agents', 'skills')
+  const long = (n: number) => 'a'.repeat(n)
+  for (const [folder, text] of [
+    ['no-description', '---\nname: no-description\n---\n'],
+    ['empty-description', '---\nname: empty-description\ndescription:\n---\n'],
+    ['quoted-empty', '---\nname: quoted-empty\ndescription: ""\n---\n'],
+    ['quoted-blank', '---\nname: quoted-blank\ndescription: "   "\n---\n'],
+    ['no-frontmatter', '# no-frontmatter\n\nNo frontmatter.\n'],
+    ['unclosed', '---\nname: unclosed\ndescription: Not closed.\n\n# unclosed\n'],
+    ['long-65', `---\nname: ${long(65)}\ndescription: Too long a name.\n---\n`],
+    ['long-64', `---\nname: ${long(64)}\ndescription: A name just short enough.\n---\n`],
+    ['folded', '---\nname: folded\ndescription: >\n  Folded over\n  two lines.\n---\n'],
+    ['literal', '---\nname: literal\ndescription: |\n  Kept as written.\n---\n'],
+    ['very-long', `---\nname: very-long\ndescription: ${long(2000)}\n---\n`],
+    ['colon', '---\nname: colon\ndescription: Build for AWS: ECS\n---\n'],
+    ['unnamed', '---\ndescription: Named by its folder.\n---\n'],
+    ['spaced', '--- \nname: spaced\ndescription: Fenced with spaces.\n ---\n'],
+    // Codex trims a fence of what Rust takes for space: not a byte order mark.
+    ['bom', '\uFEFF---\nname: bom\ndescription: Opens with a byte order mark.\n---\n'],
+  ]) {
+    await rawSkill(source, folder!, text!)
+  }
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_skills')
+
+  assert.deepEqual(copies(result), [
+    [long(64), 'same'],
+    [long(65), 'missing'],
+    ['bom', 'missing'],
+    ['colon', 'same'],
+    ['empty-description', 'missing'],
+    ['folded', 'same'],
+    ['literal', 'same'],
+    ['no-description', 'missing'],
+    ['no-frontmatter', 'missing'],
+    ['quoted-blank', 'missing'],
+    ['quoted-empty', 'missing'],
+    ['spaced', 'same'],
+    ['unclosed', 'missing'],
+    ['unnamed', 'same'],
+    ['very-long', 'same'],
+  ])
+})
+
+test('started for Codex, deck_skills takes no file of the same name Codex does not load for another copy, and one it loads for another', async t => {
+  const results = []
+  for (const description of ['', 'description: Theirs.\n']) {
+    const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+    await skillFile(join(user, '.agents', 'skills'), 'ok', 'Mine.')
+    await rawSkill(join(user, '.codex', 'skills'), 'ok', `---\nname: ok\n${description}---\n`)
+    const codex = startDeck(dir, { HOME: user }, 'codex')
+    t.after(codex.stop)
+    results.push(copies(await codex.callTool('deck_skills')))
+  }
+
+  assert.deepEqual(results, [[['ok', 'same']], [['ok', 'different']]])
+})
+
+test('deck_skills for Claude Code lists a skill with no description as before, with no copy', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  await rawSkill(join(user, '.agents', 'skills'), 'no-description', '---\nname: no-description\n---\n')
+  const claudeCode = startDeck(dir, { HOME: user })
+  t.after(claudeCode.stop)
+
+  const result = await claudeCode.callTool('deck_skills')
+
+  assert.deepEqual(result.structuredContent.skills, [
+    { name: 'no-description', call: '/no-description', description: '', path: '~/.agents/skills/no-description/SKILL.md' },
+  ])
 })
 
 test('started for Codex, deck_skills lists every skill when Codex\'s skill directories hold entries that cannot be read, judging each name by the files that can', { skip: process.getuid?.() === 0 }, async t => {
