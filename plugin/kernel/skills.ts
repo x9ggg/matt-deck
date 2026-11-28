@@ -53,12 +53,25 @@ const fieldsOf = (lines: string[]) => {
   const fields: Record<string, string> = {}
   let block: string | undefined
   for (const line of lines) {
-    const field = line.match(/^([\w-]+):\s*(.*?)\s*$/)
-    if (field !== null) {
-      block = /^[>|][+-]?$/.test(field[2]!) ? field[1]! : undefined
-      fields[field[1]!] = block === undefined ? field[2]!.replace(/^(["'])(.*)\1$/, '$2') : ''
-    } else if (block !== undefined && line.trim() !== '') {
-      fields[block] = `${fields[block]} ${line.trim()}`.trimStart()
+    // Split at the first field colon and trim boundary whitespace separately so
+    // long values with inner spaces are scanned linearly without backtracking.
+    const colon = line.indexOf(':')
+    const key = colon > 0 ? line.slice(0, colon) : ''
+    if (colon > 0 && /^[\w-]+$/.test(key)) {
+      const value = line.slice(colon + 1).trim()
+      block = /^[>|][+-]?$/.test(value) ? key : undefined
+      const quote = value[0]
+      fields[key] =
+        block !== undefined
+          ? ''
+          : value.length >= 2 && (quote === '"' || quote === "'") && value.at(-1) === quote
+            ? value.slice(1, -1)
+            : value
+    } else if (block !== undefined) {
+      const trimmed = line.trim()
+      if (trimmed !== '') {
+        fields[block] = fields[block] === '' ? trimmed : `${fields[block]} ${trimmed}`
+      }
     }
   }
 

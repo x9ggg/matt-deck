@@ -3000,6 +3000,52 @@ test('deck_skills reads a description written as a block over several lines as o
   )
 })
 
+test('deck_skills trims only field boundaries, keeping inner spaces, paired quotes\' spaces, colons and block rules', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
+  const skills = join(user, '.claude', 'skills')
+  for (const [folder, text] of [
+    ['spaced-quoted', '---\nname:   "spaced-quoted"   \ndescription:   "Read   this field."   \n---\n'],
+    ['plain-name', '---\nname:   plain-name   \ndescription:\t  "  kept   inside  "  \t\n---\n'],
+    ['single-quoted', '---\nname: single-quoted\ndescription:   \'  single   inside  \'   \n---\n'],
+    ['inner-spaces', '---\nname: inner-spaces\ndescription:   keep   middle   spaces   \n---\n'],
+    ['colons', '---\nname: colons\ndescription:   Build for AWS: ECS: prod   \n---\n'],
+    ['empty-fields', '---\nname:\ndescription:   \n---\n'],
+    ['quoted-marker', '---\nname: quoted-marker\ndescription: ">"\n---\n'],
+    ['mismatched', '---\nname: mismatched\ndescription: "not-closed\'\n---\n'],
+    ['single-quote-only', '---\nname: single-quote-only\ndescription: "\n---\n'],
+    [
+      'block-then-field',
+      '---\nname: block-then-field\ndescription: |+   \n  first   line  \n\n  second line  \nother: ignored\n  after other\n---\n',
+    ],
+    ['block-empty', '---\nname: block-empty\ndescription: >-\n   \nother: value\n---\n'],
+    ['block-fold-plus', '---\nname: block-fold-plus\ndescription: >+\n  one\n  two\n---\n'],
+  ]) {
+    await rawSkill(skills, folder!, text!)
+  }
+  const deck = startDeck(dir, { HOME: user })
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_skills')
+
+  assert.deepEqual(
+    result.structuredContent.skills.map(({ name, description }: any) => [name, description]),
+    [
+      ['block-empty', ''],
+      ['block-fold-plus', 'one two'],
+      ['block-then-field', 'first   line second line'],
+      ['colons', 'Build for AWS: ECS: prod'],
+      ['empty-fields', ''],
+      ['inner-spaces', 'keep   middle   spaces'],
+      ['mismatched', '"not-closed\''],
+      ['plain-name', '  kept   inside  '],
+      ['quoted-marker', '>'],
+      ['single-quote-only', '"'],
+      ['single-quoted', '  single   inside  '],
+      ['spaced-quoted', 'Read   this field.'],
+    ],
+  )
+})
+
 test('deck_skills calls the skills of a plugin Skill Source with the plugin prefix, from every folder of it', async t => {
   const { dir, user } = await withSkillSource({ type: 'plugin', name: 'mattpocock-skills' })
   const matt = join(user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
@@ -3302,6 +3348,57 @@ test('deck_skills for Claude Code lists a skill with no description as before, w
   assert.deepEqual(result.structuredContent.skills, [
     { name: 'no-description', call: '/no-description', description: '', path: '~/.agents/skills/no-description/SKILL.md' },
   ])
+})
+
+test('started for Codex, deck_skills keeps copy expected for spaced valid and blank descriptions, and reads long fields in linear time', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const source = join(user, '.agents', 'skills')
+  await rawSkill(source, 'valid-spaced', '---\nname: valid-spaced\ndescription:   "Read   this field."   \n---\n')
+  await rawSkill(source, 'blank-block', '---\nname: blank-block\ndescription: >\n   \n---\n')
+  const check = startDeck(dir, { HOME: user }, 'codex')
+  t.after(check.stop)
+  const checkResult = await check.callTool('deck_skills')
+  assert.deepEqual(copies(checkResult), [
+    ['blank-block', 'missing'],
+    ['valid-spaced', 'same'],
+  ])
+  assert.equal(checkResult.structuredContent.skills[1].description, 'Read   this field.')
+
+  // One skill file in Codex's own directory so every call exercises both
+  // Skill Source parsing and Codex's directory scan on a warmed service.
+  const timedHome = await home()
+  const timedDir = await workspace(
+    JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path: '~/.agents/skills' } }),
+  )
+  const timedSource = join(timedHome, '.agents', 'skills')
+  const deck = startDeck(timedDir, { HOME: timedHome }, 'codex')
+  t.after(deck.stop)
+  const timed = async (description: string) => {
+    await rawSkill(timedSource, 'long', `---\nname: long\ndescription: ${description}\n---\n`)
+    const start = await deck.cpuMs()
+    const { structuredContent } = await deck.callTool('deck_skills')
+    return { ms: (await deck.cpuMs()) - start, skill: structuredContent.skills[0] }
+  }
+  const plain = 'ab '.repeat(Math.ceil(BLANK_TOP / 3)).slice(0, BLANK_TOP).trim()
+  await timed(plain)
+  const plainRead = await timed(plain)
+  assert.deepEqual([plainRead.skill.name, plainRead.skill.description, plainRead.skill.copy], ['long', plain, 'same'])
+  const shortVal = `a${' '.repeat(10_000)}b`
+  const shortRead = await timed(shortVal)
+  assert.deepEqual([shortRead.skill.name, shortRead.skill.description, shortRead.skill.copy], ['long', shortVal, 'same'])
+  assert.ok(shortRead.ms - plainRead.ms < 1000, `short ${shortRead.ms} ms vs plain ${plainRead.ms} ms`)
+
+  const longCases = [
+    { label: 'middle-spaces', raw: `a${' '.repeat(BLANK_TOP - 2)}b`, expected: `a${' '.repeat(BLANK_TOP - 2)}b` },
+    { label: 'trailing-spaces', raw: `a${' '.repeat(BLANK_TOP - 1)}`, expected: 'a' },
+    { label: 'leading-spaces', raw: `${' '.repeat(BLANK_TOP - 1)}a`, expected: 'a' },
+    { label: 'unclosed-quote', raw: `"${'a'.repeat(BLANK_TOP - 1)}`, expected: `"${'a'.repeat(BLANK_TOP - 1)}` },
+  ]
+  for (const { label, raw, expected } of longCases) {
+    const read = await timed(raw)
+    assert.deepEqual([read.skill.name, read.skill.description, read.skill.copy], ['long', expected, 'same'], label)
+    assert.ok(read.ms - plainRead.ms < 1000, `${label}: ${read.ms} ms vs plain ${plainRead.ms} ms (short ${shortRead.ms} ms)`)
+  }
 })
 
 test('started for Codex, deck_skills lists every skill when Codex\'s skill directories hold entries that cannot be read, judging each name by the files that can', { skip: process.getuid?.() === 0 }, async t => {
