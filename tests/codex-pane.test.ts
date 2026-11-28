@@ -5927,6 +5927,40 @@ test('closed by a takeover answered after the person went to the Host, the askin
   assert.equal(document.activeElement, rowButton(document, 72, '释放'))
 })
 
+test('closed by a takeover answered after the person went to the Host, the asking leaves the focus where it is if they are still there as the Tasks are read again, though back before its button is on', async t => {
+  let answer: () => void = () => {}
+  const occupies: ReturnType<typeof deckThatOccupies> = deckThatOccupies(undefined, args => new Promise(resolve => (answer = () => resolve(occupies.occupyAsIs(args)))))
+  const recommends = deckThatRecommends()
+  const page = await openPage({
+    answer: (name, args: any) => (['deck_ask', 'deck_recommendation'].includes(name) ? recommends.answer(name, args) : occupies.answer(name, args)),
+  })
+  t.after(page.close)
+  const { document, window } = page
+  const recommended = () => document.querySelector<HTMLButtonElement>('.dk-rec [data-execute]')!
+
+  await page.click(tabNamed(document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  recommends.reported.set('request-1', { ...RECOMMENDATION, task: 69 })
+  await page.advance(2_000)
+  await page.click(recommended())
+  ;(askButton(document, '接管') as HTMLElement).click()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  // The person goes to the Host's prompt before the move is answered; the
+  // Tasks are read again at once, and the Execute Prompt is filled in.
+  window.dispatchEvent(new window.FocusEvent('blur'))
+  answer()
+  await page.settled()
+  assert.deepEqual(executeShown(recommended()), ['已填入', false])
+  // Back in the page before the button is on again.
+  await page.advance(2_000)
+  window.dispatchEvent(new window.FocusEvent('focus'))
+
+  await page.advance(6_000)
+
+  assert.deepEqual(executeShown(recommended()), ['执行这个 Task', true])
+  assert.equal(document.activeElement, document.body)
+})
+
 test('closed, an asking leaves the focus where it is once the person has gone to another tab, or into a detail, before it is placed, and come back', async t => {
   const occupies = deckThatOccupies()
   const recommends = deckThatRecommends()
