@@ -6138,6 +6138,373 @@ test('"我现在该做什么" the Host answers after 10 seconds counts while not
   assert.deepEqual(deck.reads.filter(each => each !== 'request-1'), [])
 })
 
+// The notice of an action the Deck service has not answered in 10 seconds.
+const slowAction = (said: string) => ({ warn: true, role: 'status', title: 'Deck 服务还没应答。', said })
+// The last call of the tool `name` the page made.
+const lastCall = (page: { sent: any[] }, name: string) => page.sent.filter(message => message.method === 'tools/call' && message.params.name === name).at(-1)
+
+test('"执行" whose Execute Prompt the Deck service does not give in 10 seconds is on again and says so; the prompt given after that is filled in once, and the notice goes', async t => {
+  const deck = deckThatRecommends()
+  let holding = false
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_execute' && holding ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  deck.reported.set('request-1', RECOMMENDATION)
+  await page.advance(2_000)
+  holding = true
+
+  const recommended = () => document.querySelector('.dk-rec [data-execute]')!
+  await page.click(recommended())
+  await page.advance(9_999)
+  assert.deepEqual(executeShown(recommended()), ['执行这个 Task', false])
+  assert.equal(topNotice(page), undefined)
+  await page.advance(1)
+  assert.deepEqual(executeShown(recommended()), ['执行这个 Task', true])
+  assert.deepEqual(topNotice(page), slowAction('回答到了会照常填入；不想等就再点“执行这个 Task”。'))
+
+  await page.click(tabNamed(document, '任务'))
+  await page.click(rowExecute(document, 70))
+  await page.advance(10_000)
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', true])
+  assert.deepEqual(topNotice(page), slowAction('回答到了会照常填入；不想等就再点“执行”。'))
+
+  // Given late, with no click since: filled in, as given in time.
+  await page.respond(lastCall(page, 'deck_execute'), { result: deck.answer('deck_execute', { task: 70 }) as any })
+  assert.equal(topNotice(page), undefined)
+  assert.deepEqual(prefills(page).slice(1), [prefilled(executePromptOf(70))])
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['已填入', false])
+  await page.advance(5_000)
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', true])
+})
+
+test('"执行" given its Execute Prompt late, once clicked again, fills in only the later one; one late that fails says why', async t => {
+  let held: any[] = []
+  const answer = deckAt('/work/matt-deck')
+  let failing = false
+  const page = await openPage({
+    answer: (name, args: any) => {
+      if (name !== 'deck_execute') return answer(name, args)
+      if (held.length === 0) {
+        held.push(args)
+        return undefined
+      }
+      return failing ? NO_IMPLEMENT : answer(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+  const first = () => page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_execute')[0]
+
+  await page.click(rowExecute(document, 70))
+  await page.advance(10_000)
+  await page.click(rowExecute(document, 70))
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(70))])
+  await page.respond(first(), { result: answer('deck_execute', { task: 70 }) })
+  assert.equal(prefills(page).length, 1)
+  assert.deepEqual(executeShown(rowExecute(document, 70)), ['已填入', false])
+  await page.advance(5_000)
+
+  // Late and failing, with no click since.
+  held = []
+  await page.click(rowExecute(document, 70))
+  await page.advance(10_000)
+  await page.respond(lastCall(page, 'deck_execute'), { result: NO_IMPLEMENT })
+  assert.deepEqual(resultShown(page), noPrompt('Skill Source 里没有 implement。重跑配置之后恢复。'))
+  assert.equal(prefills(page).length, 1)
+})
+
+test('a takeover the Deck service does not answer in 10 seconds has the confirmation\'s buttons on again, the focus back on "接管", and says so; answered after that, the Task is taken over and its Execute Prompt filled in', async t => {
+  const deck = deckThatOccupies()
+  let holding = true
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_occupy' && holding ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowButton(document, 72, '接管'))
+  ;(askButton(document, '接管') as HTMLElement).focus()
+  ;(askButton(document, '接管') as HTMLElement).click()
+  // The browser moves the focus off the button gone off, a frame on.
+  await pastAFrame()
+  await page.advance(9_999)
+  assert.deepEqual(askShown(page)?.buttons, ['接管（停用）', '取消（停用）'])
+  await page.advance(1)
+
+  assert.deepEqual(askShown(page), {
+    role: 'status',
+    glyph: '进行中 · 其他 Session',
+    title: '#72 正由 Session 77e0aa15 执行',
+    said: 'Deck 服务还没应答。回答到了会照常接管；不想等就再点“接管”。',
+    buttons: ['接管', '取消'],
+  })
+  assert.deepEqual(focused(document), ['接管', true])
+  assert.equal(topNotice(page), undefined)
+
+  holding = false
+  await page.respond(lastCall(page, 'deck_occupy'), { result: deck.occupyAsIs(lastCall(page, 'deck_occupy').params.arguments) as any })
+  assert.equal(askShown(page), undefined)
+  assert.equal(text(rowOf(document, 72).querySelector('.dk-row__meta')), '进行中 · 本 Session ready-for-agent')
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(72))])
+})
+
+test('a takeover the Deck service does not answer in 10 seconds leaves the focus where the person moved it meanwhile: on another control, or in the Host', async t => {
+  for (const where of ['a tab', 'the Host']) {
+    const deck = deckThatOccupies()
+    const page = await openPage({ answer: (name, args: any) => (name === 'deck_occupy' ? undefined : deck.answer(name, args)) })
+    t.after(page.close)
+    const { document } = page
+    await page.click(rowButton(document, 72, '接管'))
+    ;(askButton(document, '接管') as HTMLElement).focus()
+    ;(askButton(document, '接管') as HTMLElement).click()
+    await pastAFrame()
+    let there: Element | null = document.body
+    if (where === 'a tab') {
+      there = tabNamed(document, '任务')
+      ;(there as HTMLElement).focus()
+    } else page.window.dispatchEvent(new page.window.FocusEvent('blur'))
+    await page.advance(10_000)
+
+    assert.deepEqual(askShown(page)?.buttons, ['接管', '取消'], where)
+    assert.equal(document.activeElement, there, where)
+  }
+})
+
+test('a takeover the Deck service does not answer in 10 seconds, its confirmation then cancelled, is given up: answered after that, nothing is filled in, and the next read draws the Task as it is', async t => {
+  const deck = deckThatOccupies()
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_occupy' ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  await page.advance(10_000)
+  await page.click(askButton(document, '取消'))
+  assert.equal(askShown(page), undefined)
+
+  const occupy = lastCall(page, 'deck_occupy')
+  await page.respond(occupy, { result: deck.occupyAsIs(occupy.params.arguments) as any })
+  assert.deepEqual(prefills(page), [])
+  assert.deepEqual(calledWith(page, 'deck_execute'), [])
+  assert.equal(topNotice(page), undefined)
+  assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['接管'])
+  await page.advance(50_000)
+  assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'])
+})
+
+test('"我现在该做什么" the Deck service has not answered still says so after "刷新"', async t => {
+  const deck = deckThatRecommends()
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_ask' ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  await page.advance(10_000)
+
+  await page.click(page.document.querySelector('.dk-head > button'))
+  assert.deepEqual(nextTab(page).said.slice(0, 2), ['Deck 服务还没应答。', '回答到了会照常填入；不想等就再点“我现在该做什么”。'])
+})
+
+test('"释放" clicked twice within 10 seconds goes by both answers, as before', async t => {
+  const deck = deckThatOccupies()
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_release' ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const releases = () => page.sent.filter(message => message.params?.name === 'deck_release')
+  await page.click(rowButton(document, 74, '释放'))
+  await page.click(rowButton(document, 74, '释放'))
+
+  await page.respond(releases()[0], { result: answered({ ok: false, failure: { kind: 'offline', message: 'fetch failed 6t1q' } }) })
+  assert.equal(resultShown(page)?.title, '#74 没有释放')
+})
+
+test('a takeover the Deck service does not answer in 10 seconds once its confirmation was closed says so in the result notice\'s place, the row\'s "接管" on; answered after that as failing, it says why', async t => {
+  const deck = deckThatOccupies()
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_occupy' ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  await page.click(tabNamed(document, '地图'))
+  await page.click(tabNamed(document, '任务'))
+  assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['接管（停用）'])
+  await page.advance(10_000)
+
+  assert.deepEqual(topNotice(page), slowAction('回答到了会照常接管；不想等就再点“接管”。'))
+  assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['接管'])
+
+  await page.respond(lastCall(page, 'deck_occupy'), { result: answered({ ok: false, failure: { kind: 'offline', message: 'fetch failed 6t1q' } }) })
+  assert.deepEqual(resultShown(page)?.title, '#72 没有接管')
+  assert.deepEqual(resultShown(page)?.said, '连不上 GitHub。检查网络后再点“接管”重试。')
+  assert.deepEqual(prefills(page), [])
+})
+
+test('a takeover answered late, once "接管" was clicked again, changes nothing: the Execute Prompt is filled in once', async t => {
+  const deck = deckThatOccupies()
+  let first: any
+  const page = await openPage({
+    answer: (name, args: any) => {
+      if (name === 'deck_occupy' && first === undefined) {
+        first = args
+        return undefined
+      }
+      return deck.answer(name, args)
+    },
+  })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  await page.advance(10_000)
+  await page.click(askButton(document, '接管'))
+  assert.deepEqual(prefills(page), [prefilled(executePromptOf(72))])
+  await page.advance(5_000)
+
+  const reads = calledWith(page, 'deck_map').length
+  await page.respond(page.sent.filter(message => message.params?.name === 'deck_occupy')[0], { result: deck.occupyAsIs(first) as any })
+  assert.equal(prefills(page).length, 1)
+  assert.equal(calledWith(page, 'deck_map').length, reads)
+  assert.equal(topNotice(page), undefined)
+})
+
+test('an Execute Prompt after a takeover the Deck service does not give in 10 seconds says the Task is this Session\'s and how to go on', async t => {
+  const deck = deckThatOccupies()
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_execute' ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  await page.advance(10_000)
+
+  assert.deepEqual(topNotice(page), slowAction('#72 已转给本 Session。回答到了会照常填入 Execute Prompt；不想等就点“释放”之后再点“执行”。'))
+  assert.deepEqual(buttonsIn(rowOf(document, 72).querySelector('.dk-row__actions')), ['释放'])
+})
+
+test('"释放" the Deck service does not answer in 10 seconds says so; answered after that, the Tasks are read again, unless "释放" was clicked again since; answered as failing, it says why', async t => {
+  const deck = deckThatOccupies()
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_release' ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  const releases = () => page.sent.filter(message => message.params?.name === 'deck_release')
+
+  await page.click(rowButton(document, 74, '释放'))
+  await page.advance(9_999)
+  assert.equal(topNotice(page), undefined)
+  await page.advance(1)
+  assert.deepEqual(topNotice(page), slowAction('回答到了会照常释放；不想等就再点“释放”。'))
+  assert.deepEqual(buttonsIn(rowOf(document, 74).querySelector('.dk-row__actions')), ['释放'])
+
+  // Answered late, with no click since: the Tasks are read again.
+  let reads = calledWith(page, 'deck_map').length
+  await page.respond(releases()[0], { result: deck.answer('deck_release', releases()[0].params.arguments) as any })
+  assert.equal(topNotice(page), undefined)
+  assert.equal(calledWith(page, 'deck_map').length, reads + 1)
+  assert.ok(rowOf(document, 74).closest('.dk-group')!.querySelector('.dk-group__head')!.textContent!.startsWith('可执行'))
+
+  // Clicked again before the first is answered: the first changes nothing.
+  await page.click(rowButton(document, 72, '接管'))
+  await page.click(askButton(document, '接管'))
+  await page.advance(5_000)
+  await page.click(rowButton(document, 72, '释放'))
+  await page.advance(10_000)
+  await page.click(rowButton(document, 72, '释放'))
+  reads = calledWith(page, 'deck_map').length
+  await page.respond(releases()[1], { result: answered({ ok: false, failure: { kind: 'offline', message: 'fetch failed 6t1q' } }) })
+  assert.equal(calledWith(page, 'deck_map').length, reads)
+  assert.equal(topNotice(page), undefined)
+
+  // Answered as failing, with no click since.
+  await page.respond(releases()[2], { result: answered({ ok: false, failure: { kind: 'offline', message: 'fetch failed 6t1q' } }) })
+  assert.equal(resultShown(page)?.title, '#72 没有释放')
+  assert.equal(resultShown(page)?.said, '连不上 GitHub。检查网络后再点“释放”重试。')
+  assert.equal(calledWith(page, 'deck_map').length, reads + 1)
+})
+
+test('"我现在该做什么" the Deck service does not answer in 10 seconds does not wait: the 下一步 tab says so, the button on again with the focus back on it, and no report is read', async t => {
+  const deck = deckThatRecommends()
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_ask' ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '下一步'))
+
+  const primary = button(page, '我现在该做什么') as HTMLElement
+  primary.focus()
+  primary.click()
+  // The browser moves the focus off the button gone off, a frame on.
+  await pastAFrame()
+  await page.advance(9_999)
+  assert.deepEqual(nextTab(page), { shown: true, phases: [], said: ['把 $ask-matt 填进输入框，附带 Task Snapshot。'], buttons: ['我现在该做什么（停用）'] })
+  await page.advance(1)
+
+  assert.deepEqual(nextTab(page), {
+    shown: true,
+    phases: [],
+    said: ['Deck 服务还没应答。', '回答到了会照常填入；不想等就再点“我现在该做什么”。', '把 $ask-matt 填进输入框，附带 Task Snapshot。'],
+    buttons: ['我现在该做什么'],
+  })
+  assert.equal(page.document.querySelector('[data-panel="next"] .dk-notice')!.classList.contains('is-warn'), true)
+  assert.equal(text(page.document.activeElement), '我现在该做什么')
+  assert.equal(topNotice(page), undefined)
+  await page.advance(10_000)
+  assert.deepEqual(deck.reads, [])
+  assert.deepEqual(prefills(page), [])
+})
+
+test('"再问一次" the Deck service does not answer in 10 seconds keeps waiting for the request before; the focus moved elsewhere meanwhile stays there', async t => {
+  const deck = deckThatRecommends()
+  let holding = false
+  const page = await openPage({ answer: (name, args: any) => (name === 'deck_ask' && holding ? undefined : deck.answer(name, args)) })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '下一步'))
+  await page.click(button(page, '我现在该做什么'))
+  holding = true
+
+  const again = button(page, '再问一次') as HTMLElement
+  again.focus()
+  again.click()
+  await pastAFrame()
+  const tab = tabNamed(page.document, '下一步') as HTMLElement
+  tab.focus()
+  await page.advance(10_000)
+
+  assert.deepEqual(nextTab(page).said, ['Deck 服务还没应答。', '回答到了会照常填入；不想等就再点“再问一次”。', '已填入输入框，等你发送。'])
+  assert.deepEqual(nextTab(page).phases, ['+已填入', '>等待回报', '已回答'])
+  assert.equal(page.document.activeElement, tab)
+  // The request before is still read.
+  assert.ok(deck.reads.length > 0 && deck.reads.every(each => each === 'request-1'))
+})
+
+test('"我现在该做什么" the Deck service answers after 10 seconds counts while nothing was asked since: filled in once, the notice goes and the tab waits; asked again since, it changes nothing', async t => {
+  const deck = deckThatRecommends()
+  let held = 0
+  const page = await openPage({
+    answer: (name, args: any) => {
+      if (name === 'deck_ask' && held < 2) {
+        held++
+        return undefined
+      }
+      return deck.answer(name, args)
+    },
+  })
+  t.after(page.close)
+  await page.click(tabNamed(page.document, '下一步'))
+  const asks = () => page.sent.filter(message => message.params?.name === 'deck_ask')
+
+  await page.click(button(page, '我现在该做什么'))
+  await page.advance(10_000)
+  await page.respond(asks()[0], { result: deck.answer('deck_ask', {}) as any })
+  assert.deepEqual(prefills(page), [prefilled(promptOf(1))])
+  assert.deepEqual(nextTab(page).said, ['已填入输入框，等你发送。'])
+  assert.deepEqual(nextTab(page).phases, ['+已填入', '>等待回报', '已回答'])
+
+  // Asked again late, then once more: the late one changes nothing.
+  await page.click(button(page, '再问一次'))
+  await page.advance(10_000)
+  await page.click(button(page, '再问一次'))
+  assert.deepEqual(prefills(page), [prefilled(promptOf(1)), prefilled(promptOf(2))])
+  await page.respond(asks()[1], { result: deck.answer('deck_ask', {}) as any })
+  assert.equal(prefills(page).length, 2)
+  deck.reported.set('request-2', RECOMMENDATION)
+  await page.advance(2_000)
+  assert.deepEqual(nextTab(page).phases, ['+已填入', '+等待回报', '+已回答'])
+})
+
 test('an Execute Prompt after a takeover the Host does not answer in 10 seconds says to release and execute again, the Task being this Session\'s', async t => {
   const page = await openPage({ answer: deckThatOccupies().answer, answerMessage: () => undefined })
   t.after(page.close)
@@ -6563,6 +6930,131 @@ test('while a read is under way and not late, the timed read and the read as the
   assert.equal(reads(), before)
 })
 
+test('the skills read as 技能 or 下一步 opens before the Pane has read them are a read too: late at 10 seconds, then read again by "刷新" or the tab shown again, which draws them', async t => {
+  for (const [tab, again] of [['技能', 'refresh'], ['技能', 'show'], ['下一步', 'refresh'], ['下一步', 'show']] as const) {
+    let holding = ['deck_map', 'deck_skills']
+    const page = await openPage({ answer: (name, args: any) => (holding.includes(name) ? undefined : deckWithSkills()(name, args)) })
+    t.after(page.close)
+    const { document } = page
+    const named = `${tab}, ${again}`
+
+    await page.click(tabNamed(document, tab))
+    // The Tasks answered, as the first read of the Pane leaves the skills to
+    // the read the tab began.
+    holding = ['deck_skills']
+    await page.respond(lastTasksRead(page), { result: mapRead(TASKS) })
+    assert.equal(calledWith(page, 'deck_skills').length, 1, named)
+    await page.advance(9_999)
+    assert.equal(lateShown(page), undefined, named)
+    await page.advance(1)
+    assert.deepEqual(freshShown(document), ['没有应答', true], named)
+    assert.deepEqual(lateShown(page), LATE, named)
+
+    holding = []
+    if (again === 'refresh') await page.click(document.querySelector('.dk-head > button'))
+    else {
+      await page.show(false)
+      await page.show(true)
+    }
+
+    assert.equal(calledWith(page, 'deck_skills').length, 2, named)
+    assert.equal(lateShown(page), undefined, named)
+    assert.deepEqual(freshShown(document), ['刚刚', false], named)
+    if (tab === '技能') assert.ok([...document.querySelectorAll('.dk-skill__name')].some(each => text(each) === IMPLEMENT), named)
+    else assert.equal((button(page, '我现在该做什么') as HTMLButtonElement).disabled, false, named)
+    await page.click(tabNamed(document, '任务'))
+    assert.deepEqual(executeShown(rowExecute(document, 70)), ['执行', true], named)
+  }
+})
+
+test('a Task\'s detail or a skill\'s text read as it is entered is a read too: late at 10 seconds, then read again by "刷新", which draws it', async t => {
+  for (const what of ['deck_task', 'deck_skill']) {
+    let holding = ''
+    const page = await openPage({ answer: (name, args: any) => (name === holding ? undefined : deckWithSkills()(name, args)) })
+    t.after(page.close)
+    const { document } = page
+
+    holding = what
+    if (what === 'deck_task') await page.click(rowOf(document, 70))
+    else {
+      await page.click(tabNamed(document, '技能'))
+      await page.click([...document.querySelectorAll('.dk-skill')].find(each => text(each.querySelector('.dk-skill__name')) === IMPLEMENT)!)
+    }
+    await page.advance(9_999)
+    assert.equal(lateShown(page), undefined, what)
+    await page.advance(1)
+    assert.deepEqual(freshShown(document), ['没有应答', true], what)
+    assert.deepEqual(lateShown(page), LATE, what)
+
+    holding = ''
+    await page.click(document.querySelector('.dk-head > button'))
+
+    assert.equal(calledWith(page, what).length, 2, what)
+    assert.equal(lateShown(page), undefined, what)
+    assert.deepEqual(freshShown(document), ['刚刚', false], what)
+    assert.equal([...document.querySelectorAll('#into .dk-why')].some(each => text(each)!.startsWith('正在读取')), false, what)
+  }
+})
+
+test('a read the page begins by itself answered at 15 seconds, no other begun meanwhile, says it is late at 10 and draws what it read as it answers', async t => {
+  for (const what of ['deck_skills', 'deck_task']) {
+    let holding = what === 'deck_skills' ? ['deck_map', 'deck_skills'] : []
+    const page = await openPage({ answer: (name, args: any) => (holding.includes(name) ? undefined : deckWithSkills()(name, args)) })
+    t.after(page.close)
+    const { document } = page
+    if (what === 'deck_skills') {
+      await page.click(tabNamed(document, '技能'))
+      holding = ['deck_skills']
+      await page.respond(lastTasksRead(page), { result: mapRead(TASKS) })
+    } else {
+      holding = ['deck_task']
+      await page.click(rowOf(document, 70))
+    }
+    await page.advance(10_000)
+    assert.deepEqual(lateShown(page), LATE, what)
+    await page.advance(5_000)
+
+    const held = page.sent.filter(message => message.method === 'tools/call' && message.params.name === what).at(-1)
+    await page.respond(held, { result: deckWithSkills()(what, held.params.arguments) })
+
+    assert.equal(lateShown(page), undefined, what)
+    assert.deepEqual(freshShown(document), ['刚刚', false], what)
+    if (what === 'deck_skills') assert.ok([...document.querySelectorAll('.dk-skill__name')].some(each => text(each) === IMPLEMENT))
+    else assert.equal(detailShown(page)?.crumbs, '任务 / #70')
+    assert.equal([...document.querySelectorAll('.dk-why')].some(each => shown(page, each) && text(each)!.startsWith('正在读取')), false, what)
+  }
+})
+
+test('a read the page began by itself, late and read again by "刷新", changes nothing as its answer comes after that; a detail left is late no more', async t => {
+  let holding = ['deck_map', 'deck_skills']
+  let skills: object[] = SKILLS
+  const page = await openPage({ answer: (name, args: any) => (holding.includes(name) ? undefined : deckWithSkills(skills)(name, args)) })
+  t.after(page.close)
+  const { document } = page
+  await page.click(tabNamed(document, '技能'))
+  holding = ['deck_skills']
+  await page.respond(lastTasksRead(page), { result: mapRead(TASKS) })
+  const lateSkills = page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_skills').at(-1)
+  await page.advance(10_000)
+
+  holding = []
+  await page.click(document.querySelector('.dk-head > button'))
+  const drawn = text(document.querySelector('#skill-list'))
+  await page.respond(lateSkills, { result: answered({ ok: true, source: { type: 'plugin', name: 'mattpocock-skills' }, skills: [] }) })
+  assert.equal(text(document.querySelector('#skill-list')), drawn)
+  assert.equal(lateShown(page), undefined)
+
+  // Into a detail whose read is late, then back out of it.
+  holding = ['deck_task']
+  await page.click(tabNamed(document, '任务'))
+  await page.click(rowOf(document, 70))
+  await page.advance(10_000)
+  assert.deepEqual(lateShown(page), LATE)
+  await page.click(barButton(document, '返回'))
+  assert.equal(lateShown(page), undefined)
+  assert.deepEqual(freshShown(document), ['刚刚', false])
+})
+
 test('a late "刷新" whose Tasks are answered while the read after it waits for the skills leaves that read\'s skills to be drawn', async t => {
   let dropping: string[] = []
   const page = await openPage({ answer: (name, args: any) => (dropping.includes(name) ? undefined : deckWithSkills()(name, args)) })
@@ -6691,7 +7183,7 @@ test('a detail\'s read answering after a later read of it is dropped: the later 
   const entering = page.sent.filter(message => message.method === 'tools/call' && message.params.name === 'deck_task').at(-1)
 
   late = false
-  await page.advance(60_000)
+  await page.click(document.querySelector('.dk-head > button'))
   assert.equal(detailShown(page)?.title, '#70 后一次读到的 1p4z')
   await page.respond(entering, { result: answered(detail(70, '进入时读到的 8d3x')) })
   assert.equal(detailShown(page)?.title, '#70 后一次读到的 1p4z')
