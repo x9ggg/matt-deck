@@ -1296,14 +1296,17 @@ button.dk-row{color:inherit}
   // The head marks the Task this Session holds, by the list read last: the
   // first of the in-progress group drawn as this Session's, whichever tab
   // shows. A project not configured shows no Task, and marks none. Clicked,
-  // it opens that Task's detail, as a row does.
+  // it opens that Task's detail, as a row does, unless that detail is the
+  // step shown: there it does nothing, as it does marking none.
   let occupied
   const showOccupied = () => {
     occupied = $('tabs').hidden || list === undefined ? undefined : list.groups.inProgress.find(each => stateOf(each, 'inProgress') === 'running')?.number
     $('occupied').hidden = occupied === undefined
     $('occupied').querySelector('b').textContent = occupied === undefined ? '' : `#${occupied}`
   }
-  $('occupied').addEventListener('click', () => openTask(occupied))
+  $('occupied').addEventListener('click', () => {
+    if (occupied !== undefined && into?.steps.at(-1).task !== occupied) openTask(occupied)
+  })
 
   // Reads the Tasks and their Map Views in one answer, the Task Source again
   // when `refresh` asks for it. A read that fails says why, in "任务" and

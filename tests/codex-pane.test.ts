@@ -6959,6 +6959,69 @@ test('in a detail the head\'s mark goes one step further in, and "返回" back t
   assert.equal(detailShown(page)?.crumbs, '任务 / #73')
 })
 
+test('in the detail of the Task it marks, the head\'s mark does nothing: no read, the same way and the same scroll, and one "返回" goes back to the list', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+  const reads = () => page.sent.filter(message => message.params?.name === 'deck_task').length
+
+  await page.click(rowOf(document, 74))
+  assert.equal(detailShown(page)?.crumbs, '任务 / #74')
+  const read = reads()
+  page.scroll(200)
+  await page.click(occupancyMark(page)!)
+  await page.click(occupancyMark(page)!)
+  assert.equal(detailShown(page)?.crumbs, '任务 / #74')
+  assert.equal(reads(), read)
+  assert.equal(page.scrolled(), 200)
+
+  await page.click(barButton(document, '返回'))
+  assert.equal(detailShown(page), undefined)
+  assert.ok(rowOf(document, 74))
+})
+
+test('entered by the head\'s mark, the detail stays as it is as the mark is clicked again, from each tab', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck') })
+  t.after(page.close)
+  const { document } = page
+  const reads = () => page.sent.filter(message => message.params?.name === 'deck_task').length
+
+  for (const tab of ['下一步', '任务', '地图', '技能']) {
+    await page.click(tabNamed(document, tab))
+    await page.click(occupancyMark(page)!)
+    const read = reads()
+    await page.click(occupancyMark(page)!)
+    assert.equal(detailShown(page)?.crumbs, `${tab} / #74`, tab)
+    assert.equal(reads(), read, tab)
+
+    await page.click(barButton(document, '返回'))
+    assert.equal(detailShown(page), undefined, tab)
+  }
+})
+
+test('in the detail of the Task it marks, the head\'s mark leaves the result notice open', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck'), answerOpenLink: () => ({ error: { code: -32000, message: 'not allowed' } }) })
+  t.after(page.close)
+  const { document } = page
+
+  await page.click(rowOf(document, 74))
+  await page.click(barButton(document, '在 GitHub 打开'))
+  assert.equal(text(document.querySelector('#result .dk-notice .dk-notice__title')), '没有打开链接')
+  await page.click(occupancyMark(page)!)
+  assert.equal(text(document.querySelector('#result .dk-notice .dk-notice__title')), '没有打开链接')
+})
+
+test('hidden, as this Session holds no Task, the head\'s mark clicked opens nothing and reads nothing', async t => {
+  const page = await openPage({ answer: deckAt('/work/matt-deck', true, { ...TASKS, groups: { ...TASKS.groups, inProgress: [OTHER] } }) })
+  t.after(page.close)
+  const mark = page.document.querySelector('#occupied') as HTMLButtonElement
+  assert.equal(mark.hidden, true)
+
+  await page.click(mark)
+  assert.equal(detailShown(page), undefined)
+  assert.deepEqual(page.sent.filter(message => message.params?.name === 'deck_task'), [])
+})
+
 test('the head\'s mark is a button that is on and takes the focus, which the browser moves Tab onto and Enter clicks', async t => {
   const page = await openPage({ answer: deckAt('/work/matt-deck') })
   t.after(page.close)
