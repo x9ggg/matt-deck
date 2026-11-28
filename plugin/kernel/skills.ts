@@ -158,11 +158,21 @@ const hasConfirmedBlankDescription = (frontmatter: string[]) => {
     if (!/[^ \t]/.test(line)) {
       continue
     }
-    // YAML breaks a line at U+0085 too, so what goes on past one may be a
-    // field of its own, unless a quoted value holds it.
-    const nel = line.indexOf('\u0085')
-    if (nel >= 0 && !isRustBlank(line.slice(nel)) && !/^[\w-]+:[ \t]+["']/.test(line)) {
-      return false
+    // YAML breaks a line at a carriage return, U+0085 and the Unicode line
+    // and paragraph separators too, so what goes on past such a break may be
+    // a field of its own, and Deck cannot tell. Two breaks it can: a quoted
+    // value may hold a U+0085; and, as in fieldsOf, an unquoted value broken
+    // inside by one of the others makes the line no field when no colon
+    // follows the break.
+    const breakAt = line.search(/[\r\u2028\u2029\u0085]/)
+    let isNoField = false
+    const valueAt = /^[\w-]+:[ \t]*/.exec(line)?.[0].length
+    const quoted = valueAt !== undefined && (line[valueAt] === '"' || line[valueAt] === "'")
+    if (breakAt >= 0 && !isRustBlank(line.slice(breakAt)) && !(quoted && line[breakAt] === '\u0085')) {
+      if (valueAt === undefined || quoted || line[breakAt] === '\u0085' || breakAt <= valueAt || line.includes(':', breakAt)) {
+        return false
+      }
+      isNoField = true
     }
     if (line[0] === ' ' || line[0] === '\t') {
       if (lastKey === undefined) {
@@ -187,14 +197,9 @@ const hasConfirmedBlankDescription = (frontmatter: string[]) => {
     const colon = line.indexOf(':')
     const key = colon > 0 ? line.slice(0, colon) : ''
     const after = line.slice(colon + 1)
-    // As in fieldsOf, a value holding a carriage return or a Unicode line or
-    // paragraph separator makes the line no field: under a block it goes on
-    // the block, otherwise it names nothing, and no line after it belongs to it.
-    // Quoted, the value may hold them, so Deck cannot tell.
-    if (colon > 0 && /^[\w-]+$/.test(key) && /[\r\u2028\u2029]/.test(after.trim())) {
-      if (/^["']/.test(after.trim())) {
-        return false
-      }
+    // A line that is no field goes on the block under one; otherwise it names
+    // nothing, and no line after it belongs to it.
+    if (isNoField) {
       if (inBlock) {
         if (lastKey === 'description' && !isRustBlank(line)) {
           descriptionState = 'nonblank'

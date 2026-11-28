@@ -3461,6 +3461,44 @@ test('started for Codex, deck_skills takes a quoted description holding a line b
   ])
 })
 
+test('started for Codex, deck_skills takes a line breaking at a carriage return or a Unicode line or paragraph separator for one it cannot read where a key may follow the break', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const source = join(user, '.agents', 'skills')
+  for (const [folder, text] of [
+    ['name-cr', '---\nname: name-cr\rdescription: Works\n---\n'],
+    ['name-line-separator', '---\nname: name-line-separator description: Works\n---\n'],
+    ['name-paragraph-separator', '---\nname: name-paragraph-separator description: Works\n---\n'],
+    ['value-line-separator', '---\nname: value-line-separator\nx: a description: Works\n---\n'],
+    ['value-start-cr', '---\nname: value-start-cr\nx: \rdescription: Works\n---\n'],
+    ['value-start-line-separator', '---\nname: value-start-line-separator\nx:  description: Works\n---\n'],
+    ['comment-cr', '---\nname: comment-cr\n# c\rdescription: Works\n---\n'],
+    ['comment-line-separator', '---\nname: comment-line-separator\n# c description: Works\n---\n'],
+    ['indented-cr', '---\nname: indented-cr\nx:\n  a\rdescription: Works\n---\n'],
+    ['indented-line-separator', '---\nname: indented-line-separator\nx:\n  a description: Works\n---\n'],
+    ['block-line-separator', '---\nname: block-line-separator\nx: |\n  a description: Works\n---\n'],
+  ]) {
+    await rawSkill(source, folder!, text!)
+  }
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_skills')
+
+  assert.deepEqual(copies(result), [
+    ['block-line-separator', 'same'],
+    ['comment-cr', 'same'],
+    ['comment-line-separator', 'same'],
+    ['indented-cr', 'same'],
+    ['indented-line-separator', 'same'],
+    ['name-cr', 'same'],
+    ['name-line-separator', 'same'],
+    ['name-paragraph-separator', 'same'],
+    ['value-line-separator', 'same'],
+    ['value-start-cr', 'same'],
+    ['value-start-line-separator', 'same'],
+  ])
+})
+
 test('started for Codex, deck_skills skips files with invalid UTF-8 even in the body when scanning Codex skill directories', async t => {
   const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
   const badBytes = Buffer.concat([Buffer.from('---\nname: bad\ndescription: Valid frontmatter.\n---\n\nBody '), Buffer.from([0xff])])
