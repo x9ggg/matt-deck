@@ -3790,6 +3790,64 @@ test('started for Codex, deck_skills reads a description holding a carriage retu
   )
 })
 
+test('started for Codex, deck_skills reads a description of letters, digits and spaces broken once at a carriage return or a Unicode line or paragraph separator by more of the same as none, as Codex does not load it', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const source = join(user, '.agents', 'skills')
+  const folders: string[] = []
+  for (const [label, separator] of [['cr', '\r'], ['ls', '\u2028'], ['ps', '\u2029']]) {
+    for (const [n, writing] of [`中${separator}文`, `a b${separator}c d`, `a ${separator}b`, `ab12${separator}34 cd`].entries()) {
+      const folder = `${label}-${n}`
+      folders.push(folder)
+      await rawSkill(source, folder, `---\nname: ${folder}\ndescription: ${writing}\n---\n`)
+    }
+  }
+  const deck = startDeck(dir, { HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_skills')
+
+  assert.deepEqual(
+    result.structuredContent.skills.map(({ name, copy }: any) => [name, copy]),
+    folders.sort().map(folder => [folder, 'missing']),
+  )
+})
+
+test('started for Codex, deck_skills counts a description broken inside any other way as having one, as it cannot tell whether Codex loads it', async t => {
+  const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.agents/skills' })
+  const source = join(user, '.agents', 'skills')
+  const writings = (s: string) => [
+    `a${s} b c`,
+    `a${s} \tb c`,
+    `a${s} # note`,
+    `a${s}# note`,
+    `a${s}...`,
+    `a${s}${s} b c`,
+    `a${s}? other`,
+    `a${s}?`,
+    `!!str "a${s}b"`,
+    `&anchor "a${s}b"`,
+    `a${s}\tb c`,
+    `a${s}b${s}c`,
+  ]
+  const folders: string[] = []
+  for (const [label, separator] of [['cr', '\r'], ['ls', '\u2028'], ['ps', '\u2029']]) {
+    for (const [n, writing] of writings(separator!).entries()) {
+      const folder = `${label}-${String(n).padStart(2, '0')}`
+      folders.push(folder)
+      await rawSkill(source, folder, `---\nname: ${folder}\ndescription: ${writing}\n---\n`)
+    }
+  }
+  const deck = startDeck(dir, { HOME: user }, 'codex')
+  t.after(deck.stop)
+
+  const result = await deck.callTool('deck_skills')
+
+  assert.deepEqual(
+    result.structuredContent.skills.map(({ name, copy }: any) => [name, copy]),
+    folders.sort().map(folder => [folder, 'same']),
+  )
+})
+
 test('started for Codex, deck_skills lists every skill when Codex\'s skill directories hold entries that cannot be read, judging each name by the files that can', { skip: process.getuid?.() === 0 }, async t => {
   const { dir, user } = await withSkillSource({ type: 'directory', path: '~/.claude/skills' })
   const source = join(user, '.claude', 'skills')

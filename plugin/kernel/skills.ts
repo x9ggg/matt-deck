@@ -161,15 +161,15 @@ const hasConfirmedBlankDescription = (frontmatter: string[]) => {
     // YAML breaks a line at a carriage return, U+0085 and the Unicode line
     // and paragraph separators too, so what goes on past such a break may be
     // a field of its own, and Deck cannot tell. Two breaks it can: a quoted
-    // value may hold a U+0085; and, as in fieldsOf, an unquoted value broken
-    // inside by one of the others makes the line no field when no colon
-    // follows the break.
+    // value may hold a U+0085; and an unquoted value of plain letters,
+    // digits and spaces broken once by one of the others, and a run of the
+    // same after it, makes the line no field, as Codex does not load it.
     const breakAt = line.search(/[\r\u2028\u2029\u0085]/)
     let isNoField = false
     const valueAt = /^[\w-]+:[ \t]*/.exec(line)?.[0].length
     const quoted = valueAt !== undefined && (line[valueAt] === '"' || line[valueAt] === "'")
     if (breakAt >= 0 && !isRustBlank(line.slice(breakAt)) && !(quoted && line[breakAt] === '\u0085')) {
-      if (valueAt === undefined || quoted || line[breakAt] === '\u0085' || breakAt <= valueAt || line.includes(':', breakAt)) {
+      if (!/^[\w-]+:[ \t]+[\p{L}\p{N}][\p{L}\p{N} ]*[\r\u2028\u2029][\p{L}\p{N}][\p{L}\p{N} ]*$/u.test(line)) {
         return false
       }
       isNoField = true
