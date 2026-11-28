@@ -320,7 +320,7 @@ const locate = async (source: SkillSource, workspace: string, home: string) => {
 
 // Every skill of the Skill Source with its text, by name: a Skill Source has
 // no order of its own, and a plugin's folders are not shown.
-const readAll = async (source: SkillSource, workspace: string, home: string, callOf: CallOf) => {
+export const readAll = async (source: SkillSource, workspace: string, home: string, callOf: CallOf) => {
   const { root, shown, plugin, files } = await locate(source, workspace, home)
   const skills: (Skill & { text: string; file: string })[] = []
   for (const file of files) {

@@ -361,9 +361,9 @@ test('started for Codex, deck_setup_survey also finds the copies of Matt skills 
   assert.equal(forCodex.isError, false)
   // Three files named ask-matt: $ask-matt in Codex calls none of them.
   assert.deepEqual(forCodex.structuredContent.skillSources, [
-    { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: false },
-    { type: 'directory', path: '.agents/skills', hostCallsAskMatt: false },
-    { type: 'directory', path: '.codex/skills', hostCallsAskMatt: false },
+    { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: false, hostCallsImplement: false },
+    { type: 'directory', path: '.agents/skills', hostCallsAskMatt: false, hostCallsImplement: false },
+    { type: 'directory', path: '.codex/skills', hostCallsAskMatt: false, hostCallsImplement: false },
   ])
   assert.deepEqual(forClaudeCode.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills' }])
 })
@@ -380,7 +380,7 @@ test('started for Codex, deck_setup_survey finds the copy of Matt skills only in
   const [forCodex, forClaudeCode] = await Promise.all([codex, claudeCode].map(deck => deck.callTool('deck_setup_survey')))
 
   assert.deepEqual(forCodex.structuredContent.skillSources, [
-    { type: 'directory', path: '~/.codex/skills', hostCallsAskMatt: true },
+    { type: 'directory', path: '~/.codex/skills', hostCallsAskMatt: true, hostCallsImplement: false },
   ])
   assert.deepEqual(forClaudeCode.structuredContent.skillSources, [])
 })
@@ -399,7 +399,7 @@ test('started for Codex, deck_setup_survey says of each copy of Matt skills whet
   const result = await codex.callTool('deck_setup_survey')
 
   assert.deepEqual(result.structuredContent.skillSources, [
-    { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: true },
+    { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: true, hostCallsImplement: false },
   ])
 })
 
@@ -447,6 +447,7 @@ test('started for Codex, deck_setup_survey says of the existing Skill Source too
     [true, true, true, false],
   )
   assert.equal('hostCallsAskMatt' in forClaudeCode.structuredContent.existing, false)
+  assert.equal('hostCallsImplement' in forClaudeCode.structuredContent.existing, false)
 })
 
 test('started for Codex, deck_setup_survey says $ask-matt in Codex calls no ask-matt whose file has no description, offered or existing', async t => {
@@ -458,7 +459,7 @@ test('started for Codex, deck_setup_survey says $ask-matt in Codex calls no ask-
 
   const result = await codex.callTool('deck_setup_survey')
 
-  assert.deepEqual(result.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: false }])
+  assert.deepEqual(result.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: false, hostCallsImplement: false }])
   assert.equal(result.structuredContent.existing.hostCallsAskMatt, false)
 })
 
@@ -472,7 +473,7 @@ test('started for Codex, deck_setup_survey says $ask-matt in Codex calls an ask-
 
     const result = await codex.callTool('deck_setup_survey')
 
-    assert.deepEqual(result.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true }], below)
+    assert.deepEqual(result.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true, hostCallsImplement: false }], below)
     assert.equal(result.structuredContent.existing.hostCallsAskMatt, true, below)
   }
 })
@@ -495,7 +496,7 @@ test('started for Codex, deck_setup_survey says $ask-matt calls no ask-matt whos
   const surveyed = await codex.callTool('deck_setup_survey')
   const listed = await codex.callTool('deck_skills')
 
-  assert.deepEqual(surveyed.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: false }])
+  assert.deepEqual(surveyed.structuredContent.skillSources, [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: false, hostCallsImplement: false }])
   assert.equal(surveyed.structuredContent.existing.hostCallsAskMatt, false)
   assert.deepEqual(copies(listed), [
     ['ask-matt', 'missing'],
@@ -520,13 +521,172 @@ test('started for Codex, deck_setup_survey offers first the copy of Matt skills 
   const [forCodex, forClaudeCode] = await Promise.all([codex, claudeCode].map(deck => deck.callTool('deck_setup_survey')))
 
   assert.deepEqual(forCodex.structuredContent.skillSources, [
-    { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true },
-    { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: false },
-    { type: 'plugin', name: 'mattpocock-skills', hostCallsAskMatt: false },
+    { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true, hostCallsImplement: false },
+    { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: false, hostCallsImplement: false },
+    { type: 'plugin', name: 'mattpocock-skills', hostCallsAskMatt: false, hostCallsImplement: false },
   ])
   // Claude Code's survey is as it was: no mark, in the order found.
   assert.deepEqual(forClaudeCode.structuredContent.skillSources, [
     { type: 'directory', path: '~/.claude/skills' },
+    { type: 'directory', path: '~/.agents/skills' },
+    { type: 'plugin', name: 'mattpocock-skills' },
+  ])
+})
+
+test('started for Codex, deck_setup_survey says of each copy of Matt skills and of the existing Skill Source whether Codex calls its ask-matt and its implement, offering first a copy whose both it calls', async t => {
+  // The existing ~/.claude/skills links only ask-matt from ~/.agents/skills,
+  // which holds implement too.
+  const user = await home()
+  const dir = await workspace(JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path: '~/.claude/skills' } }))
+  await skill(join(user, '.agents', 'skills'), 'ask-matt')
+  await skill(join(user, '.agents', 'skills'), 'implement')
+  await mkdir(join(user, '.claude', 'skills'), { recursive: true })
+  await symlink(join(user, '.agents', 'skills', 'ask-matt'), join(user, '.claude', 'skills', 'ask-matt'))
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_setup_survey')
+
+  assert.deepEqual(result.structuredContent.skillSources, [
+    { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true, hostCallsImplement: true },
+    { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: true, hostCallsImplement: false },
+  ])
+  assert.deepEqual(
+    [result.structuredContent.existing.hostCallsAskMatt, result.structuredContent.existing.hostCallsImplement],
+    [true, false],
+  )
+})
+
+test('started for Codex, deck_setup_survey offers once a copy whose ask-matt and implement both link another, and twice copies sharing ask-matt with implement files apart, judging each by the copy Codex calls', async t => {
+  const linked = await home()
+  for (const name of ['ask-matt', 'implement']) {
+    await skill(join(linked, '.agents', 'skills'), name)
+    await mkdir(join(linked, '.claude', 'skills'), { recursive: true })
+    await symlink(join(linked, '.agents', 'skills', name), join(linked, '.claude', 'skills', name))
+  }
+  const apart = await home()
+  await skill(join(apart, '.agents', 'skills'), 'ask-matt')
+  await skill(join(apart, '.agents', 'skills'), 'implement')
+  await mkdir(join(apart, '.claude', 'skills'), { recursive: true })
+  await symlink(join(apart, '.agents', 'skills', 'ask-matt'), join(apart, '.claude', 'skills', 'ask-matt'))
+  await skill(join(apart, '.claude', 'skills'), 'implement')
+  const decks = [linked, apart].map(async user => startDeck(await workspace(), { HOME: user }, 'codex'))
+  const [forLinked, forApart] = await Promise.all(decks)
+  const claudeCode = startDeck(await workspace(), { HOME: apart })
+  t.after(forLinked.stop)
+  t.after(forApart.stop)
+  t.after(claudeCode.stop)
+
+  const results = await Promise.all([forLinked, forApart].map(deck => deck.callTool('deck_setup_survey')))
+  const forClaudeCode = await claudeCode.callTool('deck_setup_survey')
+
+  assert.deepEqual(results.map(result => result.structuredContent.skillSources), [
+    [{ type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: true, hostCallsImplement: true }],
+    [
+      { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true, hostCallsImplement: true },
+      { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: true, hostCallsImplement: false },
+    ],
+  ])
+  // Claude Code's survey is as it was: one copy per ask-matt, no mark.
+  assert.deepEqual(forClaudeCode.structuredContent.skillSources, [{ type: 'directory', path: '~/.claude/skills' }])
+})
+
+test('started for Codex, deck_setup_survey says whether Codex calls ask-matt and implement as deck_skills says of the same Skill Source, for one missing a skill, one beside another file of the name, one not offered and one not there', async t => {
+  const configured = async (path: string) => {
+    const user = await home()
+    const dir = await workspace(JSON.stringify({ taskSource: { type: 'github-issues' }, skillSource: { type: 'directory', path } }))
+
+    return { dir, user }
+  }
+  // ask-matt alone.
+  const missing = await configured('~/.agents/skills')
+  await skill(join(missing.user, '.agents', 'skills'), 'ask-matt')
+  // implement beside another implement file in ~/.codex/skills.
+  const beside = await configured('~/.agents/skills')
+  await skill(join(beside.user, '.agents', 'skills'), 'ask-matt')
+  await skill(join(beside.user, '.agents', 'skills'), 'implement')
+  await skillFile(join(beside.user, '.codex', 'skills'), 'implement', 'Another implement.')
+  // implement alone, which Codex's skills link: no copy of Matt skills.
+  const notOffered = await configured('~/my-skills')
+  await skill(join(notOffered.user, 'my-skills'), 'implement')
+  await mkdir(join(notOffered.user, '.agents', 'skills'), { recursive: true })
+  await symlink(join(notOffered.user, 'my-skills', 'implement'), join(notOffered.user, '.agents', 'skills', 'implement'))
+  // A directory that is not there.
+  const gone = await configured('~/gone')
+  const cases = [missing, beside, notOffered, gone]
+  const decks = cases.map(({ dir, user }) => startDeck(dir, { HOME: user }, 'codex'))
+  for (const deck of decks) {
+    t.after(deck.stop)
+  }
+
+  const surveyed = await Promise.all(decks.map(deck => deck.callTool('deck_setup_survey')))
+  const listed = await Promise.all(decks.map(deck => deck.callTool('deck_skills')))
+
+  assert.deepEqual(
+    surveyed.map(result => [result.isError, result.structuredContent.existing.hostCallsAskMatt, result.structuredContent.existing.hostCallsImplement]),
+    [
+      [false, true, false],
+      [false, true, false],
+      [false, false, true],
+      [false, false, false],
+    ],
+  )
+  assert.deepEqual(surveyed.map(result => result.structuredContent.skillSources), [
+    [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true, hostCallsImplement: false }],
+    [{ type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true, hostCallsImplement: false }],
+    [],
+    [],
+  ])
+  const same = (result: any, name: string) => result.structuredContent.skills?.some((skill: any) => skill.name === name && skill.copy === 'same') ?? false
+  assert.deepEqual(
+    listed.map(result => [same(result, 'ask-matt'), same(result, 'implement')]),
+    surveyed.map(result => [result.structuredContent.existing.hostCallsAskMatt, result.structuredContent.existing.hostCallsImplement]),
+  )
+})
+
+test('started for Codex, deck_setup_survey knows an implement by the name its file gives, as deck_skills does, keeping apart copies that share ask-matt with an implement in another folder', async t => {
+  const user = await home()
+  await skill(join(user, '.agents', 'skills'), 'ask-matt')
+  await rawSkill(join(user, '.agents', 'skills'), 'impl2', '---\nname: implement\ndescription: Start a Task.\n---\n')
+  await mkdir(join(user, '.claude', 'skills'), { recursive: true })
+  await symlink(join(user, '.agents', 'skills', 'ask-matt'), join(user, '.claude', 'skills', 'ask-matt'))
+  const codex = startDeck(await workspace(), { HOME: user }, 'codex')
+  t.after(codex.stop)
+
+  const result = await codex.callTool('deck_setup_survey')
+
+  assert.deepEqual(result.structuredContent.skillSources, [
+    { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: true, hostCallsImplement: true },
+    { type: 'directory', path: '~/.claude/skills', hostCallsAskMatt: true, hostCallsImplement: false },
+  ])
+})
+
+test('deck_setup_survey still answers for a copy of Matt skills holding a skill file it cannot read or a link to an implement that is gone, on either host', { skip: process.getuid?.() === 0 }, async t => {
+  const user = await home()
+  await skill(join(user, '.agents', 'skills'), 'ask-matt')
+  await skill(join(user, '.agents', 'skills'), 'implement')
+  await skill(join(user, '.agents', 'skills'), 'locked')
+  await chmod(join(user, '.agents', 'skills', 'locked', 'SKILL.md'), 0)
+  t.after(() => chmod(join(user, '.agents', 'skills', 'locked', 'SKILL.md'), 0o644))
+  const matt = join(user, '.claude', 'plugins', 'cache', 'official', 'mattpocock-skills', '1.3.1')
+  await skill(join(matt, 'skills'), 'ask-matt')
+  await mkdir(join(matt, 'skills', 'implement'), { recursive: true })
+  await symlink(join(user, 'gone', 'SKILL.md'), join(matt, 'skills', 'implement', 'SKILL.md'))
+  await installedPlugins(user, { 'mattpocock-skills@official': [{ scope: 'user', installPath: matt }] })
+  const dir = await workspace()
+  const codex = startDeck(dir, { HOME: user }, 'codex')
+  const claudeCode = startDeck(dir, { HOME: user })
+  t.after(codex.stop)
+  t.after(claudeCode.stop)
+
+  const [forCodex, forClaudeCode] = await Promise.all([codex, claudeCode].map(deck => deck.callTool('deck_setup_survey')))
+
+  // Neither copy can be listed whole, as deck_skills cannot list it.
+  assert.deepEqual(forCodex.structuredContent.skillSources, [
+    { type: 'directory', path: '~/.agents/skills', hostCallsAskMatt: false, hostCallsImplement: false },
+    { type: 'plugin', name: 'mattpocock-skills', hostCallsAskMatt: false, hostCallsImplement: false },
+  ])
+  assert.deepEqual(forClaudeCode.structuredContent.skillSources, [
     { type: 'directory', path: '~/.agents/skills' },
     { type: 'plugin', name: 'mattpocock-skills' },
   ])
@@ -618,12 +778,12 @@ test('deck_write_config writes of each source only its type and its path or name
   t.after(forPlugin.stop)
 
   await deck.callTool('deck_write_config', {
-    config: { ...CONFIG, skillSource: { ...CONFIG.skillSource, hostCallsAskMatt: true } },
+    config: { ...CONFIG, skillSource: { ...CONFIG.skillSource, hostCallsAskMatt: true, hostCallsImplement: true } },
   })
   await forPlugin.callTool('deck_write_config', {
     config: {
       taskSource: { type: 'github-issues', tracker: 'GitHub' },
-      skillSource: { type: 'plugin', name: 'mattpocock-skills', path: '~/.claude/skills', hostCallsAskMatt: false },
+      skillSource: { type: 'plugin', name: 'mattpocock-skills', path: '~/.claude/skills', hostCallsAskMatt: false, hostCallsImplement: true },
     },
   })
 

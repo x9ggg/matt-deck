@@ -642,7 +642,7 @@ const tools = {
   },
   deck_setup_survey: {
     description:
-      'For the configure skill: the host this service runs for, the existing project config, the Task Source prefilled from the Matt issue tracker doc, the Matt skills found on this machine and in the host\'s own skill directories (for Codex, each with hostCallsAskMatt: whether $ask-matt in Codex calls this copy\'s ask-matt, those it calls first), and, for Claude Code only, whether the local settings allow the Deck service\'s tools.',
+      'For the configure skill: the host this service runs for, the existing project config, the Task Source prefilled from the Matt issue tracker doc, the Matt skills found on this machine and in the host\'s own skill directories (for Codex, each with hostCallsAskMatt and hostCallsImplement: whether $ask-matt and $implement in Codex call this copy\'s ask-matt and implement, as deck_skills judges them; those whose both it calls first, then those whose ask-matt it calls; the existing config has both too), and, for Claude Code only, whether the local settings allow the Deck service\'s tools.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: async (): Promise<ToolResult> => {
       let result: object = { host, ...(await surveySetup(workspace, homedir(), skillDirectories(host), host === 'codex')) }
@@ -663,7 +663,7 @@ const tools = {
   },
   deck_write_config: {
     description:
-      'For the configure skill: write the project config (.matt-deck/config.json) of this workspace. Of each source only its type, and its path or name, is written; any other key, such as the hostCallsAskMatt deck_setup_survey adds, is left out. Refuses to overwrite an existing config unless replace is true.',
+      'For the configure skill: write the project config (.matt-deck/config.json) of this workspace. Of each source only its type, and its path or name, is written; any other key, such as the hostCallsAskMatt and hostCallsImplement deck_setup_survey adds, is left out. Refuses to overwrite an existing config unless replace is true.',
     inputSchema: {
       type: 'object',
       properties: {

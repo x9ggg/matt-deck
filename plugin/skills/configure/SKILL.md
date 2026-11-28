@@ -15,9 +15,9 @@ disable-model-invocation: true
 调用 `deck_setup_survey`。它返回：
 
 - `host`：Deck 服务所在的宿主，`claude-code` 或 `codex`。
-- `existing`：现有配置。`{ configured: false }`；`{ configured: true, config }`；或配置文件存在但格式不对时的 `{ configured: true, problem }`。`host` 为 `codex` 且有 `config` 时还有 `hostCallsAskMatt`：Codex 用 `$ask-matt` 调到的是不是现有 Skill Source 里的 `ask-matt`。
+- `existing`：现有配置。`{ configured: false }`；`{ configured: true, config }`；或配置文件存在但格式不对时的 `{ configured: true, problem }`。`host` 为 `codex` 且有 `config` 时还有 `hostCallsAskMatt` 和 `hostCallsImplement`：Codex 用 `$ask-matt` 调到的是不是现有 Skill Source 里的 `ask-matt`，用 `$implement` 调到的是不是其中的 `implement`。
 - `taskSource`：从仓库的 Matt issue tracker 文档预填的 Task Source，没有文档时为 `null`。`tracker` 是文档标题里写的任务来源，标题里读不出时为 `null`。`type` 是它对应的 Task Source 类型，没有可预填的类型时为 `null`。
-- `skillSources`：本机找到的 Matt skills，每份一项，可直接放进配置（`hostCallsAskMatt` 不会写进去）。`host` 为 `codex` 时还包括 Codex 自己的技能目录：用户目录下的 `~/.codex/skills`，和项目里的 `.agents/skills`、`.codex/skills`，项目里这两项的路径相对项目根目录写，随仓库走。`host` 为 `codex` 时每项还有 `hostCallsAskMatt`：Codex 用 `$ask-matt` 调到的是不是这份里的 `ask-matt`；调得到的排在前面，其余照找到的先后。
+- `skillSources`：本机找到的 Matt skills，每份一项，可直接放进配置（`hostCallsAskMatt`、`hostCallsImplement` 不会写进去）。`host` 为 `codex` 时还包括 Codex 自己的技能目录：用户目录下的 `~/.codex/skills`，和项目里的 `.agents/skills`、`.codex/skills`，项目里这两项的路径相对项目根目录写，随仓库走。`host` 为 `codex` 时每项还有 `hostCallsAskMatt` 和 `hostCallsImplement`：Codex 用 `$ask-matt` 调到的是不是这份里的 `ask-matt`，用 `$implement` 调到的是不是这份里的 `implement`。两项都调得到的排在最前，其次是只调得到 `ask-matt` 的，再次是其余的，同一档里照找到的先后。
 - `isServiceAllowed`：只在 `host` 为 `claude-code` 时有。本项目的 `.claude/settings.local.json` 里是否已有允许 Deck 服务工具的权限规则。
 
 Deck 服务连不上时，告诉用户原因并停止。
@@ -27,7 +27,7 @@ Deck 服务连不上时，告诉用户原因并停止。
 `existing.configured` 为 `true` 时，把现有配置（或 `problem`）原样展示给用户，问是否修改。用户不改：`existing` 有 `config` 时跳到第 6 步；只有 `problem` 时停止，配置读不出来，Pane 用不了。用户要改就继续，写入时带 `replace: true`：
 
 - Task Source 照第 3 步重新判定，以这次摸底的结果为准。
-- Skill Source 在第 4 步把 `existing.config.skillSource` 列进候选，通常排在最前、作为推荐项；`host` 为 `codex`、Codex 调不到它而候选里另有调得到的时例外，见第 4 步。`existing` 只有 `problem` 时没有现有值，第 4 步只用 `skillSources`。
+- Skill Source 在第 4 步把 `existing.config.skillSource` 列进候选，通常排在最前、作为推荐项；`host` 为 `codex` 时有例外，见第 4 步。`existing` 只有 `problem` 时没有现有值，第 4 步只用 `skillSources`。
 
 ## 3. Task Source
 
@@ -45,7 +45,13 @@ Skill Source 选定后，Deck 展示和 agent 执行都用这一份；要改就�
 候选是 `skillSources`。修改已有配置时，现有的 `skillSource` 也是候选；它不在 `skillSources` 里时也加进候选：同一份可能以别的名字列在候选里，也可能本机没有它，不要说成是哪一种。现有的排在哪：
 
 - 通常把它排在候选最前，它是推荐项。
-- 修改已有配置、并且三件事同时成立时例外：`host` 为 `codex`；`existing.hostCallsAskMatt` 为 `false`；`skillSources` 里至少有一项的 `hostCallsAskMatt` 为 `true`。这时候选照 `skillSources` 的先后列，第一项（Codex 调得到的）是推荐项。现有的不提到最前：它在 `skillSources` 里（`type` 相同，`path` 或 `name` 也相同）的留在原来的位置，不在的加在候选末尾。两种都标明它是“现有的”。
+- 修改已有配置、`host` 为 `codex` 时，按下面的顺序看，第一条成立的为准：
+  1. `existing.hostCallsAskMatt` 和 `existing.hostCallsImplement` 都为 `true`：照常把现有的排在最前，它是推荐项。
+  2. `skillSources` 里至少有一项的 `hostCallsAskMatt` 和 `hostCallsImplement` 都为 `true`：候选照 `skillSources` 的先后列，第一项（两项都调得到的）是推荐项。
+  3. `existing.hostCallsAskMatt` 为 `false`，`skillSources` 里至少有一项的 `hostCallsAskMatt` 为 `true`：候选照 `skillSources` 的先后列，第一项（调得到 `ask-matt` 的）是推荐项。
+  4. 其余情况：照常把现有的排在最前，它是推荐项。
+
+  照 `skillSources` 的先后列时（第 2、3 条），现有的不提到最前：它在 `skillSources` 里（`type` 相同，`path` 或 `name` 也相同）的留在原来的位置，不在的加在候选末尾。不论排在哪，都标明它是“现有的”。
 
 列候选时：
 
@@ -53,13 +59,13 @@ Skill Source 选定后，Deck 展示和 agent 执行都用这一份；要改就�
 - 有多项：全部列出，请用户选一份。
 - `host` 为 `codex` 时：
   - 第一项是推荐项。
-  - 每项都标出 Codex 调不调得到它的 `ask-matt`：候选看它的 `hostCallsAskMatt`；修改已有配置时现有的 `skillSource` 看 `existing.hostCallsAskMatt`，不论它排在哪、在不在 `skillSources` 里。
-  - 调不到的照列，并告诉用户：选了它，Codex 的 Pane 里技能不能预填，“我现在该做什么”和“执行”也用不了。
+  - 每项都分别标出 Codex 调不调得到它的 `ask-matt` 和 `implement`：候选看它的 `hostCallsAskMatt` 和 `hostCallsImplement`；修改已有配置时现有的 `skillSource` 看 `existing.hostCallsAskMatt` 和 `existing.hostCallsImplement`，不论它排在哪、在不在 `skillSources` 里。
+  - 调不到的照列，由用户选，并告诉用户各自的影响：调不到 `ask-matt` 的，选了它，Codex 的 Pane 里“我现在该做什么”用不了；调不到 `implement` 的，选了它，“执行”和“接管”用不了。别的技能能不能“预填”，Pane 按 Codex 调不调得到那个技能各自判断，不受这两项影响。
 - 为空：告诉用户本机没找到 Matt skills（含 `ask-matt` 技能的位置），请用户给出一个技能目录；确认 `<目录>/ask-matt/SKILL.md` 存在后，记为 `{ "type": "directory", "path": "<目录>" }`，用户目录下的路径写成 `~/...`。用户给不出就停止。
 
 ## 5. 写入
 
-调用 `deck_write_config`，参数为 `{ "config": { "taskSource": ..., "skillSource": ... } }`，`skillSource` 用选定的那一项；Deck 服务只写它的 `type` 和 `path` 或 `name`，`hostCallsAskMatt` 不写进配置；第 2 步用户同意修改时加 `"replace": true`。工具报错时把原文告诉用户并停止。
+调用 `deck_write_config`，参数为 `{ "config": { "taskSource": ..., "skillSource": ... } }`，`skillSource` 用选定的那一项；Deck 服务只写它的 `type` 和 `path` 或 `name`，`hostCallsAskMatt`、`hostCallsImplement` 不写进配置；第 2 步用户同意修改时加 `"replace": true`。工具报错时把原文告诉用户并停止。
 
 写入成功后告诉用户：配置在 `.matt-deck/config.json`，提交进仓库后随仓库走。
 
